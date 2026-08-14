@@ -801,11 +801,11 @@ These are not preferences, they are workarounds for real failures observed here:
    and fixed in the process, and the API's field-validation errors are now
    translated as a direct consequence.
 6. **OpenAPI generation** from the Zod schemas, which also gives the client
-   generated types for free. This is now the next thing to build, and it has a
-   package to generate into: the request *bodies* are still described twice, as
-   a Zod object on the server and as a hand-written interface in the client's
-   `api/types.ts`. The value sets in that file already come from
-   `@finance/schemas`; the structures are what is left.
+   generated types for free. **This is the next thing to build, and its design
+   is written down in section 5d** — including the two findings that shape it:
+   Zod's own `toJSONSchema` removes the need for any OpenAPI library, and the
+   route metadata has to be stamped onto middleware rather than read off it.
+   Read 5d before starting; it was written from experiments against this repo.
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
@@ -994,6 +994,14 @@ the client's text predicate against each other rather than each in isolation.
 **Build ordering is the one operational cost.** See the shared-package convention
 at the end of section 3.
 
+**The package is ESM-only, and the error it gives says something else.** There is
+no `require` condition in its `exports` map, so resolving it from a CommonJS
+context fails with `ERR_PACKAGE_PATH_NOT_EXPORTED: No "exports" main defined` —
+which reads like a malformed `package.json` and is not. Both consumers are ESM,
+so this never bites in the app; it bites a scratch script written outside a
+`"type": "module"` package. Add `{"type":"module"}` next to the script rather
+than a CJS build to the package.
+
 ### Two things only the browser found
 
 Typechecks, both builds and 242 green tests all passed before either of these
@@ -1015,6 +1023,137 @@ and driving the Recurring and Budgets forms.
    invalid on purpose. **Every `helperText` carrying a Zod message goes through
    `fieldMessage()`**; the sweep that finds violations is
    `grep -rn "helperText={.*\.message}" apps/web/src --include=*.tsx | grep -v fieldMessage`.
+
+---
+
+## 5d. OpenAPI generation — the design to build from
+
+**Not built yet.** This is next task 6, written down before building for the same
+reason section 5b was: the decisions below cost real time to reach and no time to
+read. Everything asserted here was checked by running it against this repo, not
+recalled — where a claim came from an experiment, it says so.
+
+### The shape of the problem
+
+The API's request rules are already machine-readable: they are Zod schemas, and
+since the shared-schema package they are built from one set of declarations. What
+is *not* machine-readable is the API's shape — which paths exist, what they
+accept, who may call them. Today that lives in three places that agree only
+because a human keeps them agreeing: the route files, `docs/api.md`, and
+`apps/web/src/api/types.ts`, whose response interfaces are hand-written.
+
+The goal is one generated document, produced from the code that actually runs, and
+a client whose types come out of it.
+
+### Use Zod's own JSON Schema output; no OpenAPI library
+
+**The installed `zod` is 3.25.76, and it already ships Zod 4 at the `zod/v4`
+subpath** — including `z.toJSONSchema()`. Verified by calling it. That matters
+twice over, because **both third-party candidates now require Zod 4 as a peer
+dependency** (`@asteasolutions/zod-to-openapi` 9.1.0, `zod-openapi` 6.0.1), so
+"just add a library" is not the low-friction path it looks like: it means the Zod
+4 migration either way, plus a dependency.
+
+Going native means the migration and nothing else. Import from `zod/v4` in the
+generator alone at first — the runtime schemas can stay on the v3 API until
+there is a reason to move them.
+
+**`{ io: 'input' }` is not optional, it is the whole trick.** An OpenAPI request
+body describes what a caller *sends*, and the API's money fields end in
+`.transform(money)`, so their output type is not their input type. Both were run
+against a faithful replica of `moneySchema`:
+
+| Call | Result |
+| --- | --- |
+| `z.toJSONSchema(body, { io: 'input' })` | correct — describes the accepted union |
+| `z.toJSONSchema(body, { io: 'output' })` | **throws** `Transforms cannot be represented in JSON Schema` |
+
+This is why `packages/schemas/src/fields.ts` keeps every transform out of the
+shared fields and leaves `.transform(money)` to the API's own adapter. That was
+done for a different reason and turns out to be exactly what makes the request
+schemas describable.
+
+### One thing to change first: `.refine()` is invisible to JSON Schema
+
+A `.refine()` is an arbitrary predicate, so `toJSONSchema` drops it silently. Run
+against the money field, the output is `anyOf: [string, number]` — with no
+mention of the decimal format at all. A spec that omits the rule is worse than no
+spec, because it looks authoritative.
+
+**Before generating anything, move every rule that JSON Schema can express out of
+`.refine()`.** `MONEY_PATTERN` and `DATE_ONLY_PATTERN` already live in
+`packages/schemas/src/patterns.ts`; using them through `z.string().regex(...)`
+instead of `.refine(isMoneyText)` puts them in the spec as a `pattern` and
+changes nothing about what is accepted. What genuinely cannot be expressed —
+"greater than zero" on a decimal *string*, the cross-field rules like
+`fromAccountId !== toAccountId` — stays a `.refine()` and gets a prose
+`description` instead. The unit tests in `tests/unit/shared-schemas.test.ts`
+already pin the behaviour, so this refactor is safe to make: if a bound moves,
+they fail.
+
+### Getting the routes out of the app, not out of a list
+
+A spec needs (method, path, schemas, required role) per route. Three findings,
+all from walking the real app:
+
+1. **The app is walkable.** `app._router.stack`, recursed, yields **103 routes**.
+   So the document can be generated from the app that actually boots, which is
+   the only version that cannot drift.
+2. **Middleware are anonymous.** `validate(...)`, `requireEditor` and friends are
+   arrow functions returned from factories; only `requireAuth` and
+   `withWorkspace` survive with a `.name`. **You cannot identify a route's schema
+   or its role by inspecting handler names.** The fix is one line in each
+   factory: stamp what it knows onto the handler it returns
+   (`handler.schemas = schemas` in `validate()`, `handler.role = 'editor'` in
+   `requireEditor`), and have the walker read the stamps.
+3. **Do not reverse-engineer the mount prefixes.** Reassembling a path from
+   `layer.regexp` half-works — the structure comes out right and `:id` from
+   `route.path` is clean, but the mounted-router parameter arrives as
+   `/workspaces(?:/([^/]+?))/accounts` and unescaping that by hand is a
+   heuristic waiting to break. There is no need: **every mount in this app is in
+   one file.** `apps/api/src/routes.ts` holds all sixteen (five top-level, eleven
+   workspace-scoped) and `app.ts` holds the `/api/v1` one. A `mount(prefix,
+   router)` helper that records the literal string it was given costs seventeen
+   edits in two adjacent files and yields exact paths with nothing inferred.
+
+### Responses are the expensive half — do requests first
+
+Requests have schemas. **Responses have none**: services return Kysely rows and
+routes `res.json()` them, so there is nothing to convert. Describing them means
+writing response schemas from scratch for every endpoint, which is a bigger job
+than everything above combined.
+
+Split it:
+
+- **Phase 1 — requests, paths, security, errors.** Generates from what exists.
+  Delivers a real spec, `docs/api.md` gets a generated companion, and the error
+  envelope (already a fixed shape) is described once as a shared component.
+- **Phase 2 — responses**, endpoint by endpoint, and only then does
+  `apps/web/src/api/types.ts` get replaced by `openapi-typescript` output
+  (7.13.0; it takes the spec and needs no Zod). **Until phase 2 lands, leave
+  `api/types.ts` alone** — a half-generated types file where nobody can tell
+  which half is which is worse than the honest hand-written one.
+
+### Serving and checking it
+
+Write the document to a **committed file** (`docs/openapi.json`) from a
+`generate:openapi` script, and serve that same file at `/openapi.json`. The
+committed copy is what makes it reviewable: a pull request that changes an
+endpoint shows the contract change in the diff.
+
+Then **add a CI step that regenerates and fails if the result differs from the
+committed file**, the same way the migration round-trip step earns its place —
+it is the only thing that stops the spec from quietly rotting. It needs no
+database, so it belongs in the `check` job.
+
+### Tests
+
+Unit-level, no infrastructure: the generator produces a document that parses as
+OpenAPI 3.1; every one of the 103 routes appears exactly once; every path
+parameter in a path string has a matching parameter object; a route behind
+`requireEditor` carries the security requirement; and the money field's `pattern`
+survives into the schema — that last one is the regression test for the
+`.refine()` trap above.
 
 ---
 
