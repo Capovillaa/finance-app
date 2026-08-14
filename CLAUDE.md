@@ -497,6 +497,7 @@ D:\finance_app
 ├── infra/postgres/init/             # container init SQL
 ├── .github/workflows/ci.yml         # typecheck + build + full suite
 ├── .gitignore
+├── .gitattributes                   # LF in the repo, native in the tree
 ├── docker-compose.yml               # postgres, redis, mailhog
 └── package.json                     # workspace root; also pins `vite` to
                                      # dedupe it — see "Environment quirks"
@@ -629,8 +630,8 @@ await page.fill('input[type="password"]', 'Demo1234567');
 await page.click('button[type="submit"]');
 await page.waitForSelector('text=Dashboard', { timeout: 15000 });
 await page.screenshot({ path: 'dashboard.png', fullPage: true });
-// This repo is not a git repository (as of this writing) — nothing from a
-// prior session is checked in to copy from. Rebuild the driver script fresh
+// The driver script is deliberately not checked in — it is scratch, and it
+// belongs outside the repo along with the Playwright install. Rebuild it fresh
 // each time; it's a dozen lines.
 ```
 
@@ -694,9 +695,10 @@ These are not preferences, they are workarounds for real failures observed here:
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
-   **The repository is still not initialised** (`git init` has never been run
-   and there is no remote), so the workflow has never actually executed on
-   GitHub; every step was verified locally instead.
+   The repository was initialised in the same session (`main`, one initial
+   commit of 251 files) but **has no remote**, so the workflow has never
+   actually executed on GitHub — every step was instead run locally with CI's
+   own environment, including a cold run with `finance_test` dropped first.
 8. **Live exchange rates.** Today there is no live provider anywhere in the
    app — `modules/currencies/service.ts`'s `refreshStaticRates()` re-inserts
    the same hardcoded `STATIC_BRL_RATES` table (indicative BRL-based rates,
