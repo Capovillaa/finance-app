@@ -5,6 +5,20 @@ Base URL: `http://localhost:4000/api/v1`
 All requests and responses are JSON unless noted. Authenticated endpoints take
 `Authorization: Bearer <accessToken>`.
 
+> **There is a generated companion to this file: [`openapi.json`](./openapi.json).**
+>
+> It is produced from the running Express app by `npm run generate:openapi`, and
+> the same document is served at `/openapi.json`. Because it is generated, it is
+> the authority on **which paths exist, what they accept, and who may call
+> them** — a route cannot be added or a bound changed without the spec moving
+> too, and CI fails if the committed copy is stale.
+>
+> This file remains the authority on **responses**, which the spec does not
+> describe yet: the API's handlers return database rows rather than parsing them
+> through a schema, so there is nothing to generate from. Describing responses is
+> phase 2 — see `docs/decisions.md`, "The OpenAPI document is generated from the
+> app that boots".
+
 ## Conventions
 
 **Money** is always a decimal string with four places (`"1250.0000"`). Never send a float.

@@ -1,7 +1,7 @@
 import { config as loadDotenv } from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // src/config -> src -> apps/api -> apps -> repo root

@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 /**
  * Wraps an async handler so a rejected promise reaches Express's error

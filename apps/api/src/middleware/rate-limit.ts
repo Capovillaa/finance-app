@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { rateLimited } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
+import { stampRoute } from '../lib/route-metadata.js';
 
 function createLimiter(keyPrefix: string, points: number, duration: number): RateLimiterAbstract {
   if (env.isTest) {
@@ -34,7 +35,9 @@ const authLimiter = createLimiter(
 );
 
 function limiterMiddleware(limiter: RateLimiterAbstract, keyFn: (req: Parameters<RequestHandler>[0]) => string): RequestHandler {
-  return (req, res, next) => {
+  // Stamped so the generated OpenAPI document gives a 429 to the routes that
+  // can actually return one, rather than to every route on principle.
+  return stampRoute((req, res, next) => {
     const key = keyFn(req);
     limiter
       .consume(key)
@@ -52,7 +55,7 @@ function limiterMiddleware(limiter: RateLimiterAbstract, keyFn: (req: Parameters
         res.setHeader('retry-after', String(Math.ceil(retryMs / 1000)));
         next(rateLimited());
       });
-  };
+  }, { rateLimited: true });
 }
 
 /** Per-user when authenticated, otherwise per-IP. */

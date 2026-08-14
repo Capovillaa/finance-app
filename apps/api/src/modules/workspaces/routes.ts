@@ -8,7 +8,7 @@ import {
   timezoneField,
 } from '@finance/schemas';
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { asyncHandler, paginationSchema } from '../../lib/http.js';
 import {
   currentUser,
@@ -37,7 +37,7 @@ const updateWorkspaceSchema = z.object({
   name: nameField.optional(),
   baseCurrency: currencyField.optional(),
   timezone: timezoneField.optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 const workspaceParamSchema = z.object({ workspaceId: uuidSchema });

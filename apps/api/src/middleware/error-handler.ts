@@ -1,6 +1,6 @@
 import { VALIDATION_NAMESPACE, validationParamsFor } from '@finance/schemas';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
-import { ZodError } from 'zod';
+import { ZodError } from 'zod/v4';
 import { env } from '../config/env.js';
 import {
   AppError,

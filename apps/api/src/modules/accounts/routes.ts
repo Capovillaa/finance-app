@@ -8,7 +8,7 @@ import {
   nameField,
 } from '@finance/schemas';
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAdmin, requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';

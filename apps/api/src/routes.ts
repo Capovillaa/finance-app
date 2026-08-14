@@ -1,7 +1,8 @@
 import { Router } from 'express';
+import { mount } from './lib/route-metadata.js';
 import { requireAuth, withWorkspace } from './middleware/auth.js';
 import { uuidSchema, validate } from './middleware/validate.js';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { accountRouter } from './modules/accounts/routes.js';
 import { alertRouter } from './modules/alerts/routes.js';
 import { analyticsRouter, reportRouter } from './modules/analytics/routes.js';
@@ -31,26 +32,29 @@ workspaceScoped.use(
   withWorkspace,
 );
 
-workspaceScoped.use('/:workspaceId/accounts', accountRouter);
-workspaceScoped.use('/:workspaceId/categories', categoryRouter);
-workspaceScoped.use('/:workspaceId/transactions', transactionRouter);
-workspaceScoped.use('/:workspaceId/tags', tagRouter);
-workspaceScoped.use('/:workspaceId/imports', importRouter);
-workspaceScoped.use('/:workspaceId/budgets', budgetRouter);
-workspaceScoped.use('/:workspaceId/recurring', recurringRouter);
-workspaceScoped.use('/:workspaceId/goals', goalRouter);
-workspaceScoped.use('/:workspaceId/alerts', alertRouter);
-workspaceScoped.use('/:workspaceId/analytics', analyticsRouter);
-workspaceScoped.use('/:workspaceId/reports', reportRouter);
+// `mount` is `use` that also remembers the literal prefix, so the OpenAPI
+// generator can assemble an exact path instead of unescaping Express's compiled
+// `RegExp` — see `lib/route-metadata.ts`.
+mount(workspaceScoped, '/:workspaceId/accounts', accountRouter);
+mount(workspaceScoped, '/:workspaceId/categories', categoryRouter);
+mount(workspaceScoped, '/:workspaceId/transactions', transactionRouter);
+mount(workspaceScoped, '/:workspaceId/tags', tagRouter);
+mount(workspaceScoped, '/:workspaceId/imports', importRouter);
+mount(workspaceScoped, '/:workspaceId/budgets', budgetRouter);
+mount(workspaceScoped, '/:workspaceId/recurring', recurringRouter);
+mount(workspaceScoped, '/:workspaceId/goals', goalRouter);
+mount(workspaceScoped, '/:workspaceId/alerts', alertRouter);
+mount(workspaceScoped, '/:workspaceId/analytics', analyticsRouter);
+mount(workspaceScoped, '/:workspaceId/reports', reportRouter);
 
 export const apiRouter: Router = Router();
 
-apiRouter.use('/auth', authRouter);
-apiRouter.use('/users', userRouter);
-apiRouter.use('/currencies', currencyRouter);
-apiRouter.use('/notifications', notificationRouter);
-apiRouter.use('/invitations', invitationRouter);
+mount(apiRouter, '/auth', authRouter);
+mount(apiRouter, '/users', userRouter);
+mount(apiRouter, '/currencies', currencyRouter);
+mount(apiRouter, '/notifications', notificationRouter);
+mount(apiRouter, '/invitations', invitationRouter);
 
 // Workspace CRUD and membership live on the same prefix as the scoped modules.
-apiRouter.use('/workspaces', workspaceRouter);
-apiRouter.use('/workspaces', requireAuth, workspaceScoped);
+mount(apiRouter, '/workspaces', workspaceRouter);
+mount(apiRouter, '/workspaces', requireAuth, workspaceScoped);

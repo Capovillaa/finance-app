@@ -1,6 +1,12 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { CURRENCY_CODE_LENGTH, LIMITS } from './limits.js';
-import { hasLettersAndDigits, isDateOnlyText, isMoneyText } from './patterns.js';
+import {
+  DATE_ONLY_PATTERN,
+  MONEY_PATTERN,
+  hasLettersAndDigits,
+  isDateOnlyText,
+  isMoneyText,
+} from './patterns.js';
 
 /**
  * The API's request fields, as Zod schemas.
@@ -18,11 +24,42 @@ import { hasLettersAndDigits, isDateOnlyText, isMoneyText } from './patterns.js'
  * money library to the client for the sake of a value the client never stores.
  * The API applies its own `.transform(money)` on top — see
  * `apps/api/src/modules/shared/schemas.ts`.
+ *
+ * ## Why some fields carry `.meta()`
+ *
+ * The OpenAPI document is generated from these schemas by `z.toJSONSchema()`,
+ * which can only describe what it understands. A `.refine()` is an arbitrary
+ * predicate, so it is dropped **silently** — left alone, `moneyField` would be
+ * published as "a string or a number" with no mention of the decimal format at
+ * all, and a spec that omits a rule is worse than no spec because it looks
+ * authoritative.
+ *
+ * The rules that JSON Schema *can* express are therefore restated as metadata,
+ * and the ones it cannot are written out in prose. Metadata is used rather than
+ * a real `z.string().regex(...)` on purpose: moving `MONEY_PATTERN` into the
+ * union's string branch would also make the parser reject `" 12.50 "`, which
+ * `.refine(... String(value).trim())` accepts today. Publishing the rule must
+ * not quietly change which requests the API answers, so the parser below is
+ * byte-for-byte the one that shipped before the spec existed.
+ *
+ * `.meta()` survives `.transform()`, `.optional()` and `.nullish()`, which is
+ * what makes this work at all: routes compose `moneySchema`, never `moneyField`.
  */
 
 export const uuidField = z.string().uuid('validation.uuidInvalid');
 
-export const dateField = z.string().refine(isDateOnlyText, 'validation.dateInvalid');
+/**
+ * `isDateOnlyText` is stricter than the pattern it starts with — `2025-02-30`
+ * matches `YYYY-MM-DD` and is not a day — so the calendar half is described in
+ * prose and only the shape is published as a pattern.
+ */
+export const dateField = z
+  .string()
+  .refine(isDateOnlyText, 'validation.dateInvalid')
+  .meta({
+    pattern: DATE_ONLY_PATTERN.source,
+    description: 'A calendar date as `YYYY-MM-DD`. The date must exist: `2025-02-30` is rejected.',
+  });
 
 /** ISO 4217. Case is normalised by the caller, which knows whether it stores or displays. */
 export const currencyField = z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode');
@@ -33,7 +70,8 @@ export const passwordField = z
   .string()
   .min(LIMITS.password.min, 'validation.passwordLength')
   .max(LIMITS.password.max)
-  .refine(hasLettersAndDigits, 'validation.passwordComplexity');
+  .refine(hasLettersAndDigits, 'validation.passwordComplexity')
+  .meta({ description: 'Must contain at least one letter and at least one digit.' });
 
 /**
  * A decimal amount, signed. Accepts a number so a client that JSON-encodes
@@ -43,13 +81,24 @@ export const passwordField = z
  */
 export const moneyField = z
   .union([z.string(), z.number()])
-  .refine((value) => isMoneyText(String(value).trim()), 'validation.decimalAmount');
+  .refine((value) => isMoneyText(String(value).trim()), 'validation.decimalAmount')
+  .meta({
+    pattern: MONEY_PATTERN.source,
+    description:
+      `A decimal amount with at most ${LIMITS.money.integerDigits} integer digits and ` +
+      `${LIMITS.money.decimals} decimal places, matching the \`NUMERIC(19,4)\` column it is stored in. ` +
+      'Send it as a string: a JSON number is accepted for convenience but loses precision on the way in.',
+  });
 
 /** The same, rejecting zero and negatives. */
-export const positiveMoneyField = moneyField.refine(
-  (value) => Number(value) > 0,
-  'validation.amountPositive',
-);
+export const positiveMoneyField = moneyField
+  .refine((value) => Number(value) > 0, 'validation.amountPositive')
+  .meta({
+    pattern: MONEY_PATTERN.source,
+    description:
+      'A decimal amount greater than zero. "Greater than zero" cannot be expressed against a decimal ' +
+      'held as a string, so it is stated here rather than published as a constraint.',
+  });
 
 export const nameField = z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max);
 

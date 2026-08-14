@@ -6,7 +6,7 @@ import {
   urlField,
 } from '@finance/schemas';
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { db } from '../../db/client.js';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAuth } from '../../middleware/auth.js';

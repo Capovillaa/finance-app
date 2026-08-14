@@ -8,7 +8,7 @@ import {
   timezoneField,
 } from '@finance/schemas';
 import { Router, type Response } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { requireAuth } from '../../middleware/auth.js';
 import { authRateLimit } from '../../middleware/rate-limit.js';
 import { clientIp } from '../../middleware/request-context.js';
