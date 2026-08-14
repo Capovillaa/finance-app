@@ -1,11 +1,24 @@
-# Finance App — Backend
+# Finance App
 
-Backend and database foundation for a personal finance management platform: multi-workspace
-budgeting, multi-currency accounts, recurring bills, anomaly-aware alerting and analytics.
+[![CI](https://github.com/Capovillaa/finance-app/actions/workflows/ci.yml/badge.svg)](https://github.com/Capovillaa/finance-app/actions/workflows/ci.yml)
 
-This phase delivers the **API and data layer**. The web client (React + TypeScript, Material-UI,
-Redux Toolkit, Recharts) is the next phase and consumes the REST API documented in
-[`docs/api.md`](docs/api.md).
+A personal finance management platform: multi-workspace budgeting, multi-currency accounts,
+recurring bills, anomaly-aware alerting, analytics, and CSV import/export.
+
+Both halves are built and run against each other:
+
+- **`apps/api`** — TypeScript/Express over Postgres 16 with Kysely, plus a BullMQ worker.
+  28 tables across 8 migrations. Endpoint reference in [`docs/api.md`](docs/api.md).
+- **`apps/web`** — React + Vite client (Material-UI, Redux Toolkit, Recharts, React Hook Form
+  and Zod) covering nine screens.
+
+The interface ships in **English, Português (Brasil) and Español**; so do the API's error
+messages, alert notifications and invitation emails.
+
+Money is `NUMERIC(19,4)` in the database and a decimal string in TypeScript — never a JS
+number — and every transaction stores the exchange rate that applied on the day it happened.
+The reasoning behind this and every other significant choice is in
+[`docs/decisions.md`](docs/decisions.md).
 
 ---
 
@@ -22,7 +35,13 @@ npm run seed                  # optional: demo workspace with 12 months of histo
 npm run dev                   # API on http://localhost:4000
 ```
 
-In a second terminal, for scheduled work (recurring bills, alert scans, email delivery):
+In a second terminal, the web client:
+
+```bash
+npm run dev --workspace=@finance/web    # http://localhost:5173
+```
+
+And in a third, if you want scheduled work (recurring bills, alert scans, email delivery):
 
 ```bash
 npm run dev:worker --workspace=@finance/api
@@ -36,6 +55,7 @@ curl http://localhost:4000/health/ready
 
 | Service | URL |
 | --- | --- |
+| Web client | http://localhost:5173 |
 | API | http://localhost:4000/api/v1 |
 | Health / readiness | http://localhost:4000/health, `/health/ready` |
 | MailHog (catches all outbound email) | http://localhost:8025 |
@@ -130,6 +150,15 @@ apps/api/
   tests/
     unit/          pure logic, no database
     integration/   HTTP-level tests against a real Postgres
+apps/web/
+  src/
+    api/           RTK Query service, one endpoint file per backend module
+    components/    shared shells: LedgerRow, Panel, PageHeader, StatTile…
+    features/      one folder per domain, mirroring the API's modules
+    pages/         one file per screen, owning data-fetching and dialog state
+    i18n/          en, pt-BR, es catalogues
+    lib/           formatting, permissions, money, motion, chart tokens
+.github/workflows/ CI
 infra/postgres/    container init scripts
 docs/              architecture, API reference, decision log
 ```

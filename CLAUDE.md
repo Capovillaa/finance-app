@@ -1,8 +1,14 @@
 # CLAUDE.md
 
-Working notes for the personal finance management platform in `D:\finance_app`.
-Read this before touching the codebase — it captures decisions and environment
-quirks that are expensive to rediscover.
+Working notes for the personal finance management platform in `D:\finance_app`,
+published at **https://github.com/Capovillaa/finance-app**. Read this before
+touching the codebase — it captures decisions and environment quirks that are
+expensive to rediscover.
+
+**The repository is public.** Nothing secret belongs in a tracked file: the real
+`.env` is ignored, `.env.example` carries only placeholders, and the JWT values
+in the CI workflow are deliberately fake. Check before adding anything that
+looks like a credential, a personal address, or a real customer's data.
 
 ---
 
@@ -14,12 +20,13 @@ verified against real Postgres and Redis. The frontend had not been started.
 Delivered:
 
 - npm-workspaces monorepo, Docker Compose infrastructure, TypeScript API package
-- 7 migrations covering 29 tables, with a hand-rolled migration runner
+- 7 migrations covering 27 tables, with a hand-rolled migration runner
 - Platform layer: config, logging, errors, money, dates, recurrence, email, Redis
 - Auth (register/login/refresh/logout, password reset, email verification)
 - Workspaces with owner/admin/editor/viewer RBAC and email invitations
 - Multi-currency accounts, 3-level categories, transactions (transfers, splits,
-  comments, tags, search, CSV import/export, reconciliation)
+  comments, tags, search, CSV **export**, reconciliation) — import came much
+  later, in the session described in section 2d
 - Budgets with subcategory roll-up, audited mid-period revisions, rollover
 - Recurring transactions, financial goals with contributions
 - Eight alert rule types including z-score anomaly detection, plus notifications
@@ -582,13 +589,44 @@ below for what it was. Any output from these commands is now a real failure.
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
 Two jobs run in parallel: **check** (typecheck, both builds, unit tests — no
 services) and **test** (the full suite against a `postgres:16` service
-container, then a migration rollback round-trip). The workflow declares no
-repository secrets: the JWT values in it are deliberately fake and the test
-database is created and discarded within the run.
+container, then a migration rollback round-trip). Green on the first run, in
+about a minute.
+
+The workflow declares **no repository secrets**: the JWT values in it are
+deliberately fake and the test database is created and discarded within the run.
+Do not "improve" this by moving them into GitHub secrets — there is nothing to
+protect, and it would only add a setup step before CI could work for anyone else.
 
 If you add a step, run it locally first with CI's own environment rather than
 your `.env` — `DATABASE_URL`, `TEST_DATABASE_URL`, `JWT_ACCESS_SECRET` and
-`JWT_REFRESH_SECRET` are the only variables without defaults.
+`JWT_REFRESH_SECRET` are the only variables without defaults:
+
+```bash
+DATABASE_URL=postgres://finance:finance@localhost:5432/finance \
+TEST_DATABASE_URL=postgres://finance:finance@localhost:5432/finance_test \
+JWT_ACCESS_SECRET=ci-access-secret-not-a-real-key-000000 \
+JWT_REFRESH_SECRET=ci-refresh-secret-not-a-real-key-00000 \
+npm test
+```
+
+### Git
+
+The repository is **https://github.com/Capovillaa/finance-app** — public, one
+remote (`origin`), default branch `main`.
+
+- **Commits use a noreply author**, `160801041+Capovillaa@users.noreply.github.com`,
+  set as `user.email` in this repository's own config so a fresh clone or a
+  changed global identity cannot leak a personal address into a public history.
+  If you ever rewrite history, keep it that way.
+- **`.gitattributes` normalises line endings** (`* text=auto`, LF in the
+  repository, native in the working tree). Development happens on Windows with
+  `core.autocrlf=true` while CI runs on Linux; without this every file would
+  show as wholly changed the first time it was touched from the other platform.
+  It was added before the first commit deliberately, so there is no
+  normalisation churn in the history.
+- The `gh` CLI is installed at `C:\Program Files\GitHub CLI\gh.exe` and is
+  **not on Git Bash's PATH** in an already-open shell — invoke it by full path,
+  or from PowerShell.
 
 ### End-to-end / visual verification
 
@@ -695,10 +733,12 @@ These are not preferences, they are workarounds for real failures observed here:
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
-   The repository was initialised in the same session (`main`, one initial
-   commit of 251 files) but **has no remote**, so the workflow has never
-   actually executed on GitHub — every step was instead run locally with CI's
-   own environment, including a cold run with `finance_test` dropped first.
+   The repository was initialised, published and verified in the same session:
+   **https://github.com/Capovillaa/finance-app** (public, `main`). The first
+   push triggered the workflow and **both jobs passed in about a minute** —
+   including the Postgres container coming up, `finance_test` being created
+   from nothing, all 8 migrations applying and 222 tests passing. It is not a
+   workflow that merely looks right; it has run.
 8. **Live exchange rates.** Today there is no live provider anywhere in the
    app — `modules/currencies/service.ts`'s `refreshStaticRates()` re-inserts
    the same hardcoded `STATIC_BRL_RATES` table (indicative BRL-based rates,
@@ -876,7 +916,7 @@ over `COALESCE(scope_*, <sentinel>)` and Postgres cannot infer a conflict target
 from one.
 
 **Tests run against real Postgres, not mocks**, and reset state with `DELETE`
-rather than `TRUNCATE`. TRUNCATE forces an fsync per relation; across 26 tables
+rather than `TRUNCATE`. TRUNCATE forces an fsync per relation; across every table
 before every test it took the suite from 16 seconds to over 25 minutes on Docker
 Desktop. The test database also sets `synchronous_commit = off`, and bcrypt
 drops to 4 rounds under `NODE_ENV=test`. Do not "fix" any of these back.

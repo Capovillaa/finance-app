@@ -575,6 +575,13 @@ exercised by the application and rot silently; rolling the newest one back and f
 against the already-migrated test database costs a second and is the only thing that
 would ever catch a `down` that was written but never tried.
 
+**It has actually run.** Every step was rehearsed locally first — with CI's own environment
+rather than the developer's `.env`, and including a cold run with `finance_test` dropped
+beforehand, because that is the path CI takes on every single run and the one local
+development never exercises. The repository was then published and the first push turned
+both jobs green in about a minute. That distinction matters: a workflow file that has never
+executed is a plausible guess, not a verified one.
+
 ---
 
 ### Deliberately not built in this phase
