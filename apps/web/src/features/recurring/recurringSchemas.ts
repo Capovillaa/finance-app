@@ -1,17 +1,33 @@
+import {
+  LIMITS,
+  RECURRING_FREQUENCIES,
+  TRANSACTION_TYPES,
+  isPositiveMoneyText,
+  isWholeNumberInRange,
+  type RecurringFrequency,
+} from '@finance/schemas';
 import { z } from 'zod';
 
 /**
- * Client-side mirror of the recurring-transaction schemas in
- * `apps/api/src/modules/recurring/routes.ts`. The schedule shape (frequency,
- * weekday, day-of-month, interval) is only settable at creation — the PATCH
- * schema on the server does not accept it, so `RecurringFormDialog` disables
- * those fields when editing.
+ * The recurring-schedule create/edit form.
+ *
+ * Frequencies and every bound come from `@finance/schemas`, shared with
+ * `apps/api/src/modules/recurring/routes.ts`. This is the form that made the
+ * case for the package: the three numeric fields below were the ones whose
+ * client-side rules had drifted from the server's — an unbounded interval
+ * against a 1–365 cap, a lead time of up to 99 days against a 90-day cap, and
+ * an occurrence limit with no rule at all against a 1–1000 cap. Each of those
+ * accepted input the API then refused, and the third silently sent `NaN`, which
+ * JSON encodes as `null` — so a typo in that box quietly meant "no limit".
+ *
+ * The schedule shape (frequency, weekday, day-of-month, interval) is only
+ * settable at creation: the server's PATCH schema does not accept it, so
+ * `RecurringFormDialog` disables those fields when editing.
  */
-export const RECURRING_FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly', 'custom'] as const;
-export type RecurringFrequencyValue = (typeof RECURRING_FREQUENCIES)[number];
+export { RECURRING_FREQUENCIES, type RecurringFrequency as RecurringFrequencyValue };
 
 /** Catalogue keys, not labels — resolve with `t()` at the point of render. */
-export const FREQUENCY_LABEL_KEYS: Record<RecurringFrequencyValue, string> = {
+export const FREQUENCY_LABEL_KEYS: Record<RecurringFrequency, string> = {
   daily: 'recurring.frequency.daily',
   weekly: 'recurring.frequency.weekly',
   monthly: 'recurring.frequency.monthly',
@@ -40,34 +56,44 @@ const amountInputSchema = z
   .string()
   .trim()
   .min(1, 'validation.amountRequired')
-  .refine((v) => /^\d{1,15}(\.\d{1,4})?$/.test(v) && Number(v) > 0, 'validation.amountPositive');
+  .refine(isPositiveMoneyText, 'validation.amountPositive');
 
-const dayOfMonthSchema = z
-  .string()
-  .trim()
-  .refine((v) => v === '' || (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31), 'validation.dayOfMonth');
+/** Empty, or a whole number the server would also accept. */
+function optionalRange(bounds: { readonly min: number; readonly max: number }, message: string) {
+  return z
+    .string()
+    .trim()
+    .refine((v) => v === '' || isWholeNumberInRange(v, bounds.min, bounds.max), message);
+}
 
 export const recurringFormSchema = z
   .object({
-    name: z.string().min(1, 'validation.nameRequired').max(120),
+    name: z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
     accountId: z.string().min(1, 'validation.accountRequired'),
     categoryId: z.string(),
-    type: z.enum(['income', 'expense']),
+    type: z.enum(TRANSACTION_TYPES),
     amount: amountInputSchema,
-    description: z.string().min(1, 'validation.descriptionRequired').max(200),
-    merchant: z.string().max(120).optional(),
+    description: z
+      .string()
+      .min(LIMITS.description.min, 'validation.descriptionRequired')
+      .max(LIMITS.description.max),
+    merchant: z.string().max(LIMITS.merchant.max).optional(),
     frequency: z.enum(RECURRING_FREQUENCIES),
-    intervalCount: z.string().trim(),
-    byWeekday: z.array(z.number().int().min(0).max(6)),
-    dayOfMonth: dayOfMonthSchema,
-    monthOfYear: z.string().trim(),
+    intervalCount: optionalRange(LIMITS.recurringInterval, 'validation.intervalRange'),
+    byWeekday: z
+      .array(z.number().int().min(LIMITS.weekday.min).max(LIMITS.weekday.max))
+      .max(LIMITS.weekdaysPerRule.max),
+    dayOfMonth: optionalRange(LIMITS.dayOfMonth, 'validation.dayOfMonth'),
+    monthOfYear: optionalRange(LIMITS.monthOfYear, 'validation.monthRequired'),
     startDate: z.string().min(1, 'validation.startDateRequired'),
     endDate: z.string().optional(),
-    occurrenceLimit: z.string().trim(),
+    occurrenceLimit: optionalRange(LIMITS.occurrenceLimit, 'validation.occurrenceLimitRange'),
     autoPost: z.boolean(),
-    leadTimeDays: z.string().trim().refine((v) => v === '' || /^\d{1,2}$/.test(v), 'validation.wholeDays'),
+    leadTimeDays: optionalRange(LIMITS.leadTimeDays, 'validation.leadTimeRange'),
   })
-  .refine((v) => v.frequency !== 'custom' || /^\d+$/.test(v.intervalCount), {
+  // The three rules below are about which fields a given frequency *requires*;
+  // `optionalRange` above has already settled whether each one is well formed.
+  .refine((v) => v.frequency !== 'custom' || v.intervalCount.trim() !== '', {
     message: 'validation.intervalRequired',
     path: ['intervalCount'],
   })
@@ -75,7 +101,7 @@ export const recurringFormSchema = z
     message: 'validation.weekdayRequired',
     path: ['byWeekday'],
   })
-  .refine((v) => v.frequency !== 'yearly' || /^\d{1,2}$/.test(v.monthOfYear), {
+  .refine((v) => v.frequency !== 'yearly' || v.monthOfYear.trim() !== '', {
     message: 'validation.monthRequired',
     path: ['monthOfYear'],
   });

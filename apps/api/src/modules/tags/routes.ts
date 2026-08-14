@@ -1,3 +1,4 @@
+import { colorField, tagNameField } from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
@@ -40,7 +41,7 @@ tagRouter.get(
 tagRouter.post(
   '/',
   requireEditor,
-  validate({ body: z.object({ name: z.string().min(1).max(40), color: z.string().max(20).nullish() }) }),
+  validate({ body: z.object({ name: tagNameField, color: colorField.nullish() }) }),
   asyncHandler(async (req, res) => {
     const input = body<{ name: string; color?: string | null }>(req);
     const tag = await db

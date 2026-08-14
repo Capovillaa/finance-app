@@ -1,3 +1,18 @@
+import {
+  LIMITS,
+  RECURRING_FREQUENCIES,
+  TRANSACTION_TYPES,
+  dayOfMonthField,
+  descriptionField,
+  leadTimeDaysField,
+  merchantField,
+  monthOfYearField,
+  nameField,
+  notesField,
+  occurrenceLimitField,
+  recurringIntervalField,
+  weekdayField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/http.js';
@@ -29,26 +44,26 @@ recurringRouter.post(
       .object({
         accountId: uuidSchema,
         categoryId: uuidSchema.nullish(),
-        name: z.string().min(1).max(120),
-        type: z.enum(['income', 'expense']),
+        name: nameField,
+        type: z.enum(TRANSACTION_TYPES),
         amount: positiveMoneySchema,
-        description: z.string().min(1).max(200),
-        merchant: z.string().max(120).nullish(),
-        notes: z.string().max(2000).nullish(),
-        frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly', 'custom']),
-        intervalCount: z.number().int().min(1).max(365).optional(),
-        byWeekday: z.array(z.number().int().min(0).max(6)).max(7).nullish(),
-        dayOfMonth: z.number().int().min(1).max(31).nullish(),
-        monthOfYear: z.number().int().min(1).max(12).nullish(),
+        description: descriptionField,
+        merchant: merchantField.nullish(),
+        notes: notesField.nullish(),
+        frequency: z.enum(RECURRING_FREQUENCIES),
+        intervalCount: recurringIntervalField.optional(),
+        byWeekday: z.array(weekdayField).max(LIMITS.weekdaysPerRule.max).nullish(),
+        dayOfMonth: dayOfMonthField.nullish(),
+        monthOfYear: monthOfYearField.nullish(),
         startDate: dateSchema,
         endDate: dateSchema.nullish(),
-        occurrenceLimit: z.number().int().min(1).max(1000).nullish(),
+        occurrenceLimit: occurrenceLimitField.nullish(),
         autoPost: z.boolean().optional(),
-        leadTimeDays: z.number().int().min(0).max(90).optional(),
+        leadTimeDays: leadTimeDaysField.optional(),
       })
       .refine(
         (value) => value.frequency !== 'custom' || value.intervalCount !== undefined,
-        { message: 'A custom frequency requires intervalCount (in days)', path: ['intervalCount'] },
+        { message: 'validation.intervalRequired', path: ['intervalCount'] },
       ),
   }),
   asyncHandler(async (req, res) => {
@@ -83,15 +98,15 @@ recurringRouter.patch(
   validate({
     params: idParams,
     body: z.object({
-      name: z.string().min(1).max(120).optional(),
+      name: nameField.optional(),
       amount: positiveMoneySchema.optional(),
-      description: z.string().min(1).max(200).optional(),
-      merchant: z.string().max(120).nullish(),
+      description: descriptionField.optional(),
+      merchant: merchantField.nullish(),
       categoryId: uuidSchema.nullish(),
       endDate: dateSchema.nullish(),
       isActive: z.boolean().optional(),
       autoPost: z.boolean().optional(),
-      leadTimeDays: z.number().int().min(0).max(90).optional(),
+      leadTimeDays: leadTimeDaysField.optional(),
     }),
   }),
   asyncHandler(async (req, res) => {

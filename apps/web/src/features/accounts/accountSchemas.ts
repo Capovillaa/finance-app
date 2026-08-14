@@ -1,17 +1,26 @@
+import {
+  ACCOUNT_TYPES,
+  CURRENCY_CODE_LENGTH,
+  LIMITS,
+  isMoneyText,
+  isWholeNumberInRange,
+  type AccountType,
+} from '@finance/schemas';
 import { z } from 'zod';
 
 /**
- * Client-side mirror of `createAccountSchema` / `updateAccountSchema` in
- * `apps/api/src/modules/accounts/routes.ts`. Kept in sync by hand until the
- * shared-schema package lands (CLAUDE.md, next task 3); any server rejection
- * still surfaces through `getFieldErrors`.
+ * The account create/edit form.
+ *
+ * The type list and every bound come from `@finance/schemas`, which
+ * `apps/api/src/modules/accounts/routes.ts` builds its request schema from too.
+ * What is local is the form's own shape: each numeric field arrives as text and
+ * an untouched one is `''`, which is why the rules below are "empty, or valid"
+ * rather than the server's "absent, or valid".
  */
-export const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'investment', 'cash', 'loan'] as const;
-
-export type AccountTypeValue = (typeof ACCOUNT_TYPES)[number];
+export { ACCOUNT_TYPES, type AccountType as AccountTypeValue };
 
 /** Catalogue keys, not labels — resolve with `t()` at the point of render. */
-export const ACCOUNT_TYPE_LABEL_KEYS: Record<AccountTypeValue, string> = {
+export const ACCOUNT_TYPE_LABEL_KEYS: Record<AccountType, string> = {
   checking: 'accounts.type.checking',
   savings: 'accounts.type.savings',
   credit_card: 'accounts.type.creditCard',
@@ -23,23 +32,26 @@ export const ACCOUNT_TYPE_LABEL_KEYS: Record<AccountTypeValue, string> = {
 const moneyInputSchema = z
   .string()
   .trim()
-  .refine((v) => v === '' || /^-?\d{1,15}(\.\d{1,4})?$/.test(v), 'validation.decimalAmount');
+  .refine((v) => v === '' || isMoneyText(v), 'validation.decimalAmount');
 
 const dayOfMonthSchema = z
   .string()
   .trim()
-  .refine((v) => v === '' || (/^\d{1,2}$/.test(v) && Number(v) >= 1 && Number(v) <= 31), 'validation.dayOfMonth');
+  .refine(
+    (v) => v === '' || isWholeNumberInRange(v, LIMITS.dayOfMonth.min, LIMITS.dayOfMonth.max),
+    'validation.dayOfMonth',
+  );
 
 export const accountFormSchema = z.object({
-  name: z.string().min(1, 'validation.nameRequired').max(120),
+  name: z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
   type: z.enum(ACCOUNT_TYPES),
-  currency: z.string().length(3, 'validation.currencyCode').toUpperCase(),
-  institution: z.string().max(120).optional(),
+  currency: z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode').toUpperCase(),
+  institution: z.string().max(LIMITS.institution.max).optional(),
   initialBalance: moneyInputSchema,
   creditLimit: moneyInputSchema,
   statementDay: dayOfMonthSchema,
   dueDay: dayOfMonthSchema,
-  color: z.string().max(20).optional(),
+  color: z.string().max(LIMITS.color.max).optional(),
 });
 
 export type AccountFormValues = z.infer<typeof accountFormSchema>;

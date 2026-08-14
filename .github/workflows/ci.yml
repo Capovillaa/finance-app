@@ -40,7 +40,15 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Typecheck (api and web)
+      # `@finance/schemas` is consumed as compiled output — both workspaces read
+      # its `.d.ts` — so it must exist before anything typechecks or builds.
+      # `npm ci` already builds it through the package's own `prepare` script,
+      # and the root scripts below build it again; this step costs a second and
+      # makes the ordering visible rather than implied.
+      - name: Build shared schemas
+        run: npm run build:schemas
+
+      - name: Typecheck (schemas, api and web)
         run: npm run typecheck
 
       - name: Build api
@@ -100,6 +108,12 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      # The migration steps below run `tsx` straight against `apps/api/src`,
+      # which imports `@finance/schemas` — so its compiled output has to be
+      # there even though `npm test` would have built it for itself.
+      - name: Build shared schemas
+        run: npm run build:schemas
 
       # Applying every migration to an empty database is itself the first
       # assertion: the suite's global setup does this before any test runs.

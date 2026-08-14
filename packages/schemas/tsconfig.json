@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    // NodeNext, because `apps/api` resolves this package through Node's own
+    // resolver and must find a real `.js` next to a real `.d.ts`. `apps/web`
+    // uses `bundler` resolution, which reads the same `exports` map happily —
+    // NodeNext is the stricter of the two, so satisfying it satisfies both.
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

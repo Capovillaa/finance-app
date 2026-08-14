@@ -1,3 +1,13 @@
+import {
+  GOAL_CATEGORIES,
+  GOAL_STATUSES,
+  LIMITS,
+  colorField,
+  currencyField,
+  longDescriptionField,
+  nameField,
+  priorityField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/http.js';
@@ -8,25 +18,17 @@ import * as goalService from './service.js';
 
 const idParams = z.object({ workspaceId: uuidSchema, id: uuidSchema });
 
-const goalCategorySchema = z.enum([
-  'emergency_fund',
-  'vacation',
-  'car',
-  'house',
-  'education',
-  'retirement',
-  'investment',
-  'other',
-]);
+const goalCategorySchema = z.enum(GOAL_CATEGORIES);
+const goalStatusSchema = z.enum(GOAL_STATUSES);
 
 export const goalRouter: Router = Router({ mergeParams: true });
 
 goalRouter.get(
   '/',
   requireViewer,
-  validate({ query: z.object({ status: z.enum(['active', 'achieved', 'paused', 'cancelled']).optional() }) }),
+  validate({ query: z.object({ status: goalStatusSchema.optional() }) }),
   asyncHandler(async (req, res) => {
-    const options = query<{ status?: 'active' | 'achieved' | 'paused' | 'cancelled' }>(req);
+    const options = query<{ status?: z.infer<typeof goalStatusSchema> }>(req);
     res.json({ goals: await goalService.listGoals(workspaceContext(req).id, options) });
   }),
 );
@@ -36,15 +38,15 @@ goalRouter.post(
   requireEditor,
   validate({
     body: z.object({
-      name: z.string().min(1).max(120),
-      description: z.string().max(1000).nullish(),
+      name: nameField,
+      description: longDescriptionField.nullish(),
       category: goalCategorySchema.optional(),
       targetAmount: positiveMoneySchema,
-      currency: z.string().length(3).optional(),
+      currency: currencyField.optional(),
       targetDate: dateSchema.nullish(),
       accountId: uuidSchema.nullish(),
-      priority: z.number().int().min(1).max(5).optional(),
-      color: z.string().max(20).nullish(),
+      priority: priorityField.optional(),
+      color: colorField.nullish(),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -81,13 +83,13 @@ goalRouter.patch(
   validate({
     params: idParams,
     body: z.object({
-      name: z.string().min(1).max(120).optional(),
-      description: z.string().max(1000).nullish(),
+      name: nameField.optional(),
+      description: longDescriptionField.nullish(),
       targetAmount: positiveMoneySchema.optional(),
       targetDate: dateSchema.nullish(),
-      status: z.enum(['active', 'achieved', 'paused', 'cancelled']).optional(),
-      priority: z.number().int().min(1).max(5).optional(),
-      color: z.string().max(20).nullish(),
+      status: goalStatusSchema.optional(),
+      priority: priorityField.optional(),
+      color: colorField.nullish(),
       accountId: uuidSchema.nullish(),
     }),
   }),
@@ -118,7 +120,7 @@ goalRouter.post(
       amount: positiveMoneySchema,
       occurredOn: dateSchema.optional(),
       transactionId: uuidSchema.nullish(),
-      note: z.string().max(300).nullish(),
+      note: z.string().max(LIMITS.goalContributionNote.max).nullish(),
     }),
   }),
   asyncHandler(async (req, res) => {

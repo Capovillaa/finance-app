@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { validationResources } from '@finance/schemas';
 import i18next from 'i18next';
 
 export const SUPPORTED_LOCALES = ['en', 'pt-BR', 'es'] as const;
@@ -19,8 +20,15 @@ void instance.init({
   lng: DEFAULT_LOCALE,
   fallbackLng: DEFAULT_LOCALE,
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],
+  // The `validation` namespace comes from `@finance/schemas` rather than from
+  // the JSON files: the web client rejects a field with the same key this API
+  // does, so the sentence behind that key is shared rather than kept in two
+  // catalogues that can be corrected separately.
   resources: Object.fromEntries(
-    SUPPORTED_LOCALES.map((locale) => [locale, { translation: loadCatalogue(locale) }]),
+    SUPPORTED_LOCALES.map((locale) => [
+      locale,
+      { translation: { ...loadCatalogue(locale), ...validationResources(locale) } },
+    ]),
   ),
   interpolation: { escapeValue: false },
   returnNull: false,

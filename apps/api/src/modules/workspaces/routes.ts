@@ -1,3 +1,12 @@
+import {
+  GRANTABLE_ROLES,
+  LIMITS,
+  WORKSPACE_TYPES,
+  currencyField,
+  emailField,
+  nameField,
+  timezoneField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, paginationSchema } from '../../lib/http.js';
@@ -17,17 +26,17 @@ import { acceptInvitation, createInvitation, listInvitations, revokeInvitation }
 import * as workspaceService from './service.js';
 
 const createWorkspaceSchema = z.object({
-  name: z.string().min(1).max(120),
-  type: z.enum(['personal', 'shared']).default('personal'),
-  baseCurrency: z.string().length(3).optional(),
-  timezone: z.string().max(60).optional(),
+  name: nameField,
+  type: z.enum(WORKSPACE_TYPES).default('personal'),
+  baseCurrency: currencyField.optional(),
+  timezone: timezoneField.optional(),
   seedCategories: z.boolean().optional(),
 });
 
 const updateWorkspaceSchema = z.object({
-  name: z.string().min(1).max(120).optional(),
-  baseCurrency: z.string().length(3).optional(),
-  timezone: z.string().max(60).optional(),
+  name: nameField.optional(),
+  baseCurrency: currencyField.optional(),
+  timezone: timezoneField.optional(),
   settings: z.record(z.unknown()).optional(),
 });
 
@@ -111,7 +120,7 @@ workspaceRouter.patch(
   '/:workspaceId/members/:userId',
   validate({
     params: workspaceParamSchema.extend({ userId: uuidSchema }),
-    body: z.object({ role: z.enum(['admin', 'editor', 'viewer']) }),
+    body: z.object({ role: z.enum(GRANTABLE_ROLES) }),
   }),
   withWorkspace,
   requireAdmin,
@@ -164,8 +173,8 @@ workspaceRouter.post(
   validate({
     params: workspaceParamSchema,
     body: z.object({
-      email: z.string().email().max(254),
-      role: z.enum(['admin', 'editor', 'viewer']).default('editor'),
+      email: emailField,
+      role: z.enum(GRANTABLE_ROLES).default('editor'),
     }),
   }),
   withWorkspace,
@@ -207,7 +216,7 @@ workspaceRouter.get(
   validate({
     params: workspaceParamSchema,
     query: paginationSchema.extend({
-      entityType: z.string().max(40).optional(),
+      entityType: z.string().max(LIMITS.entityType.max).optional(),
       entityId: uuidSchema.optional(),
       actorUserId: uuidSchema.optional(),
       includeAudit: booleanQueryWithDefault(false),
@@ -252,7 +261,11 @@ export const invitationRouter: Router = Router();
 invitationRouter.post(
   '/accept',
   requireAuth,
-  validate({ body: z.object({ token: z.string().min(10).max(200) }) }),
+  validate({
+    body: z.object({
+      token: z.string().min(LIMITS.invitationToken.min).max(LIMITS.invitationToken.max),
+    }),
+  }),
   asyncHandler(async (req, res) => {
     const { token } = body<{ token: string }>(req);
     const result = await acceptInvitation(token, currentUser(req).id);

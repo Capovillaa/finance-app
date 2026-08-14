@@ -1,37 +1,45 @@
+import { CURRENCY_CODE_LENGTH, LIMITS, hasLettersAndDigits } from '@finance/schemas';
 import { z } from 'zod';
 
 /**
- * Client-side mirrors of the API's auth schemas
- * (`apps/api/src/modules/auth/routes.ts`).
+ * The sign-in and sign-up forms.
  *
- * These are a duplicate today. The intended end state is the shared workspace
- * package described in CLAUDE.md next-task 3, where the API's Zod schemas become
- * the single contract both sides import. Until then the rules below are kept
- * character-for-character identical to the server's, and any server rejection
- * still surfaces through `getFieldErrors` — the client validation is a courtesy,
- * never the authority.
+ * Every bound and every composition rule below is read from `@finance/schemas`,
+ * the same module `apps/api/src/modules/auth/routes.ts` builds its request
+ * schema from — so the two cannot disagree about what a password is. What stays
+ * local is the *form* half: a confirmation field the API never sees, and the
+ * fact that an untouched input is `''` rather than `undefined`.
+ *
+ * The client's validation remains a courtesy, never the authority. Anything the
+ * server rejects still surfaces through `getFieldErrors`.
  */
 export const passwordSchema = z
   .string()
-  .min(10, 'validation.passwordLength')
-  .max(200)
-  .refine((v) => /[a-zA-Z]/.test(v) && /\d/.test(v), 'validation.passwordComplexity');
+  .min(LIMITS.password.min, 'validation.passwordLength')
+  .max(LIMITS.password.max)
+  .refine(hasLettersAndDigits, 'validation.passwordComplexity');
+
+const emailSchema = z
+  .string()
+  .min(1, 'validation.emailRequired')
+  .email('validation.emailInvalid')
+  .max(LIMITS.email.max);
 
 export const loginSchema = z.object({
-  email: z.string().min(1, 'validation.emailRequired').email('validation.emailInvalid').max(254),
-  password: z.string().min(1, 'validation.passwordRequired').max(200),
+  email: emailSchema,
+  password: z.string().min(1, 'validation.passwordRequired').max(LIMITS.password.max),
 });
 
 export type LoginValues = z.infer<typeof loginSchema>;
 
 export const registerSchema = z
   .object({
-    fullName: z.string().min(1, 'validation.nameRequired').max(120),
-    email: z.string().min(1, 'validation.emailRequired').email('validation.emailInvalid').max(254),
+    fullName: z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
+    email: emailSchema,
     password: passwordSchema,
     confirmPassword: z.string().min(1, 'validation.confirmPassword'),
-    baseCurrency: z.string().length(3, 'validation.currencyCode'),
-    workspaceName: z.string().max(120).optional(),
+    baseCurrency: z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode'),
+    workspaceName: z.string().max(LIMITS.name.max).optional(),
   })
   .refine((values) => values.password === values.confirmPassword, {
     message: 'validation.passwordsDiffer',

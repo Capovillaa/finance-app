@@ -56,6 +56,26 @@ describe('POST /auth/register', () => {
     expect(response.status).toBe(422);
     expect(response.body.error.details?.[0]?.path).toContain('password');
   });
+
+  /**
+   * A rejected field is named by a catalogue key from `@finance/schemas`, and
+   * the error handler resolves it in the request's own language — so the bound
+   * quoted in the sentence comes from the same table that enforced it. Before
+   * the shared package these came back in English whatever the client asked for.
+   */
+  it('answers a rejected field in the language the request asked for', async () => {
+    const send = (locale: string) =>
+      api()
+        .post('/api/v1/auth/register')
+        .set('accept-language', locale)
+        .send({ email: 'weak@example.com', password: 'short', fullName: 'Weak' });
+
+    const [english, portuguese, spanish] = await Promise.all([send('en'), send('pt-BR'), send('es')]);
+
+    expect(english.body.error.details?.[0]?.message).toBe('Password must be at least 10 characters');
+    expect(portuguese.body.error.details?.[0]?.message).toBe('A senha precisa ter ao menos 10 caracteres');
+    expect(spanish.body.error.details?.[0]?.message).toBe('La contraseña necesita al menos 10 caracteres');
+  });
 });
 
 describe('POST /auth/login', () => {

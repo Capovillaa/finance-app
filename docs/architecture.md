@@ -63,12 +63,27 @@ apps/web/src/
   api/
     api.ts                   single RTK Query service, tag types declared once
     baseQuery.ts             fetch base query + transparent single-flight refresh
-    types.ts                 hand-written mirror of API response shapes
+    types.ts                 hand-written response shapes; value sets from @finance/schemas
     endpoints/                one file per API module (accounts.ts, budgets.ts, ...)
-  features/<domain>/          schemas (client copy of the server's Zod rules),
-                               dialogs, cards — one folder per API module
+  features/<domain>/          form schemas built on @finance/schemas, dialogs,
+                               cards — one folder per API module
   pages/<Domain>Page.tsx      owns data-fetching and dialog open/close state
 ```
+
+## Shared package
+
+`packages/schemas` (`@finance/schemas`) holds the validation rules the API and the client have to
+agree on: every bound, every closed set of values, the shapes of money, dates and passwords, and the
+catalogue key and wording each rejection carries. Both apps import it; neither declares those rules
+itself.
+
+The Zod schemas are *not* shared, deliberately. The API parses a JSON body and normalises amounts
+through `decimal.js`; the client parses form text and stores nothing. Each builds its own parser on
+top of the shared rules. See `docs/decisions.md`, "The validation rules are shared; each side still
+builds its own parser".
+
+It is consumed as compiled output, so its `dist` must exist before either app typechecks — every
+root npm script builds it first, and `npm ci` does too via the package's `prepare`.
 
 **State** is Redux Toolkit: a small hand-written slice for auth/session and workspace selection,
 everything else is RTK Query cache. There is deliberately no second client-side cache or

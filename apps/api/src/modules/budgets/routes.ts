@@ -1,3 +1,11 @@
+import {
+  BUDGET_PERIODS,
+  LIMITS,
+  currencyField,
+  nameField,
+  percentField,
+  reasonField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/http.js';
@@ -12,7 +20,7 @@ const lineSchema = z.object({
   categoryId: uuidSchema,
   limitAmount: positiveMoneySchema,
   includeSubcategories: z.boolean().optional(),
-  alertThresholdPercent: z.number().int().min(1).max(100).optional(),
+  alertThresholdPercent: percentField.optional(),
 });
 
 export const budgetRouter: Router = Router({ mergeParams: true });
@@ -38,13 +46,16 @@ budgetRouter.post(
   requireEditor,
   validate({
     body: z.object({
-      name: z.string().min(1).max(120),
-      period: z.enum(['monthly', 'quarterly', 'yearly', 'custom']),
+      name: nameField,
+      period: z.enum(BUDGET_PERIODS),
       startDate: dateSchema,
       endDate: dateSchema.optional(),
-      currency: z.string().length(3).optional(),
+      currency: currencyField.optional(),
       rollover: z.boolean().optional(),
-      lines: z.array(lineSchema).min(1).max(100),
+      lines: z
+        .array(lineSchema)
+        .min(LIMITS.budgetLines.min, 'validation.atLeastOneLine')
+        .max(LIMITS.budgetLines.max, 'validation.maxBudgetLines'),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -77,7 +88,7 @@ budgetRouter.patch(
   validate({
     params: idParams,
     body: z.object({
-      name: z.string().min(1).max(120).optional(),
+      name: nameField.optional(),
       isActive: z.boolean().optional(),
       rollover: z.boolean().optional(),
     }),
@@ -132,7 +143,7 @@ budgetRouter.post(
   requireEditor,
   validate({
     params: idParams.extend({ lineId: uuidSchema }),
-    body: z.object({ newLimit: positiveMoneySchema, reason: z.string().max(300).nullish() }),
+    body: z.object({ newLimit: positiveMoneySchema, reason: reasonField.nullish() }),
   }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);

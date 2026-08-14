@@ -1,3 +1,4 @@
+import { validationResources } from '@finance/schemas';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import en from './locales/en.json';
@@ -54,10 +55,13 @@ function safeWrite(key: string, value: string): void {
 }
 
 void i18n.use(initReactI18next).init({
+  // The `validation` namespace is merged in from `@finance/schemas` rather than
+  // living in the JSON beside it: the API rejects a field with the very same
+  // key, so its wording is shared instead of being maintained in two catalogues.
   resources: {
-    en: { translation: en },
-    'pt-BR': { translation: ptBR },
-    es: { translation: es },
+    en: { translation: { ...en, ...validationResources('en') } },
+    'pt-BR': { translation: { ...ptBR, ...validationResources('pt-BR') } },
+    es: { translation: { ...es, ...validationResources('es') } },
   },
   lng: detectLanguage(),
   fallbackLng: DEFAULT_LANGUAGE,

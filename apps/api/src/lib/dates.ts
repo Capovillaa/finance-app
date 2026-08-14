@@ -1,3 +1,4 @@
+import { DATE_ONLY_PATTERN, isDateOnlyText } from '@finance/schemas';
 import { formatInTimeZone } from 'date-fns-tz';
 
 /**
@@ -8,7 +9,7 @@ import { formatInTimeZone } from 'date-fns-tz';
  */
 export type DateOnly = string;
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_PATTERN = DATE_ONLY_PATTERN;
 
 export interface DateParts {
   year: number;
@@ -16,11 +17,11 @@ export interface DateParts {
   day: number; // 1-31
 }
 
-export function isDateOnly(value: string): boolean {
-  if (!DATE_PATTERN.test(value)) return false;
-  const { year, month, day } = parseDate(value);
-  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
-}
+/**
+ * Re-exported from `@finance/schemas` rather than reimplemented, so the check
+ * this module makes and the one the request schemas make are the same check.
+ */
+export const isDateOnly = isDateOnlyText;
 
 export function parseDate(value: DateOnly): DateParts {
   if (!DATE_PATTERN.test(value)) throw new Error(`Invalid date: ${value}`);

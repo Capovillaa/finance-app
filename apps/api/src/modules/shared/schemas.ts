@@ -1,29 +1,33 @@
+import {
+  UUID_PATTERN,
+  currencyField,
+  dateField,
+  moneyField,
+  positiveMoneyField,
+} from '@finance/schemas';
 import { z } from 'zod';
-import { isDateOnly } from '../../lib/dates.js';
 import { money } from '../../lib/money.js';
 
 /**
- * Money crosses the wire as a decimal string. Accepting a JS number here would
- * let 0.1 + 0.2 into the ledger, so numeric input is normalised through the
- * Decimal helpers immediately and everything downstream deals in strings.
+ * The API's side of the shared contract.
+ *
+ * The shapes and bounds come from `@finance/schemas`, which `apps/web` reads
+ * too; what this module adds is the part only a server can do — turning a
+ * validated amount into the canonical `NUMERIC(19,4)` string the database
+ * stores, and parsing the query-string encodings Express hands over.
  */
-export const moneySchema = z
-  .union([z.string(), z.number()])
-  .refine((value) => {
-    const text = String(value).trim();
-    return /^-?\d{1,15}(\.\d{1,4})?$/.test(text);
-  }, 'Must be a decimal amount with at most 4 decimal places')
-  .transform((value) => money(String(value)));
+
+/**
+ * Money crosses the wire as a decimal string. Accepting a JS number would let
+ * 0.1 + 0.2 into the ledger, so numeric input is normalised through the Decimal
+ * helpers immediately and everything downstream deals in strings.
+ */
+export const moneySchema = moneyField.transform((value) => money(value));
 
 /** Same as `moneySchema` but rejects zero and negatives. */
-export const positiveMoneySchema = moneySchema.refine(
-  (value) => Number(value) > 0,
-  'Must be greater than zero',
-);
+export const positiveMoneySchema = positiveMoneyField.transform((value) => money(value));
 
-export const dateSchema = z
-  .string()
-  .refine((value) => isDateOnly(value), 'Must be a valid YYYY-MM-DD date');
+export const dateSchema = dateField;
 
 /**
  * Boolean from a query string. `z.coerce.boolean()` is wrong here: it applies
@@ -37,15 +41,12 @@ export const booleanQuerySchema = z
 /** Same, with a default when the parameter is absent. */
 export const booleanQueryWithDefault = (fallback: boolean) => booleanQuerySchema.default(fallback);
 
-export const currencySchema = z
-  .string()
-  .length(3)
-  .transform((value) => value.toUpperCase());
+export const currencySchema = currencyField.transform((value) => value.toUpperCase());
 
 export const dateRangeSchema = z
   .object({ from: dateSchema.optional(), to: dateSchema.optional() })
   .refine((value) => !value.from || !value.to || value.from <= value.to, {
-    message: '`from` must be on or before `to`',
+    message: 'validation.dateRangeOrder',
     path: ['from'],
   });
 
@@ -59,10 +60,8 @@ export const csvUuidArray = z
     return list.map((item) => item.trim()).filter((item) => item.length > 0);
   })
   .refine(
-    (value) =>
-      value === undefined ||
-      value.every((item) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item)),
-    'Must be a comma-separated list of UUIDs',
+    (value) => value === undefined || value.every((item) => UUID_PATTERN.test(item)),
+    'validation.uuidList',
   );
 
 export const csvStringArray = z

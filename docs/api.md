@@ -18,11 +18,17 @@ All requests and responses are JSON unless noted. Authenticated endpoints take
   "error": {
     "code": "validation_failed",
     "message": "Request validation failed",
-    "details": [{ "path": "body.amount", "message": "Must be greater than zero" }],
+    "details": [{ "path": "body.amount", "message": "Enter an amount greater than zero" }],
     "requestId": "3f9c…"
   }
 }
 ```
+
+**Language.** `message` and every `details[].message` are rendered in the locale
+resolved from `Accept-Language` (`en`, `pt-BR`, `es`; English otherwise), or from
+the signed-in user's stored `locale` once a request is authenticated. The one
+exception is a field rejected by a rule with no authored message of its own — a
+plain length cap, say — which falls back to Zod's own English wording.
 
 | Code | Status | Meaning |
 | --- | --- | --- |

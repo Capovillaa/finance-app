@@ -1,11 +1,23 @@
+import type {
+  AccountType as SharedAccountType,
+  BudgetPeriod as SharedBudgetPeriod,
+  GoalCategory as SharedGoalCategory,
+  GoalStatus as SharedGoalStatus,
+  LedgerStatus,
+  LedgerType,
+  RecurringFrequency,
+  WorkspaceRole as SharedWorkspaceRole,
+} from '@finance/schemas';
+
 /**
  * Response shapes returned by @finance/api.
  *
- * These are hand-written for now and mirror the service-layer interfaces in
- * `apps/api/src/modules/*`. They are deliberately the *only* place the client
- * describes the wire format, so when the shared-schema package lands (see
- * CLAUDE.md, next task 3) this file is the single thing that gets replaced by
- * generated types.
+ * The *structures* here are still hand-written and mirror the service-layer
+ * interfaces in `apps/api/src/modules/*`; generating them is what OpenAPI
+ * generation (CLAUDE.md, next task 6) is for. What is no longer hand-written is
+ * every closed set of values below — those come from `@finance/schemas`, so
+ * adding an account type or a goal status on the server is a compile error here
+ * rather than a `string` the client silently fails to render.
  *
  * Money is always a decimal string — never a number. Anything that looks like a
  * currency amount here is typed `Money` to make that impossible to forget.
@@ -20,19 +32,21 @@ export type DateOnly = string;
 /** An ISO 8601 timestamp. Dates cross the wire serialised, not as `Date`. */
 export type Timestamp = string;
 
-export type WorkspaceRole = 'owner' | 'admin' | 'editor' | 'viewer';
+export type WorkspaceRole = SharedWorkspaceRole;
 
-export type AccountType = 'checking' | 'savings' | 'credit_card' | 'investment' | 'cash' | 'loan';
+export type AccountType = SharedAccountType;
 
-export type TransactionType = 'income' | 'expense' | 'transfer';
+/** Everything the ledger can hold, including the legs a transfer produces. */
+export type TransactionType = LedgerType;
 
-export type TransactionStatus = 'cleared' | 'pending' | 'scheduled' | 'void';
+export type TransactionStatus = LedgerStatus;
 
 export type CategoryKind = 'income' | 'expense';
 
+/** Derived by the API from spend against limit; not a value any request sends. */
 export type BudgetStatus = 'on_track' | 'warning' | 'exceeded';
 
-export type BudgetPeriod = 'monthly' | 'quarterly' | 'yearly' | 'custom';
+export type BudgetPeriod = SharedBudgetPeriod;
 
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 
@@ -319,17 +333,9 @@ export interface BudgetProgress {
 // Goals
 // ---------------------------------------------------------------------------
 
-export type GoalCategory =
-  | 'emergency_fund'
-  | 'vacation'
-  | 'car'
-  | 'house'
-  | 'education'
-  | 'retirement'
-  | 'investment'
-  | 'other';
+export type GoalCategory = SharedGoalCategory;
 
-export type GoalStatus = 'active' | 'achieved' | 'paused' | 'cancelled';
+export type GoalStatus = SharedGoalStatus;
 
 export interface Goal {
   id: string;
@@ -369,7 +375,7 @@ export interface GoalContribution {
 // Recurring
 // ---------------------------------------------------------------------------
 
-export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
+export type RecurrenceFrequency = RecurringFrequency;
 
 export interface RecurringTransaction {
   id: string;

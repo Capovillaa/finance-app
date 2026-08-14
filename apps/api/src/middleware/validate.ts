@@ -1,3 +1,4 @@
+import { uuidField } from '@finance/schemas';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z, type ZodTypeAny } from 'zod';
 import { validationFailed, type FieldIssue } from '../lib/errors.js';
@@ -54,5 +55,5 @@ export const body = <T>(req: Request): T => req.body as T;
 export const query = <T>(req: Request): T => req.query as unknown as T;
 export const params = <T>(req: Request): T => req.params as unknown as T;
 
-export const uuidSchema = z.string().uuid('Must be a valid UUID');
+export const uuidSchema = uuidField;
 export const idParamSchema = z.object({ id: uuidSchema });

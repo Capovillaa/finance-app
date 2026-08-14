@@ -1,3 +1,16 @@
+import {
+  LEDGER_STATUSES,
+  LEDGER_TYPES,
+  LIMITS,
+  SORT_DIRECTIONS,
+  TRANSACTION_SORT_FIELDS,
+  TRANSACTION_STATUSES,
+  TRANSACTION_TYPES,
+  TRANSFER_STATUSES,
+  descriptionField,
+  merchantField,
+  notesField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, paginationSchema } from '../../lib/http.js';
@@ -17,34 +30,34 @@ const listQuerySchema = paginationSchema.extend({
   types: z
     .union([z.string(), z.array(z.string())])
     .optional()
-    .transform((v) => (v === undefined ? undefined : (Array.isArray(v) ? v : v.split(',')) as ('income' | 'expense' | 'transfer')[])),
+    .transform((v) => (v === undefined ? undefined : (Array.isArray(v) ? v : v.split(',')) as (typeof LEDGER_TYPES)[number][])),
   statuses: z
     .union([z.string(), z.array(z.string())])
     .optional()
-    .transform((v) => (v === undefined ? undefined : (Array.isArray(v) ? v : v.split(',')) as ('cleared' | 'pending' | 'scheduled' | 'void')[])),
+    .transform((v) => (v === undefined ? undefined : (Array.isArray(v) ? v : v.split(',')) as (typeof LEDGER_STATUSES)[number][])),
   from: dateSchema.optional(),
   to: dateSchema.optional(),
   minAmount: moneySchema.optional(),
   maxAmount: moneySchema.optional(),
-  search: z.string().max(200).optional(),
+  search: z.string().max(LIMITS.search.max).optional(),
   createdBy: uuidSchema.optional(),
   isReconciled: booleanQuerySchema.optional(),
-  sortBy: z.enum(['occurredOn', 'amount', 'createdAt']).default('occurredOn'),
-  sortDirection: z.enum(['asc', 'desc']).default('desc'),
+  sortBy: z.enum(TRANSACTION_SORT_FIELDS).default('occurredOn'),
+  sortDirection: z.enum(SORT_DIRECTIONS).default('desc'),
 });
 
 const createSchema = z.object({
   accountId: uuidSchema,
   categoryId: uuidSchema.nullish(),
-  type: z.enum(['income', 'expense']),
+  type: z.enum(TRANSACTION_TYPES),
   amount: positiveMoneySchema,
-  description: z.string().min(1).max(200),
-  merchant: z.string().max(120).nullish(),
-  notes: z.string().max(2000).nullish(),
+  description: descriptionField,
+  merchant: merchantField.nullish(),
+  notes: notesField.nullish(),
   occurredOn: dateSchema,
-  status: z.enum(['cleared', 'pending', 'scheduled']).optional(),
+  status: z.enum(TRANSACTION_STATUSES).optional(),
   paidByUserId: uuidSchema.nullish(),
-  tagIds: z.array(uuidSchema).max(20).optional(),
+  tagIds: z.array(uuidSchema).max(LIMITS.tagsPerTransaction.max, 'validation.maxTags').optional(),
 });
 
 export const transactionRouter: Router = Router({ mergeParams: true });
@@ -91,10 +104,10 @@ transactionRouter.post(
       toAccountId: uuidSchema,
       amount: positiveMoneySchema,
       destinationAmount: positiveMoneySchema.optional(),
-      description: z.string().min(1).max(200),
-      notes: z.string().max(2000).nullish(),
+      description: descriptionField,
+      notes: notesField.nullish(),
       occurredOn: dateSchema,
-      status: z.enum(['cleared', 'pending']).optional(),
+      status: z.enum(TRANSFER_STATUSES).optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -115,7 +128,10 @@ transactionRouter.post(
   requireEditor,
   validate({
     body: z.object({
-      transactionIds: z.array(uuidSchema).min(1).max(500),
+      transactionIds: z
+        .array(uuidSchema)
+        .min(LIMITS.bulkTransactions.min)
+        .max(LIMITS.bulkTransactions.max),
       categoryId: uuidSchema.nullable(),
     }),
   }),
@@ -156,13 +172,13 @@ transactionRouter.patch(
       accountId: uuidSchema.optional(),
       categoryId: uuidSchema.nullish(),
       amount: positiveMoneySchema.optional(),
-      description: z.string().min(1).max(200).optional(),
-      merchant: z.string().max(120).nullish(),
-      notes: z.string().max(2000).nullish(),
+      description: descriptionField.optional(),
+      merchant: merchantField.nullish(),
+      notes: notesField.nullish(),
       occurredOn: dateSchema.optional(),
-      status: z.enum(['cleared', 'pending', 'scheduled', 'void']).optional(),
+      status: z.enum(LEDGER_STATUSES).optional(),
       paidByUserId: uuidSchema.nullish(),
-      tagIds: z.array(uuidSchema).max(20).optional(),
+      tagIds: z.array(uuidSchema).max(LIMITS.tagsPerTransaction.max, 'validation.maxTags').optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -228,7 +244,7 @@ transactionRouter.put(
             userId: uuidSchema,
             shareAmount: positiveMoneySchema.optional(),
             weight: positiveMoneySchema.optional(),
-            note: z.string().max(200).nullish(),
+            note: z.string().max(LIMITS.splitNote.max).nullish(),
           }),
         )
         .max(50),
@@ -261,7 +277,12 @@ transactionRouter.post(
 transactionRouter.post(
   '/:id/comments',
   requireEditor,
-  validate({ params: idParams, body: z.object({ body: z.string().min(1).max(2000) }) }),
+  validate({
+    params: idParams,
+    body: z.object({
+      body: z.string().min(LIMITS.commentBody.min).max(LIMITS.commentBody.max),
+    }),
+  }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<{ body: string }>(req);

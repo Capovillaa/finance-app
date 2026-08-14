@@ -584,6 +584,110 @@ executed is a plausible guess, not a verified one.
 
 ---
 
+### The validation rules are shared; each side still builds its own parser
+
+Every rule the API enforces on a request used to be written twice: once in an
+`apps/api/src/modules/*/routes.ts` Zod schema, and once by hand in the matching
+`apps/web/src/features/*/\*Schemas.ts`. Each of those client files said so in a comment
+and promised to stay "character-for-character identical". They had not.
+
+**The drift was real and user-visible, which is what settled the design.** Four
+divergences were found by comparing the two sides field by field, all in the same
+direction — the client accepting what the server refuses:
+
+| Field | Client | Server |
+| --- | --- | --- |
+| `occurrenceLimit` | no rule at all | whole number, 1–1000 |
+| `leadTimeDays` | up to 99 | 0–90 |
+| `intervalCount` | any number of digits | 1–365 |
+| budget `lines` | no ceiling | at most 100 |
+
+Three of those cost a failed round trip and an untranslated error. The first is worse
+than that: the recurring dialog sends `Number(occurrenceLimit)`, so text typed into a
+box with no rule became `NaN`, and `JSON.stringify` turns `NaN` into `null` — which the
+API reads as "this schedule has no occurrence limit". A typo silently changed the
+meaning of the schedule rather than being rejected.
+
+**The Zod schemas themselves are deliberately *not* shared.** This was the obvious move
+and it is wrong. The API validates a JSON body: an amount may arrive as a `number`, an
+absent field is `undefined`, an id is a real UUID, and `moneySchema` *transforms* its
+input into the canonical `NUMERIC(19,4)` string through `decimal.js`. The client
+validates a form: every field is a string, an absent one is `''`, an id is whatever the
+`<Select>` last held, and nothing is transformed because nothing is stored. Forcing one
+schema to serve both would mean either shipping `decimal.js` to the browser to normalise
+a value the browser never keeps, or draining the server's schema of the transform that
+makes it useful. They are two parsers of two different inputs, and pretending otherwise
+produces something worse than two honest schemas.
+
+**What is shared is everything the two must agree on.** `packages/schemas`
+(`@finance/schemas`) holds:
+
+- `limits.ts` — every bound, in one table. `MONEY_PATTERN` is *generated* from
+  `LIMITS.money` rather than written out, so the regex cannot drift from the column it
+  guards.
+- `enums.ts` — every closed set, as `as const` tuples that yield both a Zod enum and a
+  TypeScript union. `apps/web/src/api/types.ts` now derives `AccountType`, `GoalStatus`,
+  `BudgetPeriod` and the rest from these instead of restating them.
+- `patterns.ts` — the predicates (`isMoneyText`, `isDateOnlyText`, `hasLettersAndDigits`,
+  `isWholeNumberInRange`), which is what a form can use when its input is text.
+- `fields.ts` — the API's own request fields, stopping short of any transform.
+- `messages.ts` / `translations.ts` — how a rejection names itself, and its wording.
+
+**A rejection carries a key, not a sentence, and each side resolves it.** A Zod message
+is fixed when the schema is built, long before either process knows what language to
+answer in, so the shared schemas carry `validation.amountPositive` and the two resolvers
+render it: `lib/validation.ts` in the client, `middleware/error-handler.ts` in the API.
+The consequence is a genuine gain rather than plumbing — **the API's field errors are now
+translated**, which the i18n decision above had explicitly left undone. A `422` answers
+in the caller's own language, resolved from `Accept-Language` exactly like every other
+message.
+
+The wording lives in the package rather than in the two i18n catalogues, for the same
+reason the bounds do: both sides now reject a field with the same key, and a sentence
+kept in two catalogues is a sentence that gets corrected in one of them.
+`Record<ValidationLocale, Record<ValidationMessageName, string>>` makes a missing
+translation a compile error — strictly better than the shell script that checked the
+client's catalogues after the fact.
+
+**A message that quotes a bound interpolates it from `LIMITS`.** "Enter 1–1000" is a
+better message than "out of range", but writing those numbers into catalogue entries
+would put the bound straight back into the files this package exists to empty. So the
+entry reads `{{min}}`–`{{max}}` and `VALIDATION_PARAMS` supplies the values from the same
+table the schema enforces them with. A unit test asserts that every placeholder in every
+language has a value behind it, because a translation that drops one loses a number
+rather than a word.
+
+**The package is consumed as compiled output, which costs a build step.** `apps/api`
+resolves it through Node's own resolver and must find a real `.js` beside a real `.d.ts`,
+so the package builds to `dist` with declarations and both consumers read that. The
+ordering is handled three ways so it cannot be forgotten: the package's own `prepare`
+script builds it during `npm ci`, every root script (`typecheck`, `build`, `test`, `dev`)
+builds it first, and both CI jobs build it explicitly. The alternative — a source-only
+package resolved through a custom export condition — would have let `apps/web`'s bundler
+and `apps/api`'s `tsc` disagree about what the package contains, which is the same class
+of problem this change exists to remove.
+
+**Two bugs surfaced by driving the real UI, after everything else was green.**
+Adding a bound to `occurrenceLimit` made the Recurring form refuse to submit while
+displaying nothing, because that field was the one `TextField` in the dialog with no
+`error` / `helperText` bound to it — it had never needed them, having had no rule to
+break. And `BudgetFormDialog` passed nested field-array messages straight to
+`helperText` instead of through `fieldMessage()`, so a user saw the literal string
+`validation.categoryRequired`. The second predates this change entirely and had been
+invisible because nothing renders a nested array error unless the array is deliberately
+made invalid. Neither is the sort of thing a typecheck or a passing suite can find, which
+is the same lesson every previous session in this project recorded.
+
+**What was left alone.** Zod's own built-in wording for a bare `.max(120)` is still
+English, exactly as the i18n decision above describes: the client validates and
+translates before a request is sent, so the server's raw message is a bypassed-validation
+edge case rather than the golden path. And the request *bodies* are still described
+twice — as a Zod object on the server and as a TypeScript interface in the client's
+`api/types.ts`. Collapsing those two is what OpenAPI generation is for, and it now has a
+package to generate from.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

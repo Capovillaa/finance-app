@@ -254,6 +254,14 @@ you need in order to not break it.
    without complaining. This checks it, including that the `{{placeholders}}`
    match — a translation that drops one loses a number, not just a word:
 
+**One namespace is not in these files.** `validation.*` lives in
+`packages/schemas/src/translations.ts`, because the API rejects a field with the
+very same key and the wording would otherwise be maintained in two catalogues.
+Both i18n layers merge it in at init. Its completeness is enforced by the
+compiler rather than by the script below (`Record<ValidationLocale,
+Record<ValidationMessageName, string>>` will not build with a language missing),
+and its placeholders are checked by `tests/unit/shared-schemas.test.ts`.
+
 ```bash
 # from apps/web/src — compares key sets and placeholders across en/pt-BR/es
 node -e "const f=(d,p='')=>Object.entries(d).flatMap(([k,v])=>typeof v==='object'?f(v,p+k+'.'):[[p+k,v]]);const L=c=>Object.fromEntries(f(require('./i18n/locales/'+c+'.json')));const en=L('en');for(const c of ['pt-BR','es']){const o=L(c);const miss=Object.keys(en).filter(k=>!(k in o));const ext=Object.keys(o).filter(k=>!(k in en));console.log(c,'missing',miss.length,'extra',ext.length,[...miss,...ext].join(' '))}"
@@ -264,10 +272,12 @@ messages, alert notifications (and the emails built from them), and the
 workspace-invitation email.** `apps/api` has its own `i18next` instance and
 catalogue (`apps/api/src/i18n/locales/`), independent of the client's — see
 `docs/decisions.md` ("The API gets its own i18n layer") for the locale-
-resolution rules, the `AppError` key/param design, and the one thing this
-deliberately left in English: Zod's own field-validation messages, since the
-client already validates and translates those before a request is sent, so the
-server's raw message is a bypassed-validation edge case, not the golden path.
+resolution rules and the `AppError` key/param design. **Field-validation messages
+are translated too now**, which that entry originally left undone — the shared
+schema package (section 5c) made every authored rejection carry a catalogue key,
+so `error.details[].message` in a 422 comes back in the caller's language. What
+is still English is only Zod's own *built-in* wording for a bare `.max(120)`,
+which nobody wrote and the client translates before a request is ever sent.
 The client sends its current `i18n.language` as `Accept-Language` on every
 request (`api/baseQuery.ts`) so the two pickers agree before sign-in too.
 
@@ -496,6 +506,17 @@ D:\finance_app
 │                                     # permissions.ts (client-side role checks)
 │                                     # tone.ts (domain status -> ledger spine)
 │                                     # validation.ts (resolves Zod message keys)
+├── packages/
+│   └── schemas/                     # @finance/schemas — the rules both apps share
+│       ├── package.json             # builds to dist/; `prepare` runs that build
+│       ├── tsconfig.json            # NodeNext + declarations (apps/api is stricter)
+│       └── src/
+│           ├── limits.ts            # every bound, in one table
+│           ├── enums.ts             # every closed set of values
+│           ├── patterns.ts          # predicates: money, date, password, ranges
+│           ├── messages.ts          # ValidationKey union + interpolation params
+│           ├── translations.ts      # the wording, en/pt-BR/es, typed complete
+│           └── fields.ts            # the API's request fields (no transforms)
 ├── docs/
 │   ├── architecture.md              # system design
 │   ├── api.md                       # endpoint reference
@@ -515,12 +536,26 @@ D:\finance_app
 `service.ts` (all logic, owns its own SQL). Follow this when adding domains.
 
 **Web feature convention:** every domain folder in `apps/web/src/features` mirrors
-the API module it talks to — schemas first (a hand-written client copy of the
-server's Zod rules, kept in sync by hand until the shared-schema package
-described in section 5 lands), then dialogs, then cards. Data-fetching and
-dialog open/close state live in the `pages/<Domain>Page.tsx`, not in the
-feature components themselves, so a card or dialog can be reused without
-knowing where its data came from.
+the API module it talks to — schemas first, then dialogs, then cards.
+Data-fetching and dialog open/close state live in the `pages/<Domain>Page.tsx`,
+not in the feature components themselves, so a card or dialog can be reused
+without knowing where its data came from.
+
+A `features/<domain>/*Schemas.ts` file is **no longer a hand-written copy** of
+the server's rules. It reads every bound, value set and pattern from
+`@finance/schemas` and adds only the form's own half: fields that arrive as text
+rather than as numbers, `''` where the API would see `undefined`, and
+confirmation fields the API never sees. **Do not write a literal bound into one
+of these files** — if a number is not in `packages/schemas/src/limits.ts` yet,
+put it there.
+
+**Shared-package convention:** `@finance/schemas` is consumed as **compiled
+output**, so `packages/schemas/dist` must exist before either app typechecks.
+Every root script (`npm run typecheck`, `build`, `test`, `test:unit`, `dev`)
+builds it first, `npm ci` builds it through the package's own `prepare` script,
+and both CI jobs build it explicitly. If you edit the package and then run a
+workspace script *directly* (`npm run typecheck --workspace=@finance/web`), run
+`npm run build:schemas` first or you are typechecking against stale declarations.
 
 ---
 
@@ -563,12 +598,17 @@ npm run dev:worker --workspace=@finance/api
 ### Tests
 
 ```bash
-npm test                 # all 222 — needs Postgres, and only Postgres
-npm run test:unit        # 112 pure units, no infrastructure at all
-npm run typecheck        # both workspaces
+npm test                 # all 242 — needs Postgres, and only Postgres
+npm run test:unit        # 131 pure units, no infrastructure at all
+npm run typecheck        # all three workspaces
+npm run build:schemas    # @finance/schemas alone; the others depend on it
 npm run build --workspace=@finance/api
 npm run build --workspace=@finance/web
 ```
+
+Each of the root scripts above builds `@finance/schemas` first — see the
+shared-package convention in section 3 for why, and for the one case where you
+have to build it yourself.
 
 The suite creates and migrates `finance_test` itself on first run. It should
 finish in well under a minute — if it takes many minutes, see the TRUNCATE note
@@ -577,7 +617,7 @@ in section 6.
 **The suite does not need Redis or MailHog.** Under `NODE_ENV=test` the cache
 helpers short-circuit, `invalidateWorkspaceCache` is a no-op and the rate
 limiter uses `RateLimiterMemory`, so nothing reaches either service. Verified by
-stopping both containers and running the full 222 — not inferred from reading.
+stopping both containers and running the full suite — not inferred from reading.
 
 **Both builds and both typechecks now pass.** Earlier versions of this file
 documented `npm run build --workspace=@finance/web` as permanently broken by a
@@ -722,14 +762,19 @@ These are not preferences, they are workarounds for real failures observed here:
 4. ~~**CSV import.**~~ **Done** (section 2d). Preview-then-commit, with undo,
    duplicate flagging and per-account mapping recall. The design that guided it
    is kept after this list, annotated with what changed in the building.
-5. **Share the request schemas.** The next thing to build (task 7, CI, was taken
-   out of order). The API's Zod schemas are intended to be the
-   client's validation contract. Extract them into a shared workspace package
-   rather than retyping them in the client — every `features/<domain>/*Schemas.ts`
-   file in `apps/web` currently duplicates server validation rules by hand and
-   says so in a comment.
+5. ~~**Share the request schemas.**~~ **Done.** `packages/schemas`
+   (`@finance/schemas`) now owns every bound, value set, pattern and rejection
+   message the two apps have to agree on, and both build their own parser on
+   top — see section 5c for what shape that took and why the Zod schemas
+   themselves are deliberately *not* shared. Four real divergences were found
+   and fixed in the process, and the API's field-validation errors are now
+   translated as a direct consequence.
 6. **OpenAPI generation** from the Zod schemas, which also gives the client
-   generated types for free.
+   generated types for free. This is now the next thing to build, and it has a
+   package to generate into: the request *bodies* are still described twice, as
+   a Zod object on the server and as a hand-written interface in the client's
+   `api/types.ts`. The value sets in that file already come from
+   `@finance/schemas`; the structures are what is left.
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
@@ -866,6 +911,82 @@ flagged as a duplicate, and undoes a batch.
 
 ---
 
+## 5c. The shared schema package
+
+Built as task 5. Full reasoning is in `docs/decisions.md`, "The validation rules
+are shared; each side still builds its own parser". What you need in order not to
+break it:
+
+**What is in `@finance/schemas`** — six files, no framework, no I/O:
+
+| File | Holds |
+| --- | --- |
+| `limits.ts` | every numeric bound and length, in one `LIMITS` table |
+| `enums.ts` | every closed set, as `as const` tuples → Zod enum *and* TS union |
+| `patterns.ts` | predicates a form can use on text: money, date, password, ranges |
+| `messages.ts` | the `ValidationKey` union and the params a message interpolates |
+| `translations.ts` | the wording for those keys in en / pt-BR / es |
+| `fields.ts` | the API's request fields as Zod schemas, stopping before any transform |
+
+**The Zod schemas themselves are not shared, on purpose.** The API parses a JSON
+body (a number may arrive, absent is `undefined`, `moneySchema` transforms into
+the `NUMERIC(19,4)` string via `decimal.js`); a form parses text (absent is `''`,
+nothing is transformed). Sharing the objects would mean shipping `decimal.js` to
+the browser or draining the server schema of its transform. **Do not "finish the
+job" by merging them** — read the decision entry first.
+
+**Money never transforms in the package.** `moneyField` validates and stops;
+`apps/api/src/modules/shared/schemas.ts` adds `.transform(money)`. That module is
+the API's adapter onto the package and is where server-only concerns
+(query-string booleans, CSV arrays, the money transform) live.
+
+**A rejection carries a catalogue key, never a sentence.** A Zod message is fixed
+at import, before either process knows the request's language. Both resolvers
+render it late: `apps/web/src/lib/validation.ts` and
+`apps/api/src/middleware/error-handler.ts`. **This means the API's 422 details
+are now translated** — a change from what section 2c used to say. Zod's own
+built-in wording for a bare `.max(120)` is still English, deliberately.
+
+**A message that quotes a bound gets the number from `LIMITS`.** The catalogue
+entry says `{{min}}`/`{{max}}`; `VALIDATION_PARAMS` supplies the values. Never
+type a bound into a translation — a unit test fails if a placeholder has no value
+behind it, but nothing can catch a hardcoded number that has gone stale.
+
+**Adding a rule:** put the bound in `limits.ts`, the key in the `ValidationKey`
+union, the wording in all three locales in `translations.ts` (the compiler
+insists), then use it from both sides. The four divergences this package was
+built to end — `occurrenceLimit`, `leadTimeDays`, `intervalCount` and the budget
+line cap — are covered by boundary tests in
+`apps/api/tests/unit/shared-schemas.test.ts`, which check the server's field and
+the client's text predicate against each other rather than each in isolation.
+
+**Build ordering is the one operational cost.** See the shared-package convention
+at the end of section 3.
+
+### Two things only the browser found
+
+Typechecks, both builds and 242 green tests all passed before either of these
+was known. Both were caught by registering a fresh account through the real UI
+and driving the Recurring and Budgets forms.
+
+1. **A new rule on a field with no error binding fails silently.** Giving
+   `occurrenceLimit` its 1–1000 bound made the Recurring form refuse to submit —
+   correctly — while showing nothing at all, because that `TextField` was the one
+   in the dialog with no `error` / `helperText` wired to it. It had never needed
+   them: the field previously had no rule to break. **When you add a rule to a
+   field, check that the field can actually say so.**
+2. **Three budget-line helper texts rendered the raw catalogue key.**
+   `BudgetFormDialog` passed `errors.lines?.[index]?.categoryId?.message`
+   straight to `helperText` instead of through `fieldMessage()`, so a user saw
+   `validation.categoryRequired` where a sentence belonged. That predates this
+   work — the messages have been keys since the i18n session — and it survived
+   because nothing renders a nested field-array error unless you make the array
+   invalid on purpose. **Every `helperText` carrying a Zod message goes through
+   `fieldMessage()`**; the sweep that finds violations is
+   `grep -rn "helperText={.*\.message}" apps/web/src --include=*.tsx | grep -v fieldMessage`.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -886,9 +1007,22 @@ services own their SQL on purpose.
 merges a class with a same-named namespace; under NodeNext resolution the
 default import resolves to the namespace and the build breaks.
 
-**Both tsconfigs use NodeNext resolution.** They were split once (`bundler` for
-dev, `NodeNext` for build) and `npm run typecheck` passed while `npm run build`
-failed. Keep them aligned so typecheck is a real gate.
+**The API's two tsconfigs use NodeNext resolution.** They were split once
+(`bundler` for `tsconfig.json`, `NodeNext` for `tsconfig.build.json`) and
+`npm run typecheck` passed while `npm run build` failed. Keep them aligned so
+typecheck is a real gate. `apps/web` is a separate case and correctly uses
+`bundler`, because Vite bundles it; `packages/schemas` uses NodeNext, because
+`apps/api` resolves it through Node's own resolver and NodeNext is the stricter
+of the two to satisfy.
+
+**Validation rules live in `@finance/schemas`; the parsers do not.** Every bound,
+value set, pattern and rejection message both apps must agree on is declared once
+in `packages/schemas` and each side composes its own Zod schema on top — the API
+over a JSON body, the client over form text. They were duplicated by hand before
+and had drifted in four places, all letting the client accept what the API
+refuses. Because a rejection now carries a catalogue key rather than an English
+sentence, the API's field-validation errors are translated. See section 5c and
+`docs/decisions.md`.
 
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See

@@ -1,15 +1,26 @@
+import {
+  BUDGET_PERIODS,
+  CURRENCY_CODE_LENGTH,
+  LIMITS,
+  isPositiveMoneyText,
+  isWholeNumberInRange,
+  type BudgetPeriod,
+} from '@finance/schemas';
 import { z } from 'zod';
 
 /**
- * Client-side mirror of the create-budget body in
- * `apps/api/src/modules/budgets/routes.ts`. Budgets are only ever set on
- * expense categories — the server rejects an income category outright.
+ * The budget create/edit form.
+ *
+ * Periods, bounds and the cap on how many category lines one budget may carry
+ * come from `@finance/schemas`, so this form and
+ * `apps/api/src/modules/budgets/routes.ts` enforce the same rules. Budgets are
+ * only ever set on expense categories — the server rejects an income category
+ * outright, which is a lookup the client cannot do and so does not attempt.
  */
-export const BUDGET_PERIODS = ['monthly', 'quarterly', 'yearly', 'custom'] as const;
-export type BudgetPeriodValue = (typeof BUDGET_PERIODS)[number];
+export { BUDGET_PERIODS, type BudgetPeriod as BudgetPeriodValue };
 
 /** Catalogue keys, not labels — resolve with `t()` at the point of render. */
-export const BUDGET_PERIOD_LABEL_KEYS: Record<BudgetPeriodValue, string> = {
+export const BUDGET_PERIOD_LABEL_KEYS: Record<BudgetPeriod, string> = {
   monthly: 'budgets.period.monthly',
   quarterly: 'budgets.period.quarterly',
   yearly: 'budgets.period.yearly',
@@ -20,7 +31,7 @@ const positiveAmountSchema = z
   .string()
   .trim()
   .min(1, 'validation.required')
-  .refine((v) => /^\d{1,15}(\.\d{1,4})?$/.test(v) && Number(v) > 0, 'validation.amountPositive');
+  .refine(isPositiveMoneyText, 'validation.amountPositive');
 
 const lineFormSchema = z.object({
   categoryId: z.string().min(1, 'validation.categoryRequired'),
@@ -29,18 +40,24 @@ const lineFormSchema = z.object({
   alertThresholdPercent: z
     .string()
     .trim()
-    .refine((v) => v === '' || (/^\d{1,3}$/.test(v) && Number(v) >= 1 && Number(v) <= 100), 'validation.percent1to100'),
+    .refine(
+      (v) => v === '' || isWholeNumberInRange(v, LIMITS.percent.min, LIMITS.percent.max),
+      'validation.percentRange',
+    ),
 });
 
 export const budgetFormSchema = z
   .object({
-    name: z.string().min(1, 'validation.nameRequired').max(120),
+    name: z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
     period: z.enum(BUDGET_PERIODS),
     startDate: z.string().min(1, 'validation.startDateRequired'),
     endDate: z.string(),
-    currency: z.string().length(3, 'validation.currencyCode').toUpperCase(),
+    currency: z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode').toUpperCase(),
     rollover: z.boolean(),
-    lines: z.array(lineFormSchema).min(1, 'validation.atLeastOneLine'),
+    lines: z
+      .array(lineFormSchema)
+      .min(LIMITS.budgetLines.min, 'validation.atLeastOneLine')
+      .max(LIMITS.budgetLines.max, 'validation.maxBudgetLines'),
   })
   .refine((v) => v.period !== 'custom' || v.endDate.trim() !== '', {
     message: 'validation.endDateRequired',
@@ -68,7 +85,7 @@ export function defaultBudgetFormValues(currency: string, todayIso: string): Bud
 
 export const reviseLineSchema = z.object({
   newLimit: positiveAmountSchema,
-  reason: z.string().max(300).optional(),
+  reason: z.string().max(LIMITS.reason.max).optional(),
 });
 export type ReviseLineValues = z.infer<typeof reviseLineSchema>;
 

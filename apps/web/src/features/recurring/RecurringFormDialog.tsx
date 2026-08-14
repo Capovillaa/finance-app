@@ -352,6 +352,8 @@ export default function RecurringFormDialog({
                       label={t('recurring.stopAfter')}
                       placeholder={t('common.optional')}
                       fullWidth
+                      error={Boolean(errors.occurrenceLimit)}
+                      helperText={fieldMessage(errors.occurrenceLimit?.message)}
                       {...register('occurrenceLimit')}
                     />
                   </Grid>

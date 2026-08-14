@@ -1,3 +1,12 @@
+import {
+  LIMITS,
+  currencyField,
+  emailField,
+  localeField,
+  nameField,
+  passwordField,
+  timezoneField,
+} from '@finance/schemas';
 import { Router, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../../middleware/auth.js';
@@ -10,25 +19,29 @@ import { db } from '../../db/client.js';
 import * as authService from './service.js';
 import { toPublicUser } from './service.js';
 
-const passwordSchema = z
-  .string()
-  .min(10, 'Password must be at least 10 characters')
-  .max(200)
-  .refine((v) => /[a-zA-Z]/.test(v) && /\d/.test(v), 'Password must contain both letters and numbers');
-
 const registerSchema = z.object({
-  email: z.string().email().max(254),
-  password: passwordSchema,
-  fullName: z.string().min(1).max(120),
-  locale: z.string().max(10).optional(),
-  timezone: z.string().max(60).optional(),
-  baseCurrency: z.string().length(3).optional(),
-  workspaceName: z.string().min(1).max(120).optional(),
+  email: emailField,
+  password: passwordField,
+  fullName: nameField,
+  locale: localeField.optional(),
+  timezone: timezoneField.optional(),
+  baseCurrency: currencyField.optional(),
+  workspaceName: nameField.optional(),
 });
 
+/**
+ * Sign-in checks that a password was typed, never that it is well formed. The
+ * composition rules belong on the way in; applying them here would tell an
+ * attacker which stored passwords predate them.
+ */
+const suppliedPasswordSchema = z
+  .string()
+  .min(1, 'validation.passwordRequired')
+  .max(LIMITS.password.max);
+
 const loginSchema = z.object({
-  email: z.string().email().max(254),
-  password: z.string().min(1).max(200),
+  email: emailField,
+  password: suppliedPasswordSchema,
 });
 
 const refreshSchema = z.object({
@@ -36,8 +49,8 @@ const refreshSchema = z.object({
 });
 
 const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1).max(200),
-  newPassword: passwordSchema,
+  currentPassword: suppliedPasswordSchema,
+  newPassword: passwordField,
 });
 
 const REFRESH_COOKIE = 'finance_refresh_token';

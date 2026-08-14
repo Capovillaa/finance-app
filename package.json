@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Personal finance management platform",
   "workspaces": [
+    "packages/*",
     "apps/*"
   ],
   "engines": {
@@ -13,11 +14,13 @@
     "vite": "^6.4.3"
   },
   "scripts": {
-    "dev": "npm run dev --workspace=@finance/api",
-    "build": "npm run build --workspace=@finance/api",
-    "test": "npm run test --workspace=@finance/api",
-    "test:unit": "npm run test:unit --workspace=@finance/api",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "//schemas": "@finance/schemas is consumed as compiled output, so it is built before anything that reads its types. `npm ci` also builds it through the package's own `prepare` script.",
+    "build:schemas": "npm run build --workspace=@finance/schemas",
+    "dev": "npm run build:schemas && npm run dev --workspace=@finance/api",
+    "build": "npm run build:schemas && npm run build --workspace=@finance/api",
+    "test": "npm run build:schemas && npm run test --workspace=@finance/api",
+    "test:unit": "npm run build:schemas && npm run test:unit --workspace=@finance/api",
+    "typecheck": "npm run build:schemas && npm run typecheck --workspaces --if-present",
     "migrate": "npm run migrate --workspace=@finance/api",
     "seed": "npm run seed --workspace=@finance/api",
     "infra:up": "docker compose up -d postgres redis mailhog",

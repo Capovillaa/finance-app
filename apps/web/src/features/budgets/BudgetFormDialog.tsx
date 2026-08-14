@@ -178,7 +178,7 @@ export default function BudgetFormDialog({ open, workspaceId, currency, onClose 
                       fullWidth
                       size="small"
                       error={Boolean(errors.lines?.[index]?.categoryId)}
-                      helperText={errors.lines?.[index]?.categoryId?.message}
+                      helperText={fieldMessage(errors.lines?.[index]?.categoryId?.message)}
                       value={watch(`lines.${index}.categoryId`)}
                       {...register(`lines.${index}.categoryId`)}
                     >
@@ -196,7 +196,7 @@ export default function BudgetFormDialog({ open, workspaceId, currency, onClose 
                       fullWidth
                       size="small"
                       error={Boolean(errors.lines?.[index]?.limitAmount)}
-                      helperText={errors.lines?.[index]?.limitAmount?.message}
+                      helperText={fieldMessage(errors.lines?.[index]?.limitAmount?.message)}
                       {...register(`lines.${index}.limitAmount`)}
                     />
                   </Grid>
@@ -206,7 +206,7 @@ export default function BudgetFormDialog({ open, workspaceId, currency, onClose 
                       fullWidth
                       size="small"
                       error={Boolean(errors.lines?.[index]?.alertThresholdPercent)}
-                      helperText={errors.lines?.[index]?.alertThresholdPercent?.message}
+                      helperText={fieldMessage(errors.lines?.[index]?.alertThresholdPercent?.message)}
                       {...register(`lines.${index}.alertThresholdPercent`)}
                     />
                   </Grid>

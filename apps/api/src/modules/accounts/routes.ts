@@ -1,3 +1,12 @@
+import {
+  ACCOUNT_TYPES,
+  colorField,
+  currencyField,
+  dayOfMonthField,
+  iconField,
+  institutionField,
+  nameField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/http.js';
@@ -6,19 +15,19 @@ import { body, params, query, uuidSchema, validate } from '../../middleware/vali
 import { booleanQueryWithDefault, moneySchema, dateSchema } from '../shared/schemas.js';
 import * as accountService from './service.js';
 
-const accountTypeSchema = z.enum(['checking', 'savings', 'credit_card', 'investment', 'cash', 'loan']);
+const accountTypeSchema = z.enum(ACCOUNT_TYPES);
 
 const createAccountSchema = z.object({
-  name: z.string().min(1).max(120),
+  name: nameField,
   type: accountTypeSchema,
-  currency: z.string().length(3),
-  institution: z.string().max(120).nullish(),
+  currency: currencyField,
+  institution: institutionField.nullish(),
   initialBalance: moneySchema.optional(),
   creditLimit: moneySchema.nullish(),
-  statementDay: z.number().int().min(1).max(31).nullish(),
-  dueDay: z.number().int().min(1).max(31).nullish(),
-  color: z.string().max(20).nullish(),
-  icon: z.string().max(40).nullish(),
+  statementDay: dayOfMonthField.nullish(),
+  dueDay: dayOfMonthField.nullish(),
+  color: colorField.nullish(),
+  icon: iconField.nullish(),
 });
 
 const updateAccountSchema = createAccountSchema
@@ -113,6 +122,8 @@ accountRouter.post(
     body: z.object({
       statementDate: dateSchema,
       statementBalance: moneySchema,
+      // A literal, not a shared limit: reconciliation has no client form, so
+      // there is no second declaration of this bound to keep in step.
       notes: z.string().max(500).nullish(),
       markTransactions: z.boolean().optional(),
     }),

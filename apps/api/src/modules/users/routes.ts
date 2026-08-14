@@ -1,3 +1,10 @@
+import {
+  currencyField,
+  localeField,
+  nameField,
+  timezoneField,
+  urlField,
+} from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../../db/client.js';
@@ -17,11 +24,11 @@ userRouter.patch(
   '/me',
   validate({
     body: z.object({
-      fullName: z.string().min(1).max(120).optional(),
-      avatarUrl: z.string().url().max(500).nullish(),
-      locale: z.string().max(10).optional(),
-      timezone: z.string().max(60).optional(),
-      baseCurrency: z.string().length(3).optional(),
+      fullName: nameField.optional(),
+      avatarUrl: urlField.nullish(),
+      locale: localeField.optional(),
+      timezone: timezoneField.optional(),
+      baseCurrency: currencyField.optional(),
     }),
   }),
   asyncHandler(async (req, res) => {

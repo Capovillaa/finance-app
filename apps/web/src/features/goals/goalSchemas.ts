@@ -1,23 +1,24 @@
+import {
+  CURRENCY_CODE_LENGTH,
+  GOAL_CATEGORIES,
+  LIMITS,
+  isPositiveMoneyText,
+  isWholeNumberInRange,
+  type GoalCategory,
+} from '@finance/schemas';
 import { z } from 'zod';
 
 /**
- * Client-side mirror of the goal schemas in
- * `apps/api/src/modules/goals/routes.ts`.
+ * The goal create/edit form and its contributions dialog.
+ *
+ * Categories and bounds come from `@finance/schemas`, shared with
+ * `apps/api/src/modules/goals/routes.ts`. Priority is a text field here and a
+ * number on the wire, which is the one difference the form has to carry itself.
  */
-export const GOAL_CATEGORIES = [
-  'emergency_fund',
-  'vacation',
-  'car',
-  'house',
-  'education',
-  'retirement',
-  'investment',
-  'other',
-] as const;
-export type GoalCategoryValue = (typeof GOAL_CATEGORIES)[number];
+export { GOAL_CATEGORIES, type GoalCategory as GoalCategoryValue };
 
 /** Catalogue keys, not labels — resolve with `t()` at the point of render. */
-export const GOAL_CATEGORY_LABEL_KEYS: Record<GoalCategoryValue, string> = {
+export const GOAL_CATEGORY_LABEL_KEYS: Record<GoalCategory, string> = {
   emergency_fund: 'goals.category.emergencyFund',
   vacation: 'goals.category.vacation',
   car: 'goals.category.car',
@@ -32,18 +33,23 @@ const positiveAmountSchema = z
   .string()
   .trim()
   .min(1, 'validation.required')
-  .refine((v) => /^\d{1,15}(\.\d{1,4})?$/.test(v) && Number(v) > 0, 'validation.amountPositive');
+  .refine(isPositiveMoneyText, 'validation.amountPositive');
 
 export const goalFormSchema = z.object({
-  name: z.string().min(1, 'validation.nameRequired').max(120),
-  description: z.string().max(1000).optional(),
+  name: z.string().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
+  description: z.string().max(LIMITS.longDescription.max).optional(),
   category: z.enum(GOAL_CATEGORIES),
   targetAmount: positiveAmountSchema,
-  currency: z.string().length(3, 'validation.currencyCode').toUpperCase(),
+  currency: z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode').toUpperCase(),
   targetDate: z.string().optional(),
   accountId: z.string().optional(),
-  priority: z.string().refine((v) => /^[1-5]$/.test(v), 'validation.priority1to5'),
-  color: z.string().max(20).optional(),
+  priority: z
+    .string()
+    .refine(
+      (v) => isWholeNumberInRange(v, LIMITS.priority.min, LIMITS.priority.max),
+      'validation.priorityRange',
+    ),
+  color: z.string().max(LIMITS.color.max).optional(),
 });
 
 export type GoalFormValues = z.infer<typeof goalFormSchema>;
@@ -65,6 +71,6 @@ export function defaultGoalFormValues(currency: string): GoalFormValues {
 export const contributionFormSchema = z.object({
   amount: positiveAmountSchema,
   occurredOn: z.string().min(1, 'validation.dateRequired'),
-  note: z.string().max(300).optional(),
+  note: z.string().max(LIMITS.goalContributionNote.max).optional(),
 });
 export type ContributionFormValues = z.infer<typeof contributionFormSchema>;
