@@ -1,0 +1,15 @@
+# Line endings are normalised to LF in the repository and checked out native.
+# Set before the first commit deliberately: CI runs on Linux while development
+# happens on Windows, and without this every file would show as wholly changed
+# the first time it was touched from the other platform.
+* text=auto
+
+# Files that are executed rather than edited must keep LF even on a Windows
+# checkout, because they run inside Linux containers and in CI.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Generated and machine-owned; collapse them in diffs and reviews.
+package-lock.json linguist-generated=true -diff

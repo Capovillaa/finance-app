@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # `engines.node` is >=22; pin the major so a runner image update cannot
+  # silently move the toolchain under the project.
+  NODE_VERSION: '22'
+
+jobs:
+  # Everything that needs no database. Runs in parallel with `test`, so a type
+  # error surfaces without waiting for Postgres to come up and 222 tests to run.
+  check:
+    name: Typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # `ci` rather than `install`: it installs exactly the lockfile and fails
+      # if package.json and the lockfile disagree, which is the check we want.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck (api and web)
+        run: npm run typecheck
+
+      - name: Build api
+        run: npm run build --workspace=@finance/api
+
+      - name: Build web
+        run: npm run build --workspace=@finance/web
+
+      # No Postgres, no Redis: money, dates, recurrence, anomaly detectors, CSV
+      # parsing and import mapping are all pure. Seconds, not minutes.
+      - name: Unit tests
+        run: npm run test:unit
+
+  test:
+    name: Full suite (real Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      # The suite runs against a real database rather than mocks — see
+      # docs/decisions.md. It creates and migrates `finance_test` itself.
+      #
+      # Redis and MailHog are deliberately absent: under NODE_ENV=test the cache
+      # helpers short-circuit, workspace invalidation is a no-op and the rate
+      # limiter uses an in-memory store, so nothing in the suite reaches either.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: finance
+          POSTGRES_PASSWORD: finance
+          POSTGRES_DB: finance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U finance -d finance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://finance:finance@localhost:5432/finance
+      TEST_DATABASE_URL: postgres://finance:finance@localhost:5432/finance_test
+      # Throwaway values for a throwaway database. These are not secrets and
+      # must not become them: nothing signed here outlives the job. The schema
+      # requires at least 16 characters.
+      JWT_ACCESS_SECRET: ci-access-secret-not-a-real-key-000000
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-a-real-key-00000
+      LOG_LEVEL: warn
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Applying every migration to an empty database is itself the first
+      # assertion: the suite's global setup does this before any test runs.
+      - name: Full suite
+        run: npm test
+
+      # Down-migrations are never exercised by the app and rot silently. Rolling
+      # the newest one back and forward on the already-migrated test database
+      # costs a second and catches a `down` that was never tried.
+      - name: Migration rollback round-trip
+        env:
+          NODE_ENV: test
+        run: |
+          npm run migrate:down --workspace=@finance/api
+          npm run migrate --workspace=@finance/api
+          npm run migrate:status --workspace=@finance/api

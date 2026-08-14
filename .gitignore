@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment. `.env.example` is committed and is the documented starting point;
+# a real `.env` holds this machine's database password and JWT secrets.
+.env
+.env.*
+!.env.example
+
+# Local Postgres data, if a bind mount is ever used instead of a named volume
+infra/postgres/data/
+
+# Ad-hoc scratch from load-testing sessions; not part of the project
+.tmp/
+
+# A dump of every Phosphor export, generated while migrating the icon set.
+# Regenerable from the package; not source.
+apps/web/.phosphor-names.txt
+
+# Editor and OS noise
+.vscode/
+.idea/
+# Per-machine tool permissions, not project configuration
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+
+# Logs and coverage
+*.log
+npm-debug.log*
+coverage/
+.vitest-reports/

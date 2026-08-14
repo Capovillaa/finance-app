@@ -1,0 +1,224 @@
+{
+  "common": {
+    "unauthorized": "Authentication required",
+    "forbidden": "You do not have permission to perform this action",
+    "notFound": "{{resource}} not found",
+    "routeNotFound": "Route {{method}} {{path}} not found",
+    "rateLimited": "Too many requests",
+    "internal": "An unexpected error occurred",
+    "validationFailed": "Request validation failed",
+    "malformedJson": "Malformed JSON body",
+    "uncategorised": "Uncategorised",
+    "role": {
+      "viewer": "viewer",
+      "editor": "editor",
+      "admin": "admin",
+      "owner": "owner"
+    },
+    "transactionKind": {
+      "income": "income",
+      "expense": "expense",
+      "transfer": "transfer"
+    }
+  },
+  "resources": {
+    "resource": "Resource",
+    "account": "Account",
+    "category": "Category",
+    "transaction": "Transaction",
+    "deletedTransaction": "Deleted transaction",
+    "split": "Split",
+    "comment": "Comment",
+    "workspace": "Workspace",
+    "member": "Member",
+    "invitation": "Invitation",
+    "pendingInvitation": "Pending invitation",
+    "recurringTransaction": "Recurring transaction",
+    "scheduledTransaction": "Scheduled transaction",
+    "budget": "Budget",
+    "budgetLine": "Budget line",
+    "goal": "Goal",
+    "contribution": "Contribution",
+    "alertRule": "Alert rule",
+    "notification": "Notification",
+    "tag": "Tag",
+    "user": "User",
+    "importBatch": "Import batch"
+  },
+  "database": {
+    "conflict": "A record with these values already exists",
+    "foreignKey": "Referenced record does not exist",
+    "constraint": "Value violates a database constraint",
+    "notNull": "A required field is missing",
+    "malformed": "Malformed identifier or value",
+    "serialization": "Concurrent update conflict, please retry",
+    "rejected": "Operation rejected"
+  },
+  "auth": {
+    "invalidCredentials": "Invalid email or password",
+    "missingToken": "Missing bearer token",
+    "accountInactive": "Account is no longer active",
+    "accessTokenExpired": "Access token expired",
+    "invalidAccessToken": "Invalid access token",
+    "invalidRefreshToken": "Invalid refresh token",
+    "refreshTokenExpired": "Refresh token expired",
+    "refreshTokenReused": "Refresh token has already been used",
+    "missingRefreshToken": "Refresh token missing",
+    "emailTaken": "An account with this email already exists",
+    "accountSuspended": "This account is suspended",
+    "noPasswordSet": "This account has no password set",
+    "wrongCurrentPassword": "Current password is incorrect"
+  },
+  "workspaces": {
+    "notSpecified": "Workspace not specified",
+    "notMember": "You are not a member of this workspace",
+    "archived": "This workspace is archived",
+    "contextMissing": "Workspace context missing",
+    "roleRequired": "This action requires the {{role}} role or higher",
+    "lastActive": "Cannot archive your only active workspace",
+    "ownershipNotGranted": "Ownership is transferred, not granted",
+    "useTransferEndpoint": "Use the ownership transfer endpoint to change the owner",
+    "ownerRoleImmutable": "The workspace owner's role cannot be changed",
+    "ownerCannotBeRemoved": "The workspace owner cannot be removed",
+    "newOwnerMustBeMember": "The new owner must already be a member of the workspace"
+  },
+  "invitations": {
+    "alreadyMember": "That person is already a member of this workspace",
+    "notValid": "This invitation is no longer valid",
+    "expired": "This invitation has expired",
+    "wrongEmail": "This invitation was sent to a different email address"
+  },
+  "categories": {
+    "depthLimit": "Category hierarchy is limited to three levels",
+    "childKindMismatch": "A child of a {{kind}} category must also be {{kind}}",
+    "selfParent": "A category cannot be its own parent",
+    "cyclicParent": "Cannot move a category into one of its own descendants",
+    "inUseTransactions": "Category is used by existing transactions. Archive it instead.",
+    "inUseBudget": "Category is used by a budget. Remove the budget line first.",
+    "notInWorkspace": "Category does not belong to this workspace"
+  },
+  "recurring": {
+    "archivedAccount": "Cannot schedule transactions on an archived account",
+    "kindMismatch": "A {{type}} schedule cannot use a {{kind}} category",
+    "noOccurrences": "This recurrence rule produces no occurrences"
+  },
+  "budgets": {
+    "customEndDateRequired": "A custom budget period requires an end date",
+    "endBeforeStart": "End date must be on or after the start date",
+    "noLines": "A budget needs at least one category line",
+    "categoriesNotInWorkspace": "One or more categories do not belong to this workspace",
+    "expenseOnly": "Budgets can only be set on expense categories"
+  },
+  "goals": {
+    "targetMustBePositive": "Target amount must be greater than zero",
+    "targetDateInFuture": "Target date must be in the future",
+    "cancelledGoal": "Cannot contribute to a cancelled goal"
+  },
+  "currencies": {
+    "unsupported": "Unsupported currency: {{code}}",
+    "noRate": "No exchange rate available for {{base}} -> {{quote}} on {{asOf}}"
+  },
+  "alertRules": {
+    "scopeCategoryInvalid": "Scope category does not belong to this workspace",
+    "scopeAccountInvalid": "Scope account does not belong to this workspace"
+  },
+  "transactions": {
+    "archivedAccount": "Cannot add transactions to an archived account",
+    "archivedCategory": "Cannot assign an archived category",
+    "kindMismatch": "A {{type}} cannot use a {{kind}} category",
+    "sameAccountTransfer": "Source and destination accounts must be different",
+    "archivedTransferAccount": "Cannot transfer to or from an archived account",
+    "reconciledEditLocked": "Reconciled transactions cannot be edited. Undo the reconciliation first.",
+    "transferImmutable": "Delete and recreate a transfer to change its accounts or amount",
+    "reconciledDeleteLocked": "Reconciled transactions cannot be deleted. Undo the reconciliation first.",
+    "splitNonMember": "Every split participant must be a workspace member",
+    "splitMismatch": "Split shares must add up to {{total}} (got {{allocated}})",
+    "commentNotOwned": "You can only delete your own comments"
+  },
+  "tags": {
+    "unknownIds": "Unknown tag ids: {{ids}}"
+  },
+  "accounts": {
+    "creditLimitNotApplicable": "A credit limit only applies to credit card accounts",
+    "hasTransactions": "Account has transactions. Archive it instead of deleting."
+  },
+  "alertNotifications": {
+    "budgetThreshold": {
+      "titleWarning": "Budget at {{percent}}%: {{category}}",
+      "titleExceeded": "Budget exceeded: {{category}}",
+      "messageWarning": "{{category}} has used {{percent}}% of its {{currency}} {{limit}} budget, with {{remaining}}% of the period left.",
+      "messageExceeded": "You have spent {{currency}} {{spent}} of a {{currency}} {{limit}} budget for {{category}} — over by {{currency}} {{overBy}}."
+    },
+    "largeTransaction": {
+      "title": "Large transaction recorded",
+      "message": "\"{{description}}\" of {{currency}} {{amount}} on {{date}} is unusually large{{suffix}}.",
+      "suffixMultiple": " (over {{multiple}}x your average expense)"
+    },
+    "unusualSpending": {
+      "title": "Unusual spending in {{category}}",
+      "message": "{{category}} is at {{currency}} {{total}} this month against a typical {{currency}} {{mean}} — about {{percent}}% above your average."
+    },
+    "duplicateTransaction": {
+      "title": "Possible duplicate transaction",
+      "message": "\"{{description}}\" of {{amount}} on {{date}} looks like a duplicate. {{reason}}.",
+      "reasonSameDay": "Same account, same amount, same day",
+      "reasonDaysApart_one": "Same account and amount, {{count}} day apart",
+      "reasonDaysApart_other": "Same account and amount, {{count}} days apart"
+    },
+    "billDue": {
+      "title": "Upcoming bill: {{name}}",
+      "message": "{{name}} of {{currency}} {{amount}} is due on {{date}}."
+    },
+    "goalMilestone": {
+      "titleReached": "Goal reached: {{name}}",
+      "titleProgress": "{{percent}}% of the way to {{name}}",
+      "messageReached": "You have reached your {{name}} goal of {{currency}} {{amount}}.",
+      "messageProgress": "{{name}} is at {{currency}} {{current}} of {{currency}} {{target}}."
+    },
+    "lowBalance": {
+      "title": "Low balance: {{name}}",
+      "message": "{{name}} is down to {{currency}} {{balance}}."
+    }
+  },
+  "email": {
+    "invitation": {
+      "subject": "{{inviter}} invited you to {{workspace}}",
+      "greeting": "You have been invited",
+      "body1": "{{inviter}} invited you to collaborate on the \"{{workspace}}\" workspace as {{role}}.",
+      "body2_one": "This invitation expires in {{count}} day.",
+      "body2_other": "This invitation expires in {{count}} days.",
+      "action": "Accept invitation"
+    },
+    "notification": {
+      "greeting": "Hi {{name}},",
+      "action": "Open in Finance App"
+    },
+    "linkFallback": "If the button does not work, paste this link into your browser:"
+  },
+  "imports": {
+    "archivedAccount": "Cannot import into an archived account",
+    "fileTooLarge": "The file is larger than {{limit}} KB. Split it and import in parts.",
+    "emptyFile": "The file has no rows",
+    "noDataRows": "The file has a header but no data rows",
+    "tooManyRows": "The file has {{count}} rows; at most {{limit}} can be imported at once",
+    "incompleteMapping": "The import needs at least a date column, a description column and an amount column",
+    "alreadyCommitted": "This import has already been committed",
+    "previewExpired": "This preview has expired. Upload the file again.",
+    "notCommitted": "This import was never committed, so there is nothing to undo",
+    "alreadyReverted": "This import has already been undone",
+    "reconciledRows": "Some imported transactions have been reconciled. Undo the reconciliation first.",
+    "nothingSelected": "Select at least one row to import",
+    "unknownRow": "Line {{line}} is not part of this preview",
+    "invalidRowSelected": "Line {{line}} still has errors and cannot be imported",
+    "rowKindMismatch": "Line {{line}}: a {{type}} cannot use a {{kind}} category",
+    "row": {
+      "shortRow": "Row has {{actual}} columns, expected {{expected}}",
+      "badDate": "\"{{value}}\" is not a valid date",
+      "missingDescription": "Row has no description",
+      "badAmount": "\"{{value}}\" is not a valid amount",
+      "zeroAmount": "Amount is zero",
+      "bothDebitAndCredit": "Row has both a debit and a credit",
+      "badDirection": "\"{{value}}\" is neither a debit nor a credit marker"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "finance-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal finance management platform",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "vite": "^6.4.3"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=@finance/api",
+    "build": "npm run build --workspace=@finance/api",
+    "test": "npm run test --workspace=@finance/api",
+    "test:unit": "npm run test:unit --workspace=@finance/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "migrate": "npm run migrate --workspace=@finance/api",
+    "seed": "npm run seed --workspace=@finance/api",
+    "infra:up": "docker compose up -d postgres redis mailhog",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d postgres redis mailhog"
+  }
+}

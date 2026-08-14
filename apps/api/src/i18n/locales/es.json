@@ -1,0 +1,224 @@
+{
+  "common": {
+    "unauthorized": "Se requiere autenticación",
+    "forbidden": "No tienes permiso para realizar esta acción",
+    "notFound": "{{resource}} no encontrado(a)",
+    "routeNotFound": "Ruta {{method}} {{path}} no encontrada",
+    "rateLimited": "Demasiadas solicitudes",
+    "internal": "Ocurrió un error inesperado",
+    "validationFailed": "Error de validación de la solicitud",
+    "malformedJson": "Cuerpo JSON con formato incorrecto",
+    "uncategorised": "Sin categoría",
+    "role": {
+      "viewer": "visor",
+      "editor": "editor",
+      "admin": "administrador",
+      "owner": "propietario"
+    },
+    "transactionKind": {
+      "income": "ingreso",
+      "expense": "gasto",
+      "transfer": "transferencia"
+    }
+  },
+  "resources": {
+    "resource": "Recurso",
+    "account": "Cuenta",
+    "category": "Categoría",
+    "transaction": "Transacción",
+    "deletedTransaction": "Transacción eliminada",
+    "split": "División",
+    "comment": "Comentario",
+    "workspace": "Espacio de trabajo",
+    "member": "Miembro",
+    "invitation": "Invitación",
+    "pendingInvitation": "Invitación pendiente",
+    "recurringTransaction": "Transacción recurrente",
+    "scheduledTransaction": "Transacción programada",
+    "budget": "Presupuesto",
+    "budgetLine": "Línea de presupuesto",
+    "goal": "Meta",
+    "contribution": "Contribución",
+    "alertRule": "Regla de alerta",
+    "notification": "Notificación",
+    "tag": "Etiqueta",
+    "user": "Usuario",
+    "importBatch": "Lote de importación"
+  },
+  "database": {
+    "conflict": "Ya existe un registro con estos valores",
+    "foreignKey": "El registro referenciado no existe",
+    "constraint": "El valor viola una restricción de la base de datos",
+    "notNull": "Falta un campo obligatorio",
+    "malformed": "Identificador o valor con formato incorrecto",
+    "serialization": "Conflicto de actualización simultánea, inténtalo de nuevo",
+    "rejected": "Operación rechazada"
+  },
+  "auth": {
+    "invalidCredentials": "Correo electrónico o contraseña inválidos",
+    "missingToken": "Falta el token de portador",
+    "accountInactive": "La cuenta ya no está activa",
+    "accessTokenExpired": "El token de acceso ha expirado",
+    "invalidAccessToken": "Token de acceso inválido",
+    "invalidRefreshToken": "Token de actualización inválido",
+    "refreshTokenExpired": "El token de actualización ha expirado",
+    "refreshTokenReused": "El token de actualización ya fue utilizado",
+    "missingRefreshToken": "Falta el token de actualización",
+    "emailTaken": "Ya existe una cuenta con este correo electrónico",
+    "accountSuspended": "Esta cuenta está suspendida",
+    "noPasswordSet": "Esta cuenta no tiene una contraseña configurada",
+    "wrongCurrentPassword": "La contraseña actual es incorrecta"
+  },
+  "workspaces": {
+    "notSpecified": "No se especificó el espacio de trabajo",
+    "notMember": "No eres miembro de este espacio de trabajo",
+    "archived": "Este espacio de trabajo está archivado",
+    "contextMissing": "Falta el contexto del espacio de trabajo",
+    "roleRequired": "Esta acción requiere el rol de {{role}} o superior",
+    "lastActive": "No puedes archivar tu único espacio de trabajo activo",
+    "ownershipNotGranted": "La propiedad se transfiere, no se otorga",
+    "useTransferEndpoint": "Usa el endpoint de transferencia de propiedad para cambiar el propietario",
+    "ownerRoleImmutable": "El rol del propietario del espacio de trabajo no se puede cambiar",
+    "ownerCannotBeRemoved": "El propietario del espacio de trabajo no se puede eliminar",
+    "newOwnerMustBeMember": "El nuevo propietario ya debe ser miembro del espacio de trabajo"
+  },
+  "invitations": {
+    "alreadyMember": "Esa persona ya es miembro de este espacio de trabajo",
+    "notValid": "Esta invitación ya no es válida",
+    "expired": "Esta invitación ha expirado",
+    "wrongEmail": "Esta invitación se envió a una dirección de correo diferente"
+  },
+  "categories": {
+    "depthLimit": "La jerarquía de categorías está limitada a tres niveles",
+    "childKindMismatch": "Una subcategoría de {{kind}} también debe ser {{kind}}",
+    "selfParent": "Una categoría no puede ser su propia categoría superior",
+    "cyclicParent": "No puedes mover una categoría dentro de una de sus propias subcategorías",
+    "inUseTransactions": "La categoría está en uso por transacciones existentes. Archívala en su lugar.",
+    "inUseBudget": "La categoría está en uso por un presupuesto. Elimina primero la línea de presupuesto.",
+    "notInWorkspace": "La categoría no pertenece a este espacio de trabajo"
+  },
+  "recurring": {
+    "archivedAccount": "No se pueden programar transacciones en una cuenta archivada",
+    "kindMismatch": "Una programación de {{type}} no puede usar una categoría de {{kind}}",
+    "noOccurrences": "Esta regla de recurrencia no produce ocurrencias"
+  },
+  "budgets": {
+    "customEndDateRequired": "Un período de presupuesto personalizado requiere una fecha de finalización",
+    "endBeforeStart": "La fecha de finalización debe ser igual o posterior a la fecha de inicio",
+    "noLines": "Un presupuesto necesita al menos una línea de categoría",
+    "categoriesNotInWorkspace": "Una o más categorías no pertenecen a este espacio de trabajo",
+    "expenseOnly": "Los presupuestos solo se pueden definir en categorías de gasto"
+  },
+  "goals": {
+    "targetMustBePositive": "El monto de la meta debe ser mayor que cero",
+    "targetDateInFuture": "La fecha de la meta debe estar en el futuro",
+    "cancelledGoal": "No se puede contribuir a una meta cancelada"
+  },
+  "currencies": {
+    "unsupported": "Moneda no compatible: {{code}}",
+    "noRate": "No hay tipo de cambio disponible para {{base}} -> {{quote}} el {{asOf}}"
+  },
+  "alertRules": {
+    "scopeCategoryInvalid": "La categoría de alcance no pertenece a este espacio de trabajo",
+    "scopeAccountInvalid": "La cuenta de alcance no pertenece a este espacio de trabajo"
+  },
+  "transactions": {
+    "archivedAccount": "No se pueden agregar transacciones a una cuenta archivada",
+    "archivedCategory": "No se puede asignar una categoría archivada",
+    "kindMismatch": "Un(a) {{type}} no puede usar una categoría de {{kind}}",
+    "sameAccountTransfer": "Las cuentas de origen y destino deben ser diferentes",
+    "archivedTransferAccount": "No se puede transferir hacia o desde una cuenta archivada",
+    "reconciledEditLocked": "Las transacciones reconciliadas no se pueden editar. Deshaz la reconciliación primero.",
+    "transferImmutable": "Elimina y vuelve a crear una transferencia para cambiar sus cuentas o monto",
+    "reconciledDeleteLocked": "Las transacciones reconciliadas no se pueden eliminar. Deshaz la reconciliación primero.",
+    "splitNonMember": "Todo participante de la división debe ser miembro del espacio de trabajo",
+    "splitMismatch": "Las partes de la división deben sumar {{total}} (suma actual: {{allocated}})",
+    "commentNotOwned": "Solo puedes eliminar tus propios comentarios"
+  },
+  "tags": {
+    "unknownIds": "IDs de etiquetas desconocidos: {{ids}}"
+  },
+  "accounts": {
+    "creditLimitNotApplicable": "Un límite de crédito solo aplica a cuentas de tarjeta de crédito",
+    "hasTransactions": "La cuenta tiene transacciones. Archívala en lugar de eliminarla."
+  },
+  "alertNotifications": {
+    "budgetThreshold": {
+      "titleWarning": "Presupuesto al {{percent}}%: {{category}}",
+      "titleExceeded": "Presupuesto excedido: {{category}}",
+      "messageWarning": "{{category}} ha usado el {{percent}}% de su presupuesto de {{currency}} {{limit}}, con el {{remaining}}% del período restante.",
+      "messageExceeded": "Has gastado {{currency}} {{spent}} de un presupuesto de {{currency}} {{limit}} para {{category}} — {{currency}} {{overBy}} por encima del límite."
+    },
+    "largeTransaction": {
+      "title": "Transacción de monto alto registrada",
+      "message": "\"{{description}}\" de {{currency}} {{amount}} el {{date}} es inusualmente alta{{suffix}}.",
+      "suffixMultiple": " (más de {{multiple}}x tu gasto promedio)"
+    },
+    "unusualSpending": {
+      "title": "Gasto inusual en {{category}}",
+      "message": "{{category}} está en {{currency}} {{total}} este mes, frente a un promedio típico de {{currency}} {{mean}} — cerca de {{percent}}% por encima de tu promedio."
+    },
+    "duplicateTransaction": {
+      "title": "Posible transacción duplicada",
+      "message": "\"{{description}}\" de {{amount}} el {{date}} parece una duplicada. {{reason}}.",
+      "reasonSameDay": "Misma cuenta, mismo monto, mismo día",
+      "reasonDaysApart_one": "Misma cuenta y monto, {{count}} día de diferencia",
+      "reasonDaysApart_other": "Misma cuenta y monto, {{count}} días de diferencia"
+    },
+    "billDue": {
+      "title": "Factura próxima: {{name}}",
+      "message": "{{name}} de {{currency}} {{amount}} vence el {{date}}."
+    },
+    "goalMilestone": {
+      "titleReached": "Meta alcanzada: {{name}}",
+      "titleProgress": "{{percent}}% del camino hacia {{name}}",
+      "messageReached": "Has alcanzado tu meta {{name}} de {{currency}} {{amount}}.",
+      "messageProgress": "{{name}} está en {{currency}} {{current}} de {{currency}} {{target}}."
+    },
+    "lowBalance": {
+      "title": "Saldo bajo: {{name}}",
+      "message": "{{name}} tiene un saldo de solo {{currency}} {{balance}}."
+    }
+  },
+  "email": {
+    "invitation": {
+      "subject": "{{inviter}} te invitó a {{workspace}}",
+      "greeting": "Has sido invitado(a)",
+      "body1": "{{inviter}} te invitó a colaborar en el espacio de trabajo \"{{workspace}}\" como {{role}}.",
+      "body2_one": "Esta invitación expira en {{count}} día.",
+      "body2_other": "Esta invitación expira en {{count}} días.",
+      "action": "Aceptar invitación"
+    },
+    "notification": {
+      "greeting": "Hola, {{name}},",
+      "action": "Abrir en Finance App"
+    },
+    "linkFallback": "Si el botón no funciona, pega este enlace en tu navegador:"
+  },
+  "imports": {
+    "archivedAccount": "No se puede importar a una cuenta archivada",
+    "fileTooLarge": "El archivo supera {{limit}} KB. Divídelo e impórtalo por partes.",
+    "emptyFile": "El archivo no tiene filas",
+    "noDataRows": "El archivo tiene encabezado pero ninguna fila de datos",
+    "tooManyRows": "El archivo tiene {{count}} filas; como máximo se pueden importar {{limit}} a la vez",
+    "incompleteMapping": "La importación necesita al menos una columna de fecha, una de descripción y una de importe",
+    "alreadyCommitted": "Esta importación ya fue confirmada",
+    "previewExpired": "Esta vista previa caducó. Vuelve a subir el archivo.",
+    "notCommitted": "Esta importación nunca se confirmó, así que no hay nada que deshacer",
+    "alreadyReverted": "Esta importación ya se deshizo",
+    "reconciledRows": "Algunas transacciones importadas han sido conciliadas. Deshaz la conciliación primero.",
+    "nothingSelected": "Selecciona al menos una fila para importar",
+    "unknownRow": "La línea {{line}} no forma parte de esta vista previa",
+    "invalidRowSelected": "La línea {{line}} todavía tiene errores y no se puede importar",
+    "rowKindMismatch": "Línea {{line}}: una transacción de {{type}} no puede usar una categoría de {{kind}}",
+    "row": {
+      "shortRow": "La fila tiene {{actual}} columnas; se esperaban {{expected}}",
+      "badDate": "\"{{value}}\" no es una fecha válida",
+      "missingDescription": "La fila no tiene descripción",
+      "badAmount": "\"{{value}}\" no es un importe válido",
+      "zeroAmount": "El importe es cero",
+      "bothDebitAndCredit": "La fila tiene débito y crédito a la vez",
+      "badDirection": "\"{{value}}\" no es un marcador de débito ni de crédito"
+    }
+  }
+}
