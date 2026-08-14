@@ -1,6 +1,6 @@
 import { colorField, tagNameField } from '@finance/schemas';
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { db } from '../../db/client.js';
 import { notFound } from '../../lib/errors.js';
 import { asyncHandler } from '../../lib/http.js';

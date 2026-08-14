@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-222; see section 4 for the current command. The compiled `dist/server.js`
+259; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -443,8 +443,12 @@ D:\finance_app
 │   │   │   ├── i18n/locales/        # en.json, pt-BR.json, es.json — server catalogue
 │   │   │   ├── lib/                 # money, dates, recurrence, email, redis,
 │   │   │   │                        # errors, http, logger, i18n,
-│   │   │   │                        # csv (reader + writer, both directions)
+│   │   │   │                        # csv (reader + writer, both directions),
+│   │   │   │                        # route-metadata (stampRoute + mount: what
+│   │   │   │                        #   the app records about its own shape)
 │   │   │   ├── middleware/          # auth, validate, error handling, locale
+│   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
+│   │   │   │                        # JSON Schema), document.ts (-> the spec)
 │   │   │   ├── jobs/                # queues.ts, processors.ts
 │   │   │   └── modules/             # one folder per domain, each routes.ts +
 │   │   │                            # service.ts: accounts, activity, alerts,
@@ -454,10 +458,12 @@ D:\finance_app
 │   │   │                            # transactions, users, workspaces
 │   │   │                            # (imports also has mapping.ts: pure
 │   │   │                            #  column/date/sign inference)
-│   │   ├── scripts/copy-assets.mjs  # build step: copies i18n/locales into dist
+│   │   ├── scripts/
+│   │   │   ├── copy-assets.mjs      # build step: copies i18n/locales into dist
+│   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
 │   │   └── tests/
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
-│   │       │                        # import-mapping
+│   │       │                        # import-mapping, openapi
 │   │       └── integration/         # auth, workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts
 │   └── web/                         # @finance/web — React client (Vite)
@@ -519,7 +525,9 @@ D:\finance_app
 │           └── fields.ts            # the API's request fields (no transforms)
 ├── docs/
 │   ├── architecture.md              # system design
-│   ├── api.md                       # endpoint reference
+│   ├── api.md                       # endpoint reference (responses live here)
+│   ├── openapi.json                 # GENERATED — `npm run generate:openapi`;
+│   │                                # do not hand-edit, CI checks it
 │   ├── decisions.md                 # decision log (see section 6)
 │   └── finance_management_project_prompt.md   # original brief
 ├── infra/postgres/init/             # container init SQL
@@ -534,6 +542,13 @@ D:\finance_app
 **API module convention:** every domain folder in `apps/api` is exactly
 `routes.ts` (Express router, Zod validation, no business logic) plus
 `service.ts` (all logic, owns its own SQL). Follow this when adding domains.
+Two rules that a new module has to obey, both enforced by something that will
+fail loudly rather than silently: **import Zod from `zod/v4`**, not `'zod'`, and
+**mount the router with `mount()`** from `lib/route-metadata.ts` rather than
+`.use()` — the OpenAPI walker throws on a router whose path it cannot recover.
+Nothing else is needed for the new endpoints to appear in the specification;
+the tag, the role, the security requirement and the 429 all follow from the
+middleware already on the routes. Run `npm run generate:openapi` afterwards.
 
 **Web feature convention:** every domain folder in `apps/web/src/features` mirrors
 the API module it talks to — schemas first, then dialogs, then cards.
@@ -586,7 +601,7 @@ npm run dev:worker --workspace=@finance/api
 
 | What | Where |
 | --- | --- |
-| API | http://localhost:4000 (`/health`, `/health/ready`) |
+| API | http://localhost:4000 (`/health`, `/health/ready`, `/openapi.json`) |
 | Web client | http://localhost:5173 |
 | Postgres | localhost:5432, db `finance` / `finance_test`, user+pass `finance` |
 | Redis | localhost:6379 |
@@ -598,13 +613,21 @@ npm run dev:worker --workspace=@finance/api
 ### Tests
 
 ```bash
-npm test                 # all 242 — needs Postgres, and only Postgres
-npm run test:unit        # 131 pure units, no infrastructure at all
+npm test                 # all 259 — needs Postgres, and only Postgres
+npm run test:unit        # 148 pure units, no infrastructure at all
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
 npm run build --workspace=@finance/api
 npm run build --workspace=@finance/web
+npm run generate:openapi # rewrite docs/openapi.json from the app
+npm run check:openapi    # fail if that file is stale (this is the CI step)
 ```
+
+**`npm run generate:openapi` after any route change**, or CI fails on the stale
+committed spec — as will `tests/unit/openapi.test.ts`, which compares the two.
+It needs no database: the script stubs the environment variables `config/env.ts`
+demands, because generating walks the router and converts schemas without
+opening a connection.
 
 Each of the root scripts above builds `@finance/schemas` first — see the
 shared-package convention in section 3 for why, and for the one case where you
@@ -627,10 +650,10 @@ below for what it was. Any output from these commands is now a real failure.
 ### CI
 
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
-Two jobs run in parallel: **check** (typecheck, both builds, unit tests — no
-services) and **test** (the full suite against a `postgres:16` service
-container, then a migration rollback round-trip). Green on the first run, in
-about a minute.
+Two jobs run in parallel: **check** (typecheck, both builds, the OpenAPI
+freshness check, unit tests — no services) and **test** (the full suite against a
+`postgres:16` service container, then a migration rollback round-trip). Green on
+the first run, in about a minute.
 
 The workflow declares **no repository secrets**: the JWT values in it are
 deliberately fake and the test database is created and discarded within the run.
@@ -800,12 +823,18 @@ These are not preferences, they are workarounds for real failures observed here:
    themselves are deliberately *not* shared. Four real divergences were found
    and fixed in the process, and the API's field-validation errors are now
    translated as a direct consequence.
-6. **OpenAPI generation** from the Zod schemas, which also gives the client
-   generated types for free. **This is the next thing to build, and its design
-   is written down in section 5d** — including the two findings that shape it:
-   Zod's own `toJSONSchema` removes the need for any OpenAPI library, and the
-   route metadata has to be stamped onto middleware rather than read off it.
-   Read 5d before starting; it was written from experiments against this repo.
+6. ~~**OpenAPI generation.**~~ **Phase 1 done** (section 5d). `docs/openapi.json`
+   is generated from the running app, served at `/openapi.json`, and checked in
+   CI. **Phase 2 — response schemas — is still open**, and is what would let
+   `apps/web/src/api/types.ts` be replaced by `openapi-typescript` output
+   (7.13.0; it takes the spec and needs no Zod). It is endpoint-by-endpoint work:
+   services return Kysely rows and routes `res.json()` them, so there is nothing
+   to convert and a schema has to be authored for each. **Until it lands, leave
+   `api/types.ts` alone** — a half-generated types file where nobody can tell
+   which half is which is worse than the honest hand-written one. Doing it also
+   means deciding whether response schemas live beside each service or in one
+   `openapi/responses/` module; the former keeps them next to the query that
+   produces the row.
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
@@ -1026,11 +1055,56 @@ and driving the Recurring and Budgets forms.
 
 ---
 
-## 5d. OpenAPI generation — the design to build from
+## 5d. OpenAPI generation
 
-**Not built yet.** This is next task 6, written down before building for the same
-reason section 5b was: the decisions below cost real time to reach and no time to
-read. Everything asserted here was checked by running it against this repo, not
+**Phase 1 is built.** The design this was written from is kept below, annotated
+with **[built as]** wherever the implementation diverged — it was followed
+closely, and the two places it was wrong are worth reading before extending it.
+Full reasoning as shipped is in `docs/decisions.md`, "The OpenAPI document is
+generated from the app that boots, and only describes requests".
+
+What exists now:
+
+- **`npm run generate:openapi`** writes `docs/openapi.json` (104 operations
+  across 78 paths). **`npm run check:openapi`** regenerates and exits 1 if the
+  committed file differs — that is the CI step, in the `check` job.
+- **`GET /openapi.json`** serves the same document, built from the live app on
+  first request and cached. Verified byte-identical to the committed file
+  against a running server.
+- **`apps/api/src/openapi/`** is `walk.ts` (app → route records), `schema.ts`
+  (Zod → JSON Schema), `document.ts` (route records → the document).
+  **`apps/api/src/lib/route-metadata.ts`** holds `stampRoute` and `mount`.
+- **`tests/unit/openapi.test.ts`** — 17 tests, no infrastructure.
+
+**Four things to know before you touch it:**
+
+1. **`apps/api` and `packages/schemas` are on `zod/v4` now**; `apps/web` is
+   still on Zod 3. `z.toJSONSchema()` reads Zod 4's internals and throws
+   `Cannot read properties of undefined (reading 'def')` on a v3 schema, so the
+   migration was a prerequisite rather than the optional first step the design
+   below assumed. **Import from `zod/v4` in anything under `apps/api`.**
+2. **`@finance/schemas` declares `sideEffects: false`,** which is what keeps
+   `fields.ts` — and the Zod 4 build it pulls in — out of the client bundle.
+   Removing it silently adds ~40 kB of duplicate Zod to `apps/web`.
+3. **A rule restated for the spec goes in `.meta()`, not in a real check.**
+   Moving `MONEY_PATTERN` into a `z.string().regex(...)` looks equivalent and is
+   not: inside a union it replaces the catalogue key with `"Invalid input"`
+   unless the union carries an explicit `error`, and it makes the parser reject
+   `" 12.50 "`, which `.refine(... .trim())` accepts today. Publishing a rule
+   must not change what the API accepts.
+4. **Every mount goes through `mount()`.** The walker throws on a router mounted
+   with a bare `.use()`, because it cannot recover the path. Adding a new
+   module means `mount(...)` in `routes.ts` and nothing else — the tag, the
+   security requirement, the role and the 429 all follow from the code.
+
+**Phase 2 — responses — is not built,** and `apps/web/src/api/types.ts` is
+still hand-written on purpose. See the end of this section.
+
+---
+
+### The design it was built from
+
+Everything asserted below was checked by running it against this repo, not
 recalled — where a claim came from an experiment, it says so.
 
 ### The shape of the problem
@@ -1057,6 +1131,19 @@ dependency** (`@asteasolutions/zod-to-openapi` 9.1.0, `zod-openapi` 6.0.1), so
 Going native means the migration and nothing else. Import from `zod/v4` in the
 generator alone at first — the runtime schemas can stay on the v3 API until
 there is a reason to move them.
+
+**[built as]** — and this paragraph was **wrong**, which is the one thing in this
+design that cost real time. `toJSONSchema` reads Zod 4's internal representation:
+handed a schema built with the v3 API it throws `TypeError: Cannot read
+properties of undefined (reading 'def')`. The original experiment must have been
+run against a replica already written in `zod/v4`, which proved the function's
+behaviour but not that it could read the app's own schemas. There is no
+generator-only path; `apps/api` and `packages/schemas/src/fields.ts` moved to
+`zod/v4` wholesale. It was cheap in the end — an import change in twenty-two
+files plus `z.record(z.unknown())` needing a key type, `ZodTypeAny` becoming
+`ZodType`, and `ZodError` having to come from the version that throws it — and
+all 242 tests passed unchanged. `apps/web` stayed on Zod 3 (see the note about
+`sideEffects` above).
 
 **`{ io: 'input' }` is not optional, it is the whole trick.** An OpenAPI request
 body describes what a caller *sends*, and the API's money fields end in
@@ -1091,6 +1178,18 @@ changes nothing about what is accepted. What genuinely cannot be expressed —
 already pin the behaviour, so this refactor is safe to make: if a bound moves,
 they fail.
 
+**[built as]** metadata rather than a real `regex()`, because "changes nothing
+about what is accepted" turned out to be false in two ways. A branch-level
+`regex` inside `moneyField`'s union makes Zod report `"Invalid input"` instead of
+the catalogue key, un-translating every rejected amount, unless the union is
+given an explicit `{ error: 'validation.decimalAmount' }`. And the shipped parser
+refines on `String(value).trim()`, so it accepts `" 12.50 "` — which a branch
+regex rejects. Narrowing what the API accepts is not something a documentation
+task gets to do quietly, so `dateField`, `moneyField` and `positiveMoneyField`
+carry `.meta({ pattern, description })` and their parsers are byte-for-byte
+unchanged. `.meta()` survives `.transform()`, `.optional()` and `.nullish()`,
+which is what makes this work: routes compose `moneySchema`, never `moneyField`.
+
 ### Getting the routes out of the app, not out of a list
 
 A spec needs (method, path, schemas, required role) per route. Three findings,
@@ -1098,7 +1197,9 @@ all from walking the real app:
 
 1. **The app is walkable.** `app._router.stack`, recursed, yields **103 routes**.
    So the document can be generated from the app that actually boots, which is
-   the only version that cannot drift.
+   the only version that cannot drift. (That count was taken before this was
+   built; it is 104 now, because `/openapi.json` is itself a route. Do not treat
+   any number in this design section as current — the specification is.)
 2. **Middleware are anonymous.** `validate(...)`, `requireEditor` and friends are
    arrow functions returned from factories; only `requireAuth` and
    `withWorkspace` survive with a `.name`. **You cannot identify a route's schema
@@ -1115,6 +1216,25 @@ all from walking the real app:
    workspace-scoped) and `app.ts` holds the `/api/v1` one. A `mount(prefix,
    router)` helper that records the literal string it was given costs seventeen
    edits in two adjacent files and yields exact paths with nothing inferred.
+
+**[built as]** all three, with the stamps in a `WeakMap` (`lib/route-metadata.ts`)
+rather than as properties on the handlers, so the running app is not carrying
+documentation fields on objects Express also inspects. The rate limiters are
+stamped too, which is why `/health` and `/openapi.json` correctly publish no 429.
+
+**One trap the design did not see.** A mount's guard middleware cannot be
+recognised by handler identity. `mount()` records what guards a router so the
+walker does not also inherit it positionally — Express applies such a guard to
+every *later* sibling under the same prefix — but `requireAuth` is a single
+shared object that is *also* ordinary middleware inside `userRouter`,
+`notificationRouter` and `workspaceRouter`. Keying the skip on identity dropped
+authentication from those, and the generated document confidently published two
+dozen authenticated routes as public. The walker matches guards by position
+within one stack instead. **If you add a shared middleware as a mount guard,
+check the public route list in the generated spec** — it is the fastest way to
+see it. Exactly seven operations carry no security requirement: `/health`,
+`/health/ready`, `/openapi.json`, and auth's `register`, `login`, `refresh` and
+`logout`. Anything else appearing there is this bug coming back.
 
 ### Responses are the expensive half — do requests first
 
@@ -1141,6 +1261,14 @@ Write the document to a **committed file** (`docs/openapi.json`) from a
 committed copy is what makes it reviewable: a pull request that changes an
 endpoint shows the contract change in the diff.
 
+**[built as]** the endpoint builds from the live app on first request and caches
+the result, rather than reading the committed file off disk. It needs no
+build-time copy into `dist/`, and what a caller reads is then guaranteed to be
+what that process enforces rather than what someone last remembered to commit.
+The committed file still exists for review and is what CI compares against, so
+the two cannot diverge; they were checked byte-identical against a running
+server.
+
 Then **add a CI step that regenerates and fails if the result differs from the
 committed file**, the same way the migration round-trip step earns its place —
 it is the only thing that stops the spec from quietly rotting. It needs no
@@ -1154,6 +1282,21 @@ parameter in a path string has a matching parameter object; a route behind
 `requireEditor` carries the security requirement; and the money field's `pattern`
 survives into the schema — that last one is the regression test for the
 `.refine()` trap above.
+
+**[built as]** all of those plus four worth keeping: every operation's `security`
+is compared against the walker's own view (the check that would have caught the
+mount-guard bug immediately), `operationId`s are unique and usable as
+identifiers, a 429 appears only where a limiter is really mounted, and the
+committed `docs/openapi.json` is compared against a freshly built document — so
+a stale file fails the *test suite* too, not only CI. 17 tests in
+`tests/unit/openapi.test.ts`. The route count assertion is written against
+`walkRoutes()` rather than the literal 103, which is now 104 because
+`/openapi.json` is itself a route.
+
+The test file sets `DATABASE_URL` and the two JWT secrets before importing the
+app, exactly as `scripts/generate-openapi.ts` does: generating touches no
+database, but `config/env.ts` parses the environment at import time and CI's
+`check` job has no Postgres to point at.
 
 ---
 
@@ -1184,6 +1327,17 @@ typecheck is a real gate. `apps/web` is a separate case and correctly uses
 `bundler`, because Vite bundles it; `packages/schemas` uses NodeNext, because
 `apps/api` resolves it through Node's own resolver and NodeNext is the stricter
 of the two to satisfy.
+
+**The OpenAPI document is generated from the running app, and describes requests
+only.** `docs/openapi.json` comes out of `apps/api/src/openapi/`, which walks the
+Express router rather than reading a list, so it cannot drift from the code; CI
+fails if the committed copy is stale. Responses are not described — handlers
+return database rows, so there is nothing to convert — which is why
+`apps/web/src/api/types.ts` is still hand-written. Two constraints follow for
+future work: **`apps/api` is on `zod/v4`** (v3 schemas cannot be converted at
+all), and **a rule restated for the spec goes in `.meta()`**, never in a real
+check, so that documenting a rule cannot change which requests the API accepts.
+See section 5d and `docs/decisions.md`.
 
 **Validation rules live in `@finance/schemas`; the parsers do not.** Every bound,
 value set, pattern and rejection message both apps must agree on is declared once

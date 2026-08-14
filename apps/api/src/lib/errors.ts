@@ -4,21 +4,25 @@ import { DEFAULT_LOCALE, t, type Locale } from './i18n.js';
  * Every error surfaced to a client goes through this taxonomy so the HTTP layer
  * never has to guess a status code and internal details never leak.
  */
-export type ErrorCode =
-  | 'bad_request'
-  | 'validation_failed'
-  | 'unauthorized'
-  | 'invalid_credentials'
-  | 'token_expired'
-  | 'forbidden'
-  | 'not_found'
-  | 'conflict'
-  | 'unprocessable'
-  | 'rate_limited'
-  | 'internal_error'
-  | 'service_unavailable';
+export const ERROR_CODES = [
+  'bad_request',
+  'validation_failed',
+  'unauthorized',
+  'invalid_credentials',
+  'token_expired',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'unprocessable',
+  'rate_limited',
+  'internal_error',
+  'service_unavailable',
+] as const;
 
-const STATUS_BY_CODE: Record<ErrorCode, number> = {
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+/** Exported so the generated OpenAPI document describes the real taxonomy. */
+export const STATUS_BY_CODE: Record<ErrorCode, number> = {
   bad_request: 400,
   validation_failed: 422,
   unauthorized: 401,

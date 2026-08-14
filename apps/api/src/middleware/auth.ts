@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { db } from '../db/client.js';
 import { forbidden, unauthorized } from '../lib/errors.js';
 import { resolveLocale } from '../lib/i18n.js';
+import { stampRoute } from '../lib/route-metadata.js';
 import { verifyAccessToken } from '../modules/auth/tokens.js';
 import type { MemberRole } from '../db/types.js';
 import type { WorkspaceContext } from '../types/context.js';
@@ -18,7 +19,7 @@ function bearerToken(header: string | undefined): string | null {
  * what makes a suspended or deleted account stop working immediately, rather
  * than at the end of the token's lifetime.
  */
-export const requireAuth: RequestHandler = (req, _res, next) => {
+export const requireAuth: RequestHandler = stampRoute((req, _res, next) => {
   void (async () => {
     const token = bearerToken(req.header('authorization'));
     if (!token) throw unauthorized('auth.missingToken');
@@ -49,7 +50,7 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
   })()
     .then(() => next())
     .catch(next);
-};
+}, { authenticated: true });
 
 export function currentUser(req: { user?: { id: string } }): { id: string } {
   if (!req.user) throw unauthorized('common.unauthorized');
@@ -107,9 +108,14 @@ export const withWorkspace: RequestHandler = (req, _res, next) => {
     .catch(next);
 };
 
-/** Requires at least the given role in the workspace resolved by `withWorkspace`. */
+/**
+ * Requires at least the given role in the workspace resolved by `withWorkspace`.
+ *
+ * The role is stamped on the returned handler because the closure is anonymous
+ * once Express holds it — the generated OpenAPI document reads it from there.
+ */
 export function requireRole(minimum: MemberRole): RequestHandler {
-  return (req, _res, next) => {
+  return stampRoute((req, _res, next) => {
     const workspace = req.workspace;
     if (!workspace) {
       next(forbidden('workspaces.contextMissing'));
@@ -120,7 +126,7 @@ export function requireRole(minimum: MemberRole): RequestHandler {
       return;
     }
     next();
-  };
+  }, { role: minimum });
 }
 
 /** Convenience aliases matching the permission model in the spec. */

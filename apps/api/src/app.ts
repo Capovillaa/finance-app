@@ -7,10 +7,12 @@ import { env } from './config/env.js';
 import { pingDatabase } from './db/client.js';
 import { asyncHandler } from './lib/http.js';
 import { pingRedis } from './lib/redis.js';
+import { mount } from './lib/route-metadata.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { resolveRequestLocale } from './middleware/locale.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
 import { httpLogger, requestId } from './middleware/request-context.js';
+import { buildDocument } from './openapi/document.js';
 import { apiRouter } from './routes.js';
 
 export function createApp(): Express {
@@ -55,7 +57,18 @@ export function createApp(): Express {
     }),
   );
 
-  app.use('/api/v1', globalRateLimit, apiRouter);
+  mount(app, '/api/v1', globalRateLimit, apiRouter);
+
+  // Served from the app it describes, so what a caller reads is what this
+  // process enforces. `docs/openapi.json` is the same document, committed so a
+  // pull request shows the contract change in its diff and CI can fail on drift.
+  // Built once on first request: walking the router and converting every schema
+  // is pure work over structures that never change after boot.
+  let document: unknown;
+  app.get('/openapi.json', (_req, res) => {
+    document ??= buildDocument(app);
+    res.json(document);
+  });
 
   app.use(notFoundHandler);
   app.use(errorHandler);

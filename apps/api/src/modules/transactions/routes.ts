@@ -12,7 +12,7 @@ import {
   notesField,
 } from '@finance/schemas';
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { asyncHandler, paginationSchema } from '../../lib/http.js';
 import { requireEditor, requireViewer, roleAtLeast, workspaceContext } from '../../middleware/auth.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';

@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "Validation rules shared by the API and the web client",
+  "//sideEffects": "Pure declarations: every module here is bounds, patterns and schema objects, with no I/O and nothing to run on import. Saying so lets a bundler drop what an app does not import — apps/web reads only limits, patterns and enums, so this is what keeps `fields.ts` (and the Zod build it pulls in) out of the client bundle.",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

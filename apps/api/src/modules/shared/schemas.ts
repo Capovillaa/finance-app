@@ -5,7 +5,7 @@ import {
   moneyField,
   positiveMoneyField,
 } from '@finance/schemas';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { money } from '../../lib/money.js';
 
 /**
@@ -36,7 +36,8 @@ export const dateSchema = dateField;
  */
 export const booleanQuerySchema = z
   .union([z.boolean(), z.enum(['true', 'false', '1', '0', 'yes', 'no'])])
-  .transform((value) => (typeof value === 'boolean' ? value : value === 'true' || value === '1' || value === 'yes'));
+  .transform((value) => (typeof value === 'boolean' ? value : value === 'true' || value === '1' || value === 'yes'))
+  .meta({ description: 'A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false.' });
 
 /** Same, with a default when the parameter is absent. */
 export const booleanQueryWithDefault = (fallback: boolean) => booleanQuerySchema.default(fallback);
@@ -62,7 +63,10 @@ export const csvUuidArray = z
   .refine(
     (value) => value === undefined || value.every((item) => UUID_PATTERN.test(item)),
     'validation.uuidList',
-  );
+  )
+  .meta({
+    description: 'UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID.',
+  });
 
 export const csvStringArray = z
   .union([z.string(), z.array(z.string())])

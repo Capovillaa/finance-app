@@ -33,7 +33,8 @@ Each domain lives in `src/modules/<domain>/` and is split in two:
 - **`routes.ts`** — HTTP concerns only: validation schemas, role requirements, status codes.
 
 Cross-cutting concerns sit in `src/lib` (money, dates, recurrence, errors, logging, redis, email)
-and `src/middleware` (auth, RBAC, validation, rate limiting, error translation).
+and `src/middleware` (auth, RBAC, validation, rate limiting, error translation). `src/openapi`
+generates the API's own description by walking the router — see "The API describes itself" below.
 
 ## Request lifecycle
 
@@ -52,6 +53,28 @@ and `src/middleware` (auth, RBAC, validation, rate limiting, error translation).
 
 Steps 4–6 are what enforce tenant isolation. Because they are mounted once in `src/routes.ts`
 rather than repeated per route, a new endpoint cannot forget them.
+
+## The API describes itself
+
+`docs/openapi.json` is generated from the Express app that actually boots, not from a list kept by
+hand, so it cannot drift from the code. `src/openapi/` walks the router; the metadata it needs is
+recorded on the way in by `src/lib/route-metadata.ts`, because none of it survives inspection:
+`validate(...)` and `requireRole(...)` return anonymous closures, and Express keeps a mount prefix
+only as a compiled `RegExp`.
+
+Two rules follow, and both are load-bearing:
+
+- **Mount every router with `mount()`**, not `.use()`. The walker throws on a router it cannot
+  place, rather than publishing a path assembled from a guess. Adding a module is one `mount(...)`
+  line in `src/routes.ts` and nothing else — the tag, the security requirement, the required role
+  and the 429 all follow from the middleware already on the route.
+- **A rule restated for the specification goes in `.meta()`**, never in a real check. Publishing
+  what a field accepts must not change what it accepts; see `decisions.md` for the two ways that
+  went wrong when tried the obvious way.
+
+The document describes **requests only**. Handlers return database rows straight from Kysely, so
+there is no response schema to convert — that is phase 2, and it is why the web client's
+`api/types.ts` is still written by hand.
 
 ## Web client
 
@@ -99,8 +122,12 @@ HttpOnly refresh cookie for the rest. `baseQuery.ts` retries a request once afte
 on every use (see "Refresh tokens are opaque..." in `decisions.md`), five simultaneous 401s each
 attempting their own refresh would revoke the whole token family and log the user out.
 
-**Forms** are React Hook Form plus Zod, validated against a hand-kept mirror of the server's
-schema (see `docs/decisions.md`'s "Frontend stack" entry for why, and what replaces this). MUI's
+**Forms** are React Hook Form plus Zod. They are no longer a hand-kept mirror of the server's
+schema: every bound, value set, pattern and rejection message comes from `@finance/schemas`, and
+each side composes its own parser on top — the API over a JSON body, the client over form text
+(see `decisions.md`, "The validation rules are shared; each side still builds its own parser").
+Do not write a literal bound into a `features/*/…Schemas.ts` file; if a number is not in
+`packages/schemas/src/limits.ts` yet, put it there. MUI's
 `Select` needs an explicit `value` prop alongside `register()` — see the "MUI's Select needs a
 controlled value" decision log entry for the specific pattern and why it is easy to get wrong.
 

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { CSV_DELIMITERS } from '../../lib/csv.js';
 import { asyncHandler } from '../../lib/http.js';
 import { t } from '../../lib/i18n.js';

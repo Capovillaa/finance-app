@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAdmin, requireViewer, workspaceContext } from '../../middleware/auth.js';
 import { body, params, uuidSchema, validate } from '../../middleware/validate.js';
@@ -35,7 +35,7 @@ alertRouter.put(
     body: z.object({
       type: alertTypeSchema,
       isEnabled: z.boolean().optional(),
-      config: z.record(z.unknown()).optional(),
+      config: z.record(z.string(), z.unknown()).optional(),
       channels: z.array(z.enum(['in_app', 'email', 'push'])).min(1).optional(),
       scopeCategoryId: uuidSchema.nullish(),
       scopeAccountId: uuidSchema.nullish(),

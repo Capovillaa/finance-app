@@ -688,6 +688,98 @@ package to generate from.
 
 ---
 
+### The OpenAPI document is generated from the app that boots, and only describes requests
+
+The API's shape used to live in three places that agreed only because a human kept them
+agreeing: the route files, `docs/api.md`, and the client's hand-written `api/types.ts`.
+The fix is one document generated from the code that actually runs — `docs/openapi.json`,
+written by `npm run generate:openapi`, served at `/openapi.json`, and regenerated in CI so
+it cannot quietly rot.
+
+**No OpenAPI library.** The installed `zod` (3.25.76) already ships Zod 4 at the `zod/v4`
+subpath, including `z.toJSONSchema()`. Both third-party candidates
+(`@asteasolutions/zod-to-openapi`, `zod-openapi`) require Zod 4 as a peer dependency
+anyway, so "just add a library" would have meant the same migration *plus* a dependency.
+Going native meant the migration and nothing else, and it added no package at all.
+
+**The migration was a prerequisite, not an option.** `toJSONSchema` reads Zod 4's internal
+representation; handed a schema built with the v3 API it fails with `Cannot read properties
+of undefined (reading 'def')`. There is no "convert v3 with the v4 helper" path, so
+`apps/api` and `packages/schemas/src/fields.ts` moved to `zod/v4` wholesale. The surface
+turned out to be small: an import-specifier change in twenty-two files and three real
+incompatibilities — `z.record(z.unknown())` now needs its key type, `ZodTypeAny` is
+`ZodType`, and `ZodError` must be imported from the same version that throws it. All 242
+tests passed unchanged afterwards.
+
+`apps/web` deliberately stayed on Zod 3, because `@hookform/resolvers` 3.10 predates Zod 4
+and upgrading a form-resolver dependency has nothing to do with generating a spec. That
+briefly put *both* Zod builds in the client bundle — `fields.ts` is reachable from the
+package's entry point — until `@finance/schemas` declared `sideEffects: false`. The package
+is pure declarations, so that is simply true, and it lets a bundler drop the modules the
+client never imports. The client bundle ended up 1.6 kB smaller than before the work began.
+
+**`io: 'input'` is the whole trick.** A request body describes what a caller *sends*, and
+the money fields end in `.transform(money)` — so their output type is not their input type,
+and `z.toJSONSchema(schema, { io: 'output' })` throws `Transforms cannot be represented in
+JSON Schema`. That `packages/schemas` keeps every transform out of the shared fields was
+done for an unrelated reason and turns out to be exactly what makes the requests
+describable.
+
+**A `.refine()` is dropped silently, and metadata was the honest way to restore it.** An
+arbitrary predicate cannot be expressed in JSON Schema, so `moneyField` would have been
+published as "a string or a number" with no mention of the decimal format at all — a spec
+that omits a rule is worse than no spec, because it looks authoritative. The obvious repair
+was to move `MONEY_PATTERN` into a real `z.string().regex(...)`, and it is wrong twice
+over. First, inside a union the branch's message replaces the catalogue key with Zod's
+generic `"Invalid input"`, silently un-translating every rejected amount, unless the union
+also carries an explicit `error` override. Second, and decisively, the current parser
+accepts `" 12.50 "` because it refines on `String(value).trim()`, and a branch regex does
+not — publishing a rule must not change which requests the API answers. So the rules are
+restated as `.meta()` instead: the pattern where JSON Schema can carry it, prose where it
+cannot ("greater than zero" against a decimal held as a string, a date that must exist).
+`.meta()` survives `.transform()`, `.optional()` and `.nullish()`, which is what makes it
+work at all — routes compose `moneySchema`, never `moneyField`.
+
+**The app is walkable; the middleware are not readable.** Recursing `app._router.stack`
+yields every route, but `validate(...)` and `requireEditor` are arrow functions returned
+from factories, so a route's schema and its required role are closed over and invisible.
+Each factory now stamps what it knows onto the handler it returns, via a `WeakMap` in
+`lib/route-metadata.ts` rather than by hanging properties on objects Express also inspects.
+Mount prefixes are recorded the same way: reassembling a path from `layer.regexp` half-works
+and then hands back `/workspaces(?:/([^/]+?))/accounts`, so `mount()` remembers the literal
+string it was given instead.
+
+One trap inside that, worth the warning: a mount's guard middleware cannot be recognised by
+handler identity. `requireAuth` guards the `/workspaces` mount **and** serves as ordinary
+middleware inside several routers, so skipping every occurrence of it — to stop it leaking
+onto later siblings — published two dozen authenticated routes as public. The walker
+matches guards by position within a single stack instead, which is what `mount()` records
+them for.
+
+**Requests first; responses are the expensive half.** Requests have schemas. Responses have
+none — services return Kysely rows and routes `res.json()` them — so describing them means
+authoring a schema per endpoint, a bigger job than everything above combined. Phase 1
+therefore publishes paths, parameters, request bodies, security and the error envelope, and
+declares success as the `2XX` range with a description and no content. That is honest about
+what is known instead of guessing a shape. Until phase 2 lands, `apps/web/src/api/types.ts`
+stays hand-written: a half-generated types file where nobody can tell which half is which is
+worse than an honest one.
+
+**Everything published is derived, never assumed.** The security requirement comes from
+`requireAuth`, the 403 from `requireRole`, the 429 from whichever rate limiter is actually
+mounted in front — which is why `/health` and `/openapi.json`, sitting outside `/api/v1`,
+correctly carry no 429 — and the tag from the prefix a router was mounted at, so
+`/workspaces/{workspaceId}/members` groups under `workspaces`, where its code lives, rather
+than under a `members` module that does not exist.
+
+**Serving and checking.** `/openapi.json` builds from the live app on first request and is
+cached, so what a caller reads is what that process enforces; the committed file is the same
+document, and exists so a pull request shows a contract change in its diff. They were
+verified byte-identical against a running server. CI regenerates and fails on any
+difference, in the `check` job, since no database is involved.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.
@@ -698,3 +790,8 @@ package to generate from.
 - **PDF export.** CSV export and a structured statement endpoint are implemented; rendering to PDF
   belongs with the client, which has the layout.
 - ~~**CSV import.**~~ Built — see "CSV import is preview-then-commit" above.
+- **OpenAPI response schemas (phase 2).** Requests, paths, security and the error envelope are
+  generated and checked in CI; responses are not described, because handlers return Kysely rows
+  and there is no schema to convert. Success is published as the `2XX` range with no content.
+  This is what stands between the project and replacing `apps/web/src/api/types.ts` with
+  generated types — see "The OpenAPI document is generated from the app that boots" above.

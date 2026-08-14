@@ -14,6 +14,8 @@
     "migrate:down": "tsx src/db/migrate.ts down",
     "migrate:status": "tsx src/db/migrate.ts status",
     "seed": "tsx src/db/seed.ts",
+    "generate:openapi": "tsx scripts/generate-openapi.ts",
+    "check:openapi": "tsx scripts/generate-openapi.ts --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.unit.config.ts",

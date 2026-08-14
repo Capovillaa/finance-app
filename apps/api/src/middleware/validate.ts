@@ -1,12 +1,13 @@
 import { uuidField } from '@finance/schemas';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { z, type ZodTypeAny } from 'zod';
+import { z, type ZodType } from 'zod/v4';
 import { validationFailed, type FieldIssue } from '../lib/errors.js';
+import { stampRoute } from '../lib/route-metadata.js';
 
 export interface ValidationSchemas {
-  body?: ZodTypeAny;
-  query?: ZodTypeAny;
-  params?: ZodTypeAny;
+  body?: ZodType;
+  query?: ZodType;
+  params?: ZodType;
 }
 
 function toIssues(error: z.ZodError): FieldIssue[] {
@@ -19,9 +20,13 @@ function toIssues(error: z.ZodError): FieldIssue[] {
 /**
  * Parses and *replaces* the request parts with their validated output, so
  * handlers work with typed, coerced data and never re-read raw input.
+ *
+ * The returned handler is stamped with the schemas it will apply: it is an
+ * anonymous closure by the time Express holds it, so this is the only way the
+ * OpenAPI generator can find out what a route accepts.
  */
 export function validate(schemas: ValidationSchemas): RequestHandler {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  return stampRoute((req: Request, _res: Response, next: NextFunction) => {
     const issues: FieldIssue[] = [];
 
     for (const key of ['params', 'query', 'body'] as const) {
@@ -47,7 +52,7 @@ export function validate(schemas: ValidationSchemas): RequestHandler {
       return;
     }
     next();
-  };
+  }, { schemas });
 }
 
 /** Typed accessors, since Express's own generics do not flow through `validate`. */
