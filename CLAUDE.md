@@ -713,6 +713,30 @@ await page.screenshot({ path: 'dashboard.png', fullPage: true });
 // each time; it's a dozen lines.
 ```
 
+**Three selector traps, learned the slow way while driving the forms:**
+
+1. **A dialog's submit button often has the same label as the button that opened
+   it.** `t('recurring.create')` is "New schedule" on both the page header and
+   the dialog's submit, so `getByRole('button', { name: 'New schedule' })` is
+   ambiguous the moment the dialog is open. Use
+   `page.locator('[role="dialog"] button[type="submit"]')`, which is unambiguous
+   and survives a label change.
+2. **The nav items are buttons.** MUI's `ListItemButton` carries
+   `role="button"`, so a loose name regex like `/account/i` matches the sidebar
+   link before the "Add account" button and quietly navigates instead of opening
+   the dialog. Match exactly.
+3. **A form needs its `<Select>`s filled or it fails on those instead.** Click
+   the `[role="combobox"]` and then `li[role="option"]` — the field you are
+   actually testing never gets to report anything until the required selects hold
+   a value.
+
+**You do not need seed data to reach a signed-in screen.** Registering through
+the UI takes four fills and a click, gives a clean workspace, and avoids the
+seed's re-run problem below entirely. Force the language first with
+`localStorage.setItem('finance.language', 'en')` so assertions do not depend on
+whatever this machine's browser prefers — it is pt-BR here, which will silently
+break an English string match.
+
 **If `npm run seed` fails with a foreign-key violation on `workspaces_owner_id_fkey`
 when re-run against a database that already has demo data**, that's a bug in the
 seed script's own idempotent-reset step (it deletes from `users` before the
@@ -720,6 +744,13 @@ seed script's own idempotent-reset step (it deletes from `users` before the
 broken. Check whether `ana@demo.local` / `bruno@demo.local` already exist
 before treating a seed failure as real; `npm run migrate` is always safe to
 re-run.
+
+**`npm run seed` also does not exit when it finishes.** It prints
+`Seed complete` with its counts and then sits there holding the database pool
+open, which reads exactly like a hang and will burn a long timeout if you wait
+for it. The work is already done at that point — the demo accounts exist and
+the transactions are inserted. Watch for the `Seed complete` line rather than
+for the process to return, and stop it yourself.
 
 ### Environment quirks on this machine
 
