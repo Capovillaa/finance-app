@@ -28,6 +28,13 @@ const AMOUNT_COLOR = {
 } as const;
 
 export interface LedgerRowProps {
+  /**
+   * A checkbox, ahead of everything else, for a list that can act on many rows
+   * at once. Omitting it leaves the grid exactly as it was rather than adding a
+   * zero-width track — an empty track still consumes a column gap, which would
+   * nudge every row in the app sideways.
+   */
+  selection?: ReactNode;
   /** Left column, usually a date. Kept narrow and set in the tabular face. */
   lead?: ReactNode;
   /** What the row is about. */
@@ -75,6 +82,7 @@ export interface LedgerRowProps {
  * legible rather than squeezing five columns into 360px.
  */
 export default function LedgerRow({
+  selection,
   lead,
   primary,
   onPrimaryClick,
@@ -122,14 +130,23 @@ export default function LedgerRow({
         borderBottomColor: 'divider',
         '&:last-of-type': { borderBottom: 0 },
         '&:hover': { bgcolor: 'action.hover' },
-        gridTemplateColumns: { xs: 'auto minmax(0, 1fr) auto', md: 'auto minmax(0, 1fr) auto auto auto' },
-        gridTemplateAreas: {
-          xs: `"lead body actions" "lead meta actions" "amount amount amount"`,
-          md: `"lead body meta amount actions"`,
-        },
+        gridTemplateColumns: selection
+          ? { xs: 'auto auto minmax(0, 1fr) auto', md: 'auto auto minmax(0, 1fr) auto auto auto' }
+          : { xs: 'auto minmax(0, 1fr) auto', md: 'auto minmax(0, 1fr) auto auto auto' },
+        gridTemplateAreas: selection
+          ? {
+              xs: `"select lead body actions" "select lead meta actions" "amount amount amount amount"`,
+              md: `"select lead body meta amount actions"`,
+            }
+          : {
+              xs: `"lead body actions" "lead meta actions" "amount amount amount"`,
+              md: `"lead body meta amount actions"`,
+            },
       }}
     >
       {toneLabel && tone !== 'none' ? <Box sx={visuallyHidden}>{toneLabel}</Box> : null}
+
+      {selection ? <Box sx={{ gridArea: 'select', display: 'flex', alignItems: 'center' }}>{selection}</Box> : null}
 
       <Box sx={{ gridArea: 'lead', display: lead ? 'block' : 'none' }}>
         <Typography variant="amount" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>

@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-319; see section 4 for the current command. The compiled `dist/server.js`
+320; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -100,9 +100,15 @@ Per-screen notes:
   bar), and a **detail drawer** carrying the row's tags, its **split** and its
   **comment thread**. The splits editor covers the server's three modes — even,
   weighted, and exact amounts that must add up to the total.
-  **CSV import** is now built — see section 2d.
-  Still unbuilt from this screen, all backed by the API: bulk categorise,
-  confirming a scheduled row, and restoring a deleted one.
+  **CSV import** is now built — see section 2d. So are the three actions that
+  used to be listed here as unbuilt: **confirming** a scheduled row (a tick on
+  the row itself), **bulk categorise** (a checkbox per row and a
+  `BulkActionsBar` inside the ledger card, shown only while something is
+  ticked), and **restoring** a deleted one — which needed an API change, since
+  the list route had no way to return soft-deleted rows and therefore nothing
+  could name the row to restore. A "Show deleted" switch in the filter bar sets
+  `?includeDeleted=true`; a deleted row is struck through, keeps its column
+  alignment, and offers restore and nothing else.
 - **Budgets** — per-line progress meters, create dialog with dynamic category
   lines, audited mid-period limit revisions, add/remove lines, rollover.
 - **Goals** — progress cards, a contributions dialog (add/list/delete), and
@@ -255,9 +261,19 @@ you need in order to not break it.
    calls `t()`. Form fields go through `fieldMessage()` from `lib/validation.ts`,
    which resolves a known key and passes a server-sent sentence through
    untouched.
-3. **Add the key to all three catalogues.** A missing key falls back to English
-   without complaining. This checks it, including that the `{{placeholders}}`
-   match — a translation that drops one loses a number, not just a word:
+3. **Add the key to all three catalogues, and check it resolves.**
+   `npm run check:i18n` (also a CI step) does both halves:
+
+   - **parity** — every key and every `{{placeholder}}` in `en.json` exists in
+     `pt-BR.json` and `es.json`. A missing key falls back to English silently,
+     and a translation that drops a placeholder loses a number, not just a word.
+   - **resolution** — every literal `t('some.key')` in `src/` resolves against a
+     catalogue. This is the failure parity structurally *cannot* see: a key
+     missing from **all three** files is perfectly consistent, so parity passes,
+     and i18next renders the key itself. That shipped — a bulk-action button
+     read `common.apply` — and was only caught by a browser looking for the
+     button by its accessible name. Keys built from a template literal or a
+     variable are still on you.
 
 **One namespace is not in these files.** `validation.*` lives in
 `packages/schemas/src/translations.ts`, because the API rejects a field with the
@@ -268,8 +284,7 @@ Record<ValidationMessageName, string>>` will not build with a language missing),
 and its placeholders are checked by `tests/unit/shared-schemas.test.ts`.
 
 ```bash
-# from apps/web/src — compares key sets and placeholders across en/pt-BR/es
-node -e "const f=(d,p='')=>Object.entries(d).flatMap(([k,v])=>typeof v==='object'?f(v,p+k+'.'):[[p+k,v]]);const L=c=>Object.fromEntries(f(require('./i18n/locales/'+c+'.json')));const en=L('en');for(const c of ['pt-BR','es']){const o=L(c);const miss=Object.keys(en).filter(k=>!(k in o));const ext=Object.keys(o).filter(k=>!(k in en));console.log(c,'missing',miss.length,'extra',ext.length,[...miss,...ext].join(' '))}"
+npm run check:i18n    # apps/web/scripts/check-i18n.mjs; also a CI step
 ```
 
 **Server text is translated too, for the three things a user reads: API error
@@ -484,8 +499,9 @@ D:\finance_app
 │       ├── index.html
 │       ├── vite.config.ts
 │       ├── scripts/
-│       │   └── generate-types.mjs   # docs/openapi.json -> src/api/schema.d.ts;
-│       │                            #   --check for CI
+│       │   ├── generate-types.mjs   # docs/openapi.json -> src/api/schema.d.ts;
+│       │   │                        #   --check for CI
+│       │   └── check-i18n.mjs       # catalogue parity + every t() key resolves
 │       └── src/
 │           ├── main.tsx             # entrypoint: store, theme, router
 │           ├── App.tsx              # routes
@@ -636,8 +652,9 @@ npm run dev:worker --workspace=@finance/api
 ### Tests
 
 ```bash
-npm test                 # all 319 — needs Postgres, and only Postgres
+npm test                 # all 320 — needs Postgres, and only Postgres
 npm run test:unit        # 178 pure units, no infrastructure at all
+npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
 npm run build --workspace=@finance/api
@@ -678,7 +695,7 @@ below for what it was. Any output from these commands is now a real failure.
 
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
 Two jobs run in parallel: **check** (typecheck, both builds, the OpenAPI
-freshness check, unit tests — no services) and **test** (the full suite against a
+freshness check, the i18n check, unit tests — no services) and **test** (the full suite against a
 `postgres:16` service container, then a migration rollback round-trip). Green on
 the first run, in about a minute.
 
@@ -891,23 +908,21 @@ are the best place to start if you want a feature rather than an operations task
     migration step that runs before rollout.
 
 Not started, deliberately: deployment, and any real payment or bank
-integration. Smaller known gaps, none of them oversights, all re-checked while
-generating the client's types: **bulk categorise, confirm and restore have no
-UI** though the API has them and now publishes their exact shapes
-(`POST /transactions/bulk-categorize`, `/:id/confirm`, `/:id/restore` — each is
-one button); ~~**account reconciliation has no UI**~~ — **built**, see section 2,
-though per-account statement history beyond the reconciliation list still is
-not; the workspace settings screen cannot create a workspace (the
+integration. Smaller known gaps, none of them oversights: ~~**bulk categorise,
+confirm and restore have no UI**~~ — **built**, see section 2. That entry used
+to claim each was "one button", and only one of them was: bulk categorise needs
+a selection model, and restore needed the list endpoint to be able to return
+deleted rows at all. ~~**account reconciliation has no UI**~~ — **built**, see
+section 2, though per-account statement history beyond the reconciliation list
+still is not; the workspace settings screen cannot create a workspace (the
 switcher does that); a revoked invitation cannot be re-sent, because the token
 only ever exists in the email; CSV import reads files as UTF-8 only, and
 supports no other statement format (OFX, QIF).
 
-One real gap found while building the import dialog and left alone as out of
-scope: **`features/transactions/SplitsDialog.tsx` still has four hardcoded
-English strings** — the even-split explainer and the three "Allocated …"
-sentences in the exact-amounts alert. They break the section 2c rule that every
-user-visible string goes through `t()`, and they silently stay English in
-Portuguese and Spanish. Fixing it is four keys in three catalogues.
+~~One real gap found while building the import dialog: `SplitsDialog.tsx` still
+has four hardcoded English strings.~~ **Fixed**, along with a fifth found the
+same way in `TransactionFiltersBar` (`"3 selected"`). `npm run check:i18n` now
+fails on a hardcoded-key regression of that shape — see section 2c.
 
 ---
 

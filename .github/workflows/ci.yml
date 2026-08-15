@@ -66,6 +66,14 @@ jobs:
       - name: OpenAPI document and client types are up to date
         run: npm run check:openapi
 
+      # Two ways a translated string goes wrong, neither of which typechecks or
+      # fails a build: a key missing from one catalogue falls back to English
+      # silently, and a key missing from *all* of them renders as itself — a
+      # button reading `common.apply`. Parity cannot see the second, so the
+      # script checks that every literal `t()` key resolves as well.
+      - name: Translations are complete and every key resolves
+        run: npm run check:i18n
+
       # No Postgres, no Redis: money, dates, recurrence, anomaly detectors, CSV
       # parsing and import mapping are all pure. Seconds, not minutes.
       - name: Unit tests

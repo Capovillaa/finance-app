@@ -1802,6 +1802,8 @@ export interface components {
             tags?: string[];
             createdAt: components["schemas"]["Timestamp"];
             updatedAt: components["schemas"]["Timestamp"];
+            /** @description Set on a soft-deleted row. Only `?includeDeleted=true` returns one; `POST /:id/restore` undoes it. */
+            deletedAt: components["schemas"]["Timestamp"] | null;
         };
         TransactionComment: {
             id: components["schemas"]["Uuid"];
@@ -3537,6 +3539,8 @@ export interface operations {
                 createdBy?: string;
                 /** @description A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false. */
                 isReconciled?: boolean | ("0" | "1" | "true" | "false" | "yes" | "no");
+                /** @description A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false. */
+                includeDeleted?: boolean | ("0" | "1" | "true" | "false" | "yes" | "no");
                 sortBy?: "occurredOn" | "amount" | "createdAt";
                 sortDirection?: "asc" | "desc";
             };

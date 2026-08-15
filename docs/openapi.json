@@ -2165,6 +2165,17 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "deletedAt": {
+            "description": "Set on a soft-deleted row. Only `?includeDeleted=true` returns one; `POST /:id/restore` undoes it.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2188,7 +2199,8 @@
           "paidByUserId",
           "createdBy",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "deletedAt"
         ],
         "additionalProperties": false
       },
@@ -6663,6 +6675,30 @@
           },
           {
             "name": "isReconciled",
+            "in": "query",
+            "required": false,
+            "description": "A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false.",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "0",
+                    "1",
+                    "true",
+                    "false",
+                    "yes",
+                    "no"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "name": "includeDeleted",
             "in": "query",
             "required": false,
             "description": "A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false.",

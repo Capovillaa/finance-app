@@ -50,6 +50,9 @@ export const transactionSchema = component(
     tags: z.array(z.string()).optional().describe('Tag names, attached by the list and detail queries only.'),
     createdAt: timestamp,
     updatedAt: timestamp,
+    deletedAt: timestamp
+      .nullable()
+      .describe('Set on a soft-deleted row. Only `?includeDeleted=true` returns one; `POST /:id/restore` undoes it.'),
   }),
 );
 

@@ -190,8 +190,12 @@ is rejected.
 | DELETE | `/:id/comments/:commentId` | own comment, or admin |
 
 Filters on `GET /`: `from`, `to`, `accountIds`, `categoryIds`, `includeSubcategories`, `tagIds`,
-`types`, `statuses`, `minAmount`, `maxAmount`, `search`, `createdBy`, `isReconciled`, `sortBy`
-(`occurredOn|amount|createdAt`), `sortDirection`. List parameters accept `a,b,c`.
+`types`, `statuses`, `minAmount`, `maxAmount`, `search`, `createdBy`, `isReconciled`,
+`includeDeleted`, `sortBy` (`occurredOn|amount|createdAt`), `sortDirection`. List parameters
+accept `a,b,c`.
+
+`includeDeleted=true` also returns soft-deleted rows, each carrying a non-null `deletedAt`.
+It is the only way to reach `POST /:id/restore`: without it nothing can name the row to restore.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \

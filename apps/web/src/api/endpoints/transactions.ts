@@ -27,6 +27,8 @@ export interface TransactionFilters {
   search?: string;
   createdBy?: string;
   isReconciled?: boolean;
+  /** Soft-deleted rows are hidden unless this is true; they carry `deletedAt`. */
+  includeDeleted?: boolean;
   sortBy?: 'occurredOn' | 'amount' | 'createdAt';
   sortDirection?: 'asc' | 'desc';
 }
@@ -171,6 +173,52 @@ export const transactionsApi = api.injectEndpoints({
       invalidatesTags: (_result, _error, { workspaceId }) => invalidateLedger(workspaceId),
     }),
 
+    // --- single-row state changes -------------------------------------------
+
+    /** Marks a `scheduled` bill paid: it becomes `cleared` and hits the balance. */
+    confirmTransaction: build.mutation<void, { workspaceId: string; id: string }>({
+      query: ({ workspaceId, id }) => ({
+        url: `/workspaces/${workspaceId}/transactions/${id}/confirm`,
+        method: 'POST',
+      }),
+      invalidatesTags: (_result, _error, { workspaceId, id }) => [
+        { type: 'Transaction' as const, id },
+        ...invalidateLedger(workspaceId),
+      ],
+    }),
+
+    /** Undoes a soft delete. Only reachable from a list asked for with `includeDeleted`. */
+    restoreTransaction: build.mutation<void, { workspaceId: string; id: string }>({
+      query: ({ workspaceId, id }) => ({
+        url: `/workspaces/${workspaceId}/transactions/${id}/restore`,
+        method: 'POST',
+      }),
+      invalidatesTags: (_result, _error, { workspaceId, id }) => [
+        { type: 'Transaction' as const, id },
+        ...invalidateLedger(workspaceId),
+      ],
+    }),
+
+    /**
+     * Re-files many rows at once. `categoryId: null` clears the category, which
+     * is a deliberate choice rather than a no-op — "uncategorised" is a state a
+     * user reaches for after a bad import.
+     */
+    bulkCategorize: build.mutation<
+      { updated: number },
+      { workspaceId: string; transactionIds: string[]; categoryId: string | null }
+    >({
+      query: ({ workspaceId, transactionIds, categoryId }) => ({
+        url: `/workspaces/${workspaceId}/transactions/bulk-categorize`,
+        method: 'POST',
+        body: { transactionIds, categoryId },
+      }),
+      invalidatesTags: (_result, _error, { workspaceId, transactionIds }) => [
+        ...transactionIds.map((id) => ({ type: 'Transaction' as const, id })),
+        ...invalidateLedger(workspaceId),
+      ],
+    }),
+
     // --- splits ------------------------------------------------------------
 
     /**
@@ -246,6 +294,9 @@ export const {
   useUpdateTransactionMutation,
   useDeleteTransactionMutation,
   useCreateTransferMutation,
+  useConfirmTransactionMutation,
+  useRestoreTransactionMutation,
+  useBulkCategorizeMutation,
   useSetSplitsMutation,
   useSettleSplitMutation,
   useAddCommentMutation,

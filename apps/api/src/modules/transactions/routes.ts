@@ -52,6 +52,12 @@ const listQuerySchema = paginationSchema.extend({
   search: z.string().max(LIMITS.search.max).optional(),
   createdBy: uuidSchema.optional(),
   isReconciled: booleanQuerySchema.optional(),
+  /**
+   * Soft-deleted rows are hidden by default. They are askable for because
+   * `POST /:id/restore` exists and is otherwise unreachable: without a way to
+   * list what was deleted, nothing can name the row to restore.
+   */
+  includeDeleted: booleanQueryWithDefault(false),
   sortBy: z.enum(TRANSACTION_SORT_FIELDS).default('occurredOn'),
   sortDirection: z.enum(SORT_DIRECTIONS).default('desc'),
 });

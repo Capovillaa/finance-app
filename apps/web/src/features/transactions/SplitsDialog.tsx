@@ -207,8 +207,7 @@ export default function SplitsDialog({
 
           {mode === 'even' ? (
             <Typography variant="body2" color="text.secondary">
-              Split evenly between {selected.length} {selected.length === 1 ? 'person' : 'people'}. The server works out
-              each share and gives any leftover cent to the first of them, so the parts always add back to the total.
+              {t('transactions.evenExplainer', { count: selected.length })}
             </Typography>
           ) : mode === 'weight' ? (
             <Typography variant="body2" color="text.secondary">
@@ -219,11 +218,13 @@ export default function SplitsDialog({
               {exactTotal === null
                 ? t('transactions.splitAmountRequired')
                 : exactMatches
-                  ? `Allocated ${formatMoney(exactTotal, transaction?.currency ?? 'USD')} — matches the total.`
-                  : `Allocated ${formatMoney(exactTotal, transaction?.currency ?? 'USD')} of ${formatMoney(
-                      total,
-                      transaction?.currency ?? 'USD',
-                    )}. The shares must add up exactly.`}
+                  ? t('transactions.allocatedMatches', {
+                      allocated: formatMoney(exactTotal, transaction?.currency ?? 'USD'),
+                    })
+                  : t('transactions.allocatedShort', {
+                      allocated: formatMoney(exactTotal, transaction?.currency ?? 'USD'),
+                      total: formatMoney(total, transaction?.currency ?? 'USD'),
+                    })}
             </Alert>
           )}
         </Stack>

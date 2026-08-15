@@ -38,6 +38,8 @@ export interface TransactionRecord {
   tags?: string[];
   createdAt: Date;
   updatedAt: Date;
+  /** Non-null on a soft-deleted row, which only `includeDeleted` returns. */
+  deletedAt: Date | null;
 }
 
 interface TransactionRow {
@@ -62,6 +64,7 @@ interface TransactionRow {
   created_by: string | null;
   created_at: Date;
   updated_at: Date;
+  deleted_at: Date | null;
   account_name?: string;
   category_name?: string | null;
   created_by_name?: string | null;
@@ -93,6 +96,7 @@ function toRecord(row: TransactionRow): TransactionRecord {
     ...(row.created_by_name !== undefined ? { createdByName: row.created_by_name } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? null,
   };
 }
 
@@ -464,6 +468,7 @@ export async function listTransactions(
         'transactions.created_by as created_by',
         'transactions.created_at as created_at',
         'transactions.updated_at as updated_at',
+        'transactions.deleted_at as deleted_at',
         'accounts.name as account_name',
         'categories.name as category_name',
         'users.full_name as created_by_name',
@@ -532,6 +537,7 @@ export async function getTransaction(workspaceId: string, transactionId: string)
       'transactions.created_by as created_by',
       'transactions.created_at as created_at',
       'transactions.updated_at as updated_at',
+      'transactions.deleted_at as deleted_at',
       'accounts.name as account_name',
       'categories.name as category_name',
       'users.full_name as created_by_name',

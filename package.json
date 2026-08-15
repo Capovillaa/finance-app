@@ -23,6 +23,7 @@
     "typecheck": "npm run build:schemas && npm run typecheck --workspaces --if-present",
     "generate:openapi": "npm run build:schemas && npm run generate:openapi --workspace=@finance/api && npm run generate:types --workspace=@finance/web",
     "check:openapi": "npm run build:schemas && npm run check:openapi --workspace=@finance/api && npm run check:types --workspace=@finance/web",
+    "check:i18n": "npm run check:i18n --workspace=@finance/web",
     "migrate": "npm run migrate --workspace=@finance/api",
     "seed": "npm run seed --workspace=@finance/api",
     "infra:up": "docker compose up -d postgres redis mailhog",

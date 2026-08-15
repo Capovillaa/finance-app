@@ -1030,6 +1030,50 @@ second run that correctly found nothing left to freeze, and `GET /transactions` 
 
 ---
 
+### Finishing the ledger: confirm, bulk categorise, restore — and one that needed the API
+
+Three transaction actions had been listed as unbuilt for several sessions, described as "one
+button each". Building them showed that only one of them was.
+
+**Confirm really was one button.** A `scheduled` row — a bill the worker materialised ahead of
+its due date — now carries a tick beside edit and delete. Nothing else changed.
+
+**Bulk categorise needs a selection model, which is a feature, not a button.** A checkbox per row,
+a `BulkActionsBar` that appears inside the ledger card only while something is ticked, and a
+selection that clears whenever the page or the filters move — acting on rows the user can no
+longer see is the surprise worth designing out. `categoryId: null` is offered as a real choice
+rather than being treated as "no change", because filing a bad import back to uncategorised is
+something people actually do.
+
+**Restore was unreachable, and no amount of client work could have reached it.**
+`POST /:id/restore` has existed since the first session, but `GET /transactions` had no way to
+return a soft-deleted row: the service supported `includeDeleted` internally, the route never
+exposed it, and the response schema had no `deletedAt`. So nothing could *name* the row to
+restore. The endpoint was, in effect, decoration. Both are added, with an integration test that
+deletes a row, fails to find it, finds it with `?includeDeleted=true`, restores it and sees it
+back. **An endpoint that nothing can address is not a feature; check the read path before
+believing a write path is finished.**
+
+**The selection column belongs to the list, not to the row.** `LedgerRow` gained an optional
+`selection` slot, and the grid only grows a column when it is used — an always-present
+zero-width track still consumes a column gap, which would have nudged every ledger row in the app
+sideways. The first version then dropped the checkbox for a *deleted* row, since a deleted row
+cannot take part in a bulk change, and that shifted that one line — date, description and figure —
+34px left of every other. A ledger whose amounts do not stack into one column has lost the thing
+it is for. Deleted rows now render the checkbox hidden rather than absent, so the width is the
+checkbox's own and cannot drift from it.
+
+**A missing catalogue key can be perfectly consistent.** The bulk bar's Apply button called
+`t('common.apply')`, which existed in no catalogue at all — so i18next rendered the key, and the
+button read `common.apply`. The existing parity check compares the three locales *against each
+other*, and a key missing from all three is consistent, so it passed. It was caught by a browser
+looking for the button by its accessible name. `apps/web/scripts/check-i18n.mjs` now does both
+halves — parity, and that every literal `t()` key resolves — and runs in CI. The same pass found
+a fifth hardcoded English string (`"3 selected"` in the filter bar) beside the four already known
+in `SplitsDialog`; all nine strings are catalogue entries now.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

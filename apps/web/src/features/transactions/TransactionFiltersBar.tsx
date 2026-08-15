@@ -1,16 +1,20 @@
-import { ClearIcon } from '../../icons';
+﻿import { ClearIcon } from '../../icons';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Checkbox from '@mui/material/Checkbox';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import type { SelectChangeEvent } from '@mui/material/Select';
+import Stack from '@mui/material/Stack';
+import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
+import Typography from '@mui/material/Typography';
 import type { ReactElement } from 'react';
 import type { Account, Category, Tag, TransactionStatus, TransactionType } from '../../api/types';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +30,8 @@ export interface TransactionFilterState {
   minAmount: string;
   maxAmount: string;
   search: string;
+  /** Shows soft-deleted rows too, which is the only way to reach restore. */
+  includeDeleted: boolean;
 }
 
 export const EMPTY_FILTERS: TransactionFilterState = {
@@ -39,11 +45,15 @@ export const EMPTY_FILTERS: TransactionFilterState = {
   minAmount: '',
   maxAmount: '',
   search: '',
+  includeDeleted: false,
 };
 
 export function hasActiveFilters(filters: TransactionFilterState): boolean {
   return Object.entries(filters).some(([key, value]) => {
     if (key === 'search') return false; // search has its own field, not counted as a "filter chip"
+    // A boolean is active only when it is on: `false !== ''` would otherwise
+    // make the clear button permanently enabled.
+    if (typeof value === 'boolean') return value;
     return Array.isArray(value) ? value.length > 0 : value !== '';
   });
 }
@@ -69,10 +79,15 @@ interface TransactionFiltersBarProps {
   onChange: (filters: TransactionFilterState) => void;
 }
 
-function multiSelectSummary(selected: string[], labels: Record<string, string>, placeholder: string): string {
+function multiSelectSummary(
+  selected: string[],
+  labels: Record<string, string>,
+  placeholder: string,
+  manySelected: (count: number) => string,
+): string {
   if (selected.length === 0) return placeholder;
   if (selected.length === 1) return labels[selected[0]!] ?? selected[0]!;
-  return `${selected.length} selected`;
+  return manySelected(selected.length);
 }
 
 /**
@@ -101,6 +116,10 @@ export default function TransactionFiltersBar({
   const statusLabels = Object.fromEntries(
     Object.entries(STATUS_LABEL_KEYS).map(([value, key]) => [value, t(key)]),
   ) as Record<TransactionStatus, string>;
+
+  // "3 selected" is a sentence, so it is a catalogue entry with a count rather
+  // than string concatenation — the plural form differs by language.
+  const manySelected = (count: number): string => t('transactions.nSelected', { count });
 
   const accountLabels = Object.fromEntries(accounts.map((a) => [a.id, a.name]));
   const categoryLabels = Object.fromEntries(categories.map((c) => [c.id, c.name]));
@@ -175,7 +194,7 @@ export default function TransactionFiltersBar({
               set('accountIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)
             }
             renderValue={(selected) =>
-              `${t('common.account')}: ${multiSelectSummary(selected, accountLabels, t('common.any'))}`
+              `${t('common.account')}: ${multiSelectSummary(selected, accountLabels, t('common.any'), manySelected)}`
             }
           >
             {accounts.map((account) => (
@@ -195,7 +214,7 @@ export default function TransactionFiltersBar({
               set('categoryIds', typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)
             }
             renderValue={(selected) =>
-              `${t('common.category')}: ${multiSelectSummary(selected, categoryLabels, t('common.any'))}`
+              `${t('common.category')}: ${multiSelectSummary(selected, categoryLabels, t('common.any'), manySelected)}`
             }
           >
             {categories.map((category) => (
@@ -218,7 +237,7 @@ export default function TransactionFiltersBar({
               )
             }
             renderValue={(selected) =>
-              `${t('transactions.type')}: ${multiSelectSummary(selected, typeLabels, t('common.any'))}`
+              `${t('transactions.type')}: ${multiSelectSummary(selected, typeLabels, t('common.any'), manySelected)}`
             }
           >
             {(Object.keys(TYPE_LABEL_KEYS) as TransactionType[]).map((type) => (
@@ -241,7 +260,7 @@ export default function TransactionFiltersBar({
               )
             }
             renderValue={(selected) =>
-              `${t('common.status')}: ${multiSelectSummary(selected, statusLabels, t('common.any'))}`
+              `${t('common.status')}: ${multiSelectSummary(selected, statusLabels, t('common.any'), manySelected)}`
             }
           >
             {(Object.keys(STATUS_LABEL_KEYS) as TransactionStatus[]).map((status) => (
@@ -254,7 +273,7 @@ export default function TransactionFiltersBar({
 
           {/*
             Selecting several tags matches a row carrying *any* of them, which is
-            what the server's `tagIds` filter does — an EXISTS over the join,
+            what the server's `tagIds` filter does â€” an EXISTS over the join,
             not an intersection.
           */}
           <Select
@@ -270,7 +289,7 @@ export default function TransactionFiltersBar({
               `${t('transactions.tag')}: ${
                 tags.length === 0
                   ? t('transactions.noTags')
-                  : multiSelectSummary(selected, tagLabels, t('common.any'))
+                  : multiSelectSummary(selected, tagLabels, t('common.any'), manySelected)
               }`
             }
           >
@@ -282,17 +301,29 @@ export default function TransactionFiltersBar({
             ))}
           </Select>
 
-          <Tooltip title={t('transactions.clearFilters')}>
-            <span>
-              <IconButton
-                onClick={() => onChange(EMPTY_FILTERS)}
-                disabled={!hasActiveFilters(filters) && !filters.search}
-                aria-label={t('transactions.clearFilters')}
-              >
-                <ClearIcon />
-              </IconButton>
-            </span>
-          </Tooltip>
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={filters.includeDeleted}
+                  onChange={(e) => set('includeDeleted', e.target.checked)}
+                />
+              }
+              label={<Typography variant="body2">{t('transactions.showDeleted')}</Typography>}
+            />
+            <Tooltip title={t('transactions.clearFilters')}>
+              <span>
+                <IconButton
+                  onClick={() => onChange(EMPTY_FILTERS)}
+                  disabled={!hasActiveFilters(filters) && !filters.search}
+                  aria-label={t('transactions.clearFilters')}
+                >
+                  <ClearIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Stack>
         </Box>
       </CardContent>
     </Card>

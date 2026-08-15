@@ -48,6 +48,31 @@ describe('account balances', () => {
     expect(await balanceOf(account.id)).toBe('60.0000');
   });
 
+  it('hides a deleted row until asked for it, and names it so it can be restored', async () => {
+    const user = await registerUser();
+    const account = await createAccount(user, { initialBalance: '100.00' });
+    const transaction = await createTransaction(user, account.id, { type: 'expense', amount: '40.00' });
+    const list = `/api/v1/workspaces/${user.workspaceId}/transactions`;
+
+    await api().delete(`${list}/${transaction.id}`).set(user.auth).expect(204);
+
+    const hidden = await api().get(list).set(user.auth).expect(200);
+    expect(hidden.body.items).toHaveLength(0);
+
+    // Without this the restore endpoint is unreachable: nothing can name the
+    // row to restore, because nothing can list what was deleted.
+    const shown = await api().get(`${list}?includeDeleted=true`).set(user.auth).expect(200);
+    expect(shown.body.items).toHaveLength(1);
+    expect(shown.body.items[0].id).toBe(transaction.id);
+    expect(shown.body.items[0].deletedAt).toEqual(expect.any(String));
+
+    await api().post(`${list}/${transaction.id}/restore`).set(user.auth).expect(204);
+
+    const restored = await api().get(list).set(user.auth).expect(200);
+    expect(restored.body.items).toHaveLength(1);
+    expect(restored.body.items[0].deletedAt).toBeNull();
+  });
+
   it('follows an edited amount', async () => {
     const user = await registerUser();
     const account = await createAccount(user, { initialBalance: '100.00' });

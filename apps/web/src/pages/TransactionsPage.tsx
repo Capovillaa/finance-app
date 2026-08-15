@@ -10,9 +10,12 @@ import { useListAccountsQuery } from '../api/endpoints/accounts';
 import { useListCategoriesQuery } from '../api/endpoints/categories';
 import { useListTagsQuery } from '../api/endpoints/tags';
 import {
+  useBulkCategorizeMutation,
+  useConfirmTransactionMutation,
   useDeleteTransactionMutation,
   useGetTransactionQuery,
   useListTransactionsQuery,
+  useRestoreTransactionMutation,
 } from '../api/endpoints/transactions';
 import type { TransactionFilters } from '../api/endpoints/transactions';
 import { useListMembersQuery } from '../api/endpoints/workspaces';
@@ -22,6 +25,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import PageHeader from '../components/PageHeader';
+import BulkActionsBar from '../features/transactions/BulkActionsBar';
 import ImportDialog from '../features/transactions/ImportDialog';
 import SplitsDialog from '../features/transactions/SplitsDialog';
 import TagManagerDialog from '../features/transactions/TagManagerDialog';
@@ -63,6 +67,9 @@ function toApiFilters(filters: TransactionFilterState, page: number): Transactio
     minAmount: filters.minAmount || undefined,
     maxAmount: filters.maxAmount || undefined,
     search: filters.search || undefined,
+    // Sent only when on: the API defaults it to false, and an explicit
+    // `includeDeleted=false` on every request is noise in the query string.
+    includeDeleted: filters.includeDeleted || undefined,
   };
 }
 
@@ -81,6 +88,7 @@ export default function TransactionsPage(): ReactElement {
   const [deleting, setDeleting] = useState<Transaction | undefined>(undefined);
   const [viewing, setViewing] = useState<Transaction | undefined>(undefined);
   const [splitting, setSplitting] = useState<Transaction | undefined>(undefined);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const debouncedSearch = useDebounced(filters.search, 350);
   const appliedFilters: TransactionFilterState = { ...filters, search: debouncedSearch };
@@ -100,7 +108,15 @@ export default function TransactionsPage(): ReactElement {
     filters.statuses,
     filters.minAmount,
     filters.maxAmount,
+    filters.includeDeleted,
   ]);
+
+  // A selection is a set of ids on the page in front of you. Once the page or
+  // the filters move, those rows may not be on screen any more, and acting on
+  // rows the user can no longer see is exactly the surprise to avoid.
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [page, appliedFilters.search, filters]);
 
   const accounts = useListAccountsQuery(workspace ? { workspaceId: workspace.id } : skipToken);
   const categories = useListCategoriesQuery(workspace ? { workspaceId: workspace.id } : skipToken);
@@ -120,8 +136,40 @@ export default function TransactionsPage(): ReactElement {
   );
 
   const [deleteTransaction, { isLoading: deletingInFlight }] = useDeleteTransactionMutation();
+  const [confirmTransaction] = useConfirmTransactionMutation();
+  const [restoreTransaction] = useRestoreTransactionMutation();
+  const [bulkCategorize, { isLoading: bulkInFlight }] = useBulkCategorizeMutation();
 
   const role = workspace?.role;
+
+  const toggleSelect = (id: string): void => {
+    setSelectedIds((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
+  };
+
+  const handleConfirm = async (transaction: Transaction): Promise<void> => {
+    if (!workspace) return;
+    await confirmTransaction({ workspaceId: workspace.id, id: transaction.id })
+      .unwrap()
+      .catch(() => null);
+  };
+
+  const handleRestore = async (transaction: Transaction): Promise<void> => {
+    if (!workspace) return;
+    await restoreTransaction({ workspaceId: workspace.id, id: transaction.id })
+      .unwrap()
+      .catch(() => null);
+  };
+
+  const handleBulkCategorize = async (categoryId: string | null): Promise<void> => {
+    if (!workspace || selectedIds.length === 0) return;
+    const ok = await bulkCategorize({ workspaceId: workspace.id, transactionIds: selectedIds, categoryId })
+      .unwrap()
+      .then(() => true)
+      .catch(() => false);
+    if (ok) setSelectedIds([]);
+  };
 
   const openCreate = (): void => {
     setEditing(undefined);
@@ -207,14 +255,30 @@ export default function TransactionsPage(): ReactElement {
             />
           </Box>
         ) : (
-          <TransactionLedger
-            transactions={data?.items ?? []}
-            loading={transactions.isLoading || workspaceLoading}
-            role={role}
-            onOpen={setViewing}
-            onEdit={openEdit}
-            onDelete={setDeleting}
-          />
+          <>
+            {canEdit(role) && selectedIds.length > 0 ? (
+              <BulkActionsBar
+                selectedCount={selectedIds.length}
+                categories={categories.data?.categories ?? []}
+                applying={bulkInFlight}
+                onApply={(categoryId) => void handleBulkCategorize(categoryId)}
+                onClear={() => setSelectedIds([])}
+              />
+            ) : null}
+
+            <TransactionLedger
+              transactions={data?.items ?? []}
+              loading={transactions.isLoading || workspaceLoading}
+              role={role}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onOpen={setViewing}
+              onEdit={openEdit}
+              onDelete={setDeleting}
+              onConfirm={(transaction) => void handleConfirm(transaction)}
+              onRestore={(transaction) => void handleRestore(transaction)}
+            />
+          </>
         )}
 
         {data && data.totalPages > 1 ? (
