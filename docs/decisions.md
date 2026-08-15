@@ -984,6 +984,52 @@ fallback: the job logged the error and, because rates were already on record, wr
 
 ---
 
+### Reconciliation is a dialog with its own history, and the difference is not coloured
+
+The API has had `POST` and `GET /accounts/:id/reconciliations` since the first session, and both
+shapes have been in the specification since phase 2 — there was simply no way to reach them. The
+client half is one dialog on the Accounts card menu.
+
+**The form and the history belong together.** They could have been an "act" dialog and a separate
+"history" panel, but the history is how you tell whether today's difference is news: an account
+that has balanced every month and is suddenly out by 40 has one missing entry, and one that has
+never balanced has a different problem entirely. It follows `ContributionsDialog`'s shape — act at
+the top, history beneath — and, like it, shows the history to a `viewer` while hiding the form,
+because `GET` is viewer and `POST` is editor.
+
+**Which meant the account card's overflow menu could no longer be gated on `canEdit`.** It used to
+render only for an editor, since every item in it wrote something. Reconciliation history is
+readable by everyone, so the menu now renders for every role and each writing item carries its own
+guard. This is the general shape to follow: gate the item, not the container, as soon as the
+container holds one thing a viewer may do.
+
+**The difference is deliberately not coloured by its sign.** The first rendering used the money
+palette — negative red, positive green — because that is what every other figure in the app does.
+Seen on screen it was plainly wrong: a positive difference is the bank holding money the ledger has
+never been told about, and green reads as a gain. The state is already stated twice on the row, by
+the caution spine and by the word `Open`, so the figure stays plain text and only an exact zero is
+muted. Same family of mistake as the year-over-year table's green "−100%" for a month that has not
+happened yet: an arithmetic sign is not a judgement.
+
+**Both directions of a mismatch get their own sentence**, naming what is probably missing rather
+than printing a signed number and leaving the reader to work out which way round it is. Under
+pressure — which is when someone reconciles — "the bank knows about something this workspace does
+not" is worth more than `+250.00`.
+
+**One bound moved into `@finance/schemas` as a direct consequence.** The reconciliation notes cap
+was a literal `z.string().max(500)` in `accounts/routes.ts`, with a comment explaining that it was
+allowed to be a literal precisely because reconciliation had no client form and therefore no second
+declaration to keep in step. Building the form made that false, so it is `LIMITS.reconciliationNotes`
+and `reconciliationNotesField` now. The regenerated specification came out byte-identical, which is
+the check that the move changed nothing about what the API accepts.
+
+**Verified in a real browser**, against the real API: a mismatch (out by 250, warning, the row
+carrying its caution spine), a match that froze two transactions and reported so in the plural, a
+second run that correctly found nothing left to freeze, and `GET /transactions` confirming
+`isReconciled` on both rows afterwards. Also seen in dark mode and in Portuguese.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

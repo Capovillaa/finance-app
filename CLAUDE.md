@@ -87,7 +87,12 @@ anyway — the server is still the authority.
 Per-screen notes:
 
 - **Accounts** — grid of cards, create/edit dialog, archive toggle, role-gated
-  delete. Reconciliation and per-account statement history are not built yet.
+  delete, and **reconciliation** (`ReconcileDialog`, opened from the card's
+  overflow menu): a statement date and balance in, a verdict out, and the
+  account's past reconciliations beneath. The card's menu is **no longer gated
+  on `canEdit`** — reconciliation history is viewer-readable, so every role has
+  at least one item in it and the writing items are gated individually.
+  Per-account statement history beyond that list is still unbuilt.
 - **Transactions** — filterable/searchable ledger with pagination, a
   create/edit dialog for income/expense rows, **transfers** (own dialog, with a
   destination-amount field that appears only across currencies), **tags**
@@ -766,10 +771,12 @@ await page.screenshot({ path: 'dashboard.png', fullPage: true });
    ambiguous the moment the dialog is open. Use
    `page.locator('[role="dialog"] button[type="submit"]')`, which is unambiguous
    and survives a label change.
-2. **The nav items are buttons.** MUI's `ListItemButton` carries
-   `role="button"`, so a loose name regex like `/account/i` matches the sidebar
-   link before the "Add account" button and quietly navigates instead of opening
-   the dialog. Match exactly.
+2. **The nav items are links, not buttons.** `ListItemButton` is rendered with
+   `component={Link}`, so each one matches `getByRole('link')` and **not**
+   `getByRole('button')` — an earlier version of this note said the opposite and
+   cost a run. Match the name exactly too: a loose regex like `/account/i` finds
+   the sidebar entry before the "Add account" button and quietly navigates
+   instead of opening the dialog.
 3. **A form needs its `<Select>`s filled or it fails on those instead.** Click
    the `[role="combobox"]` and then `li[role="option"]` — the field you are
    actually testing never gets to report anything until the required selects hold
@@ -888,9 +895,9 @@ integration. Smaller known gaps, none of them oversights, all re-checked while
 generating the client's types: **bulk categorise, confirm and restore have no
 UI** though the API has them and now publishes their exact shapes
 (`POST /transactions/bulk-categorize`, `/:id/confirm`, `/:id/restore` — each is
-one button); **account reconciliation and per-account statement history have no
-UI**, though `AccountReconciliation` and `ReconciliationResult` are both in the
-specification; the workspace settings screen cannot create a workspace (the
+one button); ~~**account reconciliation has no UI**~~ — **built**, see section 2,
+though per-account statement history beyond the reconciliation list still is
+not; the workspace settings screen cannot create a workspace (the
 switcher does that); a revoked invitation cannot be re-sent, because the token
 only ever exists in the email; CSV import reads files as UTF-8 only, and
 supports no other statement format (OFX, QIF).

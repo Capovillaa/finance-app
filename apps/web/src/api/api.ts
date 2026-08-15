@@ -22,6 +22,7 @@ export const api = createApi({
     'Import',
     'Invitation',
     'Notification',
+    'Reconciliation',
     'Recurring',
     'Tag',
     'Transaction',

@@ -22,6 +22,7 @@ import ErrorState from '../components/ErrorState';
 import PageHeader from '../components/PageHeader';
 import AccountCard from '../features/accounts/AccountCard';
 import AccountFormDialog from '../features/accounts/AccountFormDialog';
+import ReconcileDialog from '../features/accounts/ReconcileDialog';
 import { useActiveWorkspace } from '../features/workspace/useActiveWorkspace';
 import { formatMoney } from '../lib/format';
 import { canEdit } from '../lib/permissions';
@@ -33,6 +34,7 @@ export default function AccountsPage(): ReactElement {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Account | undefined>(undefined);
   const [deleting, setDeleting] = useState<Account | undefined>(undefined);
+  const [reconciling, setReconciling] = useState<Account | undefined>(undefined);
 
   const { data, error, isLoading, refetch } = useListAccountsQuery(
     workspace ? { workspaceId: workspace.id, includeArchived } : skipToken,
@@ -145,6 +147,7 @@ export default function AccountsPage(): ReactElement {
               onEdit={() => openEdit(account)}
               onToggleArchive={() => void handleToggleArchive(account)}
               onDelete={() => setDeleting(account)}
+              onReconcile={() => setReconciling(account)}
             />
           ))}
         </Box>
@@ -156,6 +159,16 @@ export default function AccountsPage(): ReactElement {
           workspaceId={workspace.id}
           account={editing}
           onClose={() => setFormOpen(false)}
+        />
+      ) : null}
+
+      {workspace ? (
+        <ReconcileDialog
+          open={Boolean(reconciling)}
+          workspaceId={workspace.id}
+          account={reconciling}
+          role={role}
+          onClose={() => setReconciling(undefined)}
         />
       ) : null}
 

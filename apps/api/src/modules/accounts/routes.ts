@@ -6,6 +6,7 @@ import {
   iconField,
   institutionField,
   nameField,
+  reconciliationNotesField,
 } from '@finance/schemas';
 import { Router } from 'express';
 import { z } from 'zod/v4';
@@ -135,9 +136,7 @@ accountRouter.post(
     body: z.object({
       statementDate: dateSchema,
       statementBalance: moneySchema,
-      // A literal, not a shared limit: reconciliation has no client form, so
-      // there is no second declaration of this bound to keep in step.
-      notes: z.string().max(500).nullish(),
+      notes: reconciliationNotesField.nullish(),
       markTransactions: z.boolean().optional(),
     }),
   }),

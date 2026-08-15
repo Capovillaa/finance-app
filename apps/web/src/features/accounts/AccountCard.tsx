@@ -1,4 +1,4 @@
-import { ArchiveIcon, DeleteIcon, EditIcon, MoreVertIcon, UnarchiveIcon } from '../../icons';
+import { ArchiveIcon, DeleteIcon, EditIcon, MoreVertIcon, ReconcileIcon, UnarchiveIcon } from '../../icons';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -26,6 +26,7 @@ interface AccountCardProps {
   onEdit: () => void;
   onToggleArchive: () => void;
   onDelete: () => void;
+  onReconcile: () => void;
 }
 
 /**
@@ -37,7 +38,14 @@ interface AccountCardProps {
  * the same spine the ledger uses, so the two forms still read as one system,
  * and the balance is set in the tabular face like every other figure in the app.
  */
-export default function AccountCard({ account, role, onEdit, onToggleArchive, onDelete }: AccountCardProps): ReactElement {
+export default function AccountCard({
+  account,
+  role,
+  onEdit,
+  onToggleArchive,
+  onDelete,
+  onReconcile,
+}: AccountCardProps): ReactElement {
   const { t } = useTranslation();
   const theme = useTheme();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
@@ -79,56 +87,72 @@ export default function AccountCard({ account, role, onEdit, onToggleArchive, on
             </Typography>
           </Stack>
 
-          {canEdit(role) ? (
-            <>
-              <IconButton
-                size="small"
-                onClick={(e: MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget)}
-                aria-label={t('accounts.actionsFor', { name: account.name })}
-                aria-haspopup="menu"
+          {/*
+            The menu is no longer gated on `canEdit`: reconciliation history is
+            readable by a viewer, so every role has at least one item here. The
+            items that write are still gated individually.
+          */}
+          <IconButton
+            size="small"
+            onClick={(e: MouseEvent<HTMLElement>) => setAnchorEl(e.currentTarget)}
+            aria-label={t('accounts.actionsFor', { name: account.name })}
+            aria-haspopup="menu"
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+          <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
+            <MenuItem
+              onClick={() => {
+                setAnchorEl(null);
+                onReconcile();
+              }}
+            >
+              <ListItemIcon>
+                <ReconcileIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>{t('accounts.reconcile.action')}</ListItemText>
+            </MenuItem>
+            {canEdit(role) ? (
+              <MenuItem
+                onClick={() => {
+                  setAnchorEl(null);
+                  onEdit();
+                }}
               >
-                <MoreVertIcon fontSize="small" />
-              </IconButton>
-              <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
-                <MenuItem
-                  onClick={() => {
-                    setAnchorEl(null);
-                    onEdit();
-                  }}
-                >
-                  <ListItemIcon>
-                    <EditIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText>{t('common.edit')}</ListItemText>
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setAnchorEl(null);
-                    onToggleArchive();
-                  }}
-                >
-                  <ListItemIcon>
-                    {account.isArchived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
-                  </ListItemIcon>
-                  <ListItemText>{account.isArchived ? t('accounts.unarchive') : t('accounts.archive')}</ListItemText>
-                </MenuItem>
-                {canAdminister(role) ? (
-                  <MenuItem
-                    onClick={() => {
-                      setAnchorEl(null);
-                      onDelete();
-                    }}
-                    sx={{ color: 'error.main' }}
-                  >
-                    <ListItemIcon>
-                      <DeleteIcon fontSize="small" color="error" />
-                    </ListItemIcon>
-                    <ListItemText>{t('common.delete')}</ListItemText>
-                  </MenuItem>
-                ) : null}
-              </Menu>
-            </>
-          ) : null}
+                <ListItemIcon>
+                  <EditIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>{t('common.edit')}</ListItemText>
+              </MenuItem>
+            ) : null}
+            {canEdit(role) ? (
+              <MenuItem
+                onClick={() => {
+                  setAnchorEl(null);
+                  onToggleArchive();
+                }}
+              >
+                <ListItemIcon>
+                  {account.isArchived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
+                </ListItemIcon>
+                <ListItemText>{account.isArchived ? t('accounts.unarchive') : t('accounts.archive')}</ListItemText>
+              </MenuItem>
+            ) : null}
+            {canAdminister(role) ? (
+              <MenuItem
+                onClick={() => {
+                  setAnchorEl(null);
+                  onDelete();
+                }}
+                sx={{ color: 'error.main' }}
+              >
+                <ListItemIcon>
+                  <DeleteIcon fontSize="small" color="error" />
+                </ListItemIcon>
+                <ListItemText>{t('common.delete')}</ListItemText>
+              </MenuItem>
+            ) : null}
+          </Menu>
         </Stack>
 
         <Stack

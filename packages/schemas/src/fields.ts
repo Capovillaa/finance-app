@@ -114,6 +114,7 @@ export const institutionField = z.string().max(LIMITS.institution.max);
 export const colorField = z.string().max(LIMITS.color.max);
 export const iconField = z.string().max(LIMITS.icon.max);
 export const reasonField = z.string().max(LIMITS.reason.max);
+export const reconciliationNotesField = z.string().max(LIMITS.reconciliationNotes.max);
 export const timezoneField = z.string().max(LIMITS.timezone.max);
 export const localeField = z.string().max(LIMITS.locale.max);
 export const urlField = z.string().url('validation.urlInvalid').max(LIMITS.url.max);

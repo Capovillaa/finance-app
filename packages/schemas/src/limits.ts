@@ -27,6 +27,8 @@ export const LIMITS = {
   icon: { max: 40 },
   /** Free text attached to an audited change, e.g. why a budget limit moved. */
   reason: { max: 300 },
+  /** What the user noticed while matching a statement against the ledger. */
+  reconciliationNotes: { max: 500 },
   tagName: { min: 1, max: 40 },
   email: { max: 254 },
   password: { min: 10, max: 200 },

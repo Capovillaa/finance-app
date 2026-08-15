@@ -56,6 +56,29 @@ export const accountFormSchema = z.object({
 
 export type AccountFormValues = z.infer<typeof accountFormSchema>;
 
+/**
+ * The reconcile form.
+ *
+ * `statementBalance` deliberately does *not* use the positive-amount rule the
+ * rest of the app's money fields use: a credit-card statement balance is
+ * legitimately negative, and so is an overdrawn current account. It is required
+ * rather than "empty or valid", because reconciling against nothing has no
+ * meaning — unlike an optional opening balance, which defaults to zero.
+ */
+export const reconciliationFormSchema = z.object({
+  statementDate: z.string().min(1, 'validation.dateRequired'),
+  statementBalance: z
+    .string()
+    .trim()
+    .min(1, 'validation.amountRequired')
+    .refine(isMoneyText, 'validation.decimalAmount'),
+  notes: z.string().max(LIMITS.reconciliationNotes.max).optional(),
+  /** Off freezes nothing; the server only acts on it when the two sides match. */
+  markTransactions: z.boolean(),
+});
+
+export type ReconciliationFormValues = z.infer<typeof reconciliationFormSchema>;
+
 export const DEFAULT_ACCOUNT_FORM_VALUES: AccountFormValues = {
   name: '',
   type: 'checking',

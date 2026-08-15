@@ -47,6 +47,7 @@ import {
   Plus,
   Receipt,
   Repeat,
+  Scales,
   ShieldCheck,
   SignOut,
   SlidersHorizontal,
@@ -196,6 +197,8 @@ export const PlayArrowIcon = makeIcon(Play);
 export const PlayCircleOutlineIcon = makeIcon(PlayCircle);
 export const PlaylistAddCheckIcon = makeIcon(ListChecks);
 export const ReceiptLongIcon = makeIcon(Receipt);
+/** Reconciliation: two figures weighed against each other. */
+export const ReconcileIcon = makeIcon(Scales);
 export const RefreshIcon = makeIcon(ArrowClockwise);
 export const RemoveIcon = makeIcon(Minus);
 export const SavingsIcon = makeIcon(PiggyBank);

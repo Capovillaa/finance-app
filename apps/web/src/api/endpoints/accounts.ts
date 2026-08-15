@@ -1,5 +1,13 @@
 import { api } from '../api';
-import type { Account, AccountListResponse, AccountType, Money } from '../types';
+import type {
+  Account,
+  AccountListResponse,
+  AccountReconciliation,
+  AccountType,
+  DateOnly,
+  Money,
+  ReconciliationResult,
+} from '../types';
 
 export interface AccountInput {
   name: string;
@@ -78,6 +86,46 @@ export const accountsApi = api.injectEndpoints({
         { type: 'Dashboard', id: workspaceId },
       ],
     }),
+
+    listReconciliations: build.query<
+      { reconciliations: AccountReconciliation[] },
+      { workspaceId: string; accountId: string }
+    >({
+      query: ({ workspaceId, accountId }) =>
+        `/workspaces/${workspaceId}/accounts/${accountId}/reconciliations`,
+      providesTags: (_result, _error, { accountId }) => [{ type: 'Reconciliation', id: accountId }],
+    }),
+
+    /**
+     * A reconciliation that balances freezes every cleared transaction up to the
+     * statement date, so this invalidates the ledger as well as its own history —
+     * a frozen row can no longer be edited and the Transactions screen has to
+     * stop offering to.
+     */
+    createReconciliation: build.mutation<
+      { reconciliation: ReconciliationResult },
+      {
+        workspaceId: string;
+        accountId: string;
+        body: {
+          statementDate: DateOnly;
+          statementBalance: Money;
+          notes?: string | null;
+          markTransactions?: boolean;
+        };
+      }
+    >({
+      query: ({ workspaceId, accountId, body }) => ({
+        url: `/workspaces/${workspaceId}/accounts/${accountId}/reconciliations`,
+        method: 'POST',
+        body,
+      }),
+      invalidatesTags: (_result, _error, { workspaceId, accountId }) => [
+        { type: 'Reconciliation', id: accountId },
+        { type: 'Account', id: accountId },
+        { type: 'Transaction', id: `LIST:${workspaceId}` },
+      ],
+    }),
   }),
 });
 
@@ -87,4 +135,6 @@ export const {
   useCreateAccountMutation,
   useUpdateAccountMutation,
   useDeleteAccountMutation,
+  useListReconciliationsQuery,
+  useCreateReconciliationMutation,
 } = accountsApi;

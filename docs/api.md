@@ -154,6 +154,9 @@ Types: `checking`, `savings`, `credit_card`, `investment`, `cash`, `loan`.
 
 Reconciliation compares your statement against the computed balance. A match completes and marks
 those transactions reconciled (which freezes them); a mismatch stays `open` with the difference.
+`difference` is the statement minus the ledger, so a positive figure is money the ledger has not
+been told about. A second `POST` for a statement date already on record **replaces** that
+reconciliation rather than adding another.
 
 ## Categories — `/workspaces/:workspaceId/categories`
 
