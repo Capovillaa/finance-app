@@ -111,6 +111,14 @@ Passwords must be at least 10 characters and contain both letters and digits.
 | GET | `/` | Supported currencies. |
 | GET | `/rate?from=BRL&to=USD&asOf=2026-01-15` | Rate on a date, resolving direct, inverse or cross pairs. |
 
+Rates are refreshed daily by the `refresh_rates` maintenance job from whichever provider
+`EXCHANGE_RATE_PROVIDER` selects: `static` (indicative values baked into the code, the default),
+`frankfurter` (the ECB's daily reference rates, no API key) or `openexchangerates` (needs
+`EXCHANGE_RATE_API_KEY`). A rate is stored under the date its **provider** published it, so
+`asOf` resolves to the rate that was really in force that day rather than to the day it was
+fetched — an ECB feed asked on a Sunday answers with Friday's. A currency the provider does not
+quote keeps whatever rate it last had.
+
 ## Workspaces — `/workspaces`
 
 | Method | Path | Role |

@@ -919,13 +919,79 @@ regenerated apart.
 
 ---
 
+### Live exchange rates: one provider interface, and a fallback that cannot do harm
+
+Until this session no rate in the system had ever come from outside the code. `refreshStaticRates()`
+re-inserted seven hardcoded BRL pairs every time the `refresh_rates` maintenance job ran, and
+`EXCHANGE_RATE_PROVIDER=openexchangerates` only logged "not implemented" before doing the same
+thing. Every transaction already stored the rate that applied on its own day, so the historical
+machinery was real; the numbers going into it were not.
+
+**A `RateProvider` is one method, and `providers.ts` imports neither `env` nor the database.**
+`fetchLatest(symbols, preferredBase)` returns a normalised quote — the provider's base, the
+provider's date, and rates as decimal strings. The service decides which provider to build and
+from what configuration; the module only knows how to talk to one. `fetch` is injectable, so the
+whole file is unit-testable with no network, no database and no environment, which is why its
+seventeen tests run in the fast lane alongside money and dates.
+
+**Two providers, and the second one is the point.** Open Exchange Rates is there because the
+environment variable already named it, and because it is what a real deployment is most likely to
+buy. **Frankfurter** — the ECB's daily reference rates — is there because it needs no API key,
+which means the live path can be *run* on a fresh checkout rather than only reasoned about. It was:
+six pairs landed in the development database from the real ECB feed, and `getRate` then answered
+BRL→USD directly (`0.19319`), USD→BRL by inversion (`5.1762513588`) and USD→EUR by crossing
+through BRL (`0.8645375019`).
+
+**Providers quote against their own base; we store against ours.** The free Open Exchange Rates
+plan quotes USD and nothing else, so `rebase()` divides: BRL→EUR is (USD→EUR) / (USD→BRL), and the
+provider's own base becomes one of our quote currencies at the reciprocal. Storing everything
+against `BASE_CURRENCY` keeps the table one shape regardless of who filled it, and keeps the
+commonest pair a single index hit instead of a cross-rate join.
+
+**It only stores currencies the table already knows.** `exchange_rates` has foreign keys into
+`currencies`; the ECB publishes thirty currencies against our eight, and one unknown code would
+fail the entire insert rather than its own row. `rebase()` takes the supported set and filters.
+The visible consequence is that ARS — which is in `currencies` and is not an ECB currency — keeps
+its static rate while the other seven go live, which is the correct outcome and not a gap.
+
+**A row is stamped with the provider's date, not today's.** The ECB publishes on business days, so
+a Sunday refresh legitimately rewrites Friday's row rather than inventing a Sunday one. This is
+what makes "every transaction keeps the rate that applied on the day it happened" a true statement
+rather than a structural one, and it is why re-running the job is an upsert on the same day rather
+than a new row every time.
+
+**A failed refresh must not overwrite good rates with indicative ones.** The obvious fallback —
+catch the error, call `refreshStaticRates()` — would replace a real rate with a made-up one every
+time the network hiccuped. `getRate` already resolves the most recent rate at or before the date
+it is asked about, so a missed day costs freshness and nothing else. The static table is therefore
+written only when there is nothing at all on record: a fresh install whose very first refresh could
+not reach the provider. Everything else is logged and left alone, and the job still reports success
+because a stale rate is not a broken job.
+
+**An error message may not carry the API key.** Open Exchange Rates authenticates with `app_id` in
+the query string, so every failure path prints the origin and path only. The body is read as text
+and parsed here rather than through `response.json()`, so a captive portal or an HTML error page
+says "returned a body that is not JSON" instead of surfacing a bare syntax error.
+
+**One real bug, found by running it rather than by typechecking it.** `.env.example` ships
+`EXCHANGE_RATE_API_URL=` — a declared, empty variable, which dotenv hands over as `''`, not as
+absent. `options.apiUrl ?? DEFAULT` keeps the empty string, `${endpoint}/latest` becomes `/latest`,
+and `new URL` throws `Invalid URL` before a single request is made. Both ends are fixed: `env.ts`
+normalises a blank optional string to `undefined`, and the provider treats a blank override as no
+override. **A `.env` variable that exists but is empty is `''`, and `??` will not save you** — use
+it for any optional string read from the environment. The failure was also a free test of the
+fallback: the job logged the error and, because rates were already on record, wrote nothing.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.
 - **Push notifications.** `push_devices` exists and deliveries are recorded, then marked
   `skipped` — no provider is configured.
-- **Live exchange rates.** `EXCHANGE_RATE_PROVIDER=static` ships indicative BRL rates. The refresh
-  job and the rate table are provider-shaped, so a real feed slots in behind `refreshStaticRates`.
+- ~~**Live exchange rates.**~~ Built — see "Live exchange rates: one provider interface" above.
+  `EXCHANGE_RATE_PROVIDER=static` is still the default and still ships indicative BRL rates, so a
+  checkout with no network behaves exactly as before.
 - **PDF export.** CSV export and a structured statement endpoint are implemented; rendering to PDF
   belongs with the client, which has the layout.
 - ~~**CSV import.**~~ Built — see "CSV import is preview-then-commit" above.

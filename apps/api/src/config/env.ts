@@ -10,6 +10,14 @@ loadDotenv(); // allow an apps/api/.env to override, if present
 
 const durationPattern = /^\d+(ms|s|m|h|d)$/;
 
+const blankAsUndefined = z
+  .string()
+  .optional()
+  .transform((v) => {
+    const trimmed = v?.trim();
+    return trimmed ? trimmed : undefined;
+  });
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -48,9 +56,13 @@ const schema = z.object({
     .length(3)
     .default('BRL')
     .transform((v) => v.toUpperCase()),
-  EXCHANGE_RATE_PROVIDER: z.enum(['static', 'openexchangerates']).default('static'),
-  EXCHANGE_RATE_API_URL: z.string().optional(),
-  EXCHANGE_RATE_API_KEY: z.string().optional(),
+  EXCHANGE_RATE_PROVIDER: z.enum(['static', 'openexchangerates', 'frankfurter']).default('static'),
+  // A declared-but-empty line in `.env` (`EXCHANGE_RATE_API_URL=`) reaches us as
+  // `''`, not as absent, and `??` will happily keep it — which is how an empty
+  // override once produced `new URL('/latest')`. Blank means unset here.
+  EXCHANGE_RATE_API_URL: blankAsUndefined,
+  EXCHANGE_RATE_API_KEY: blankAsUndefined,
+  EXCHANGE_RATE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 
   ENABLE_SCHEDULER: z
     .enum(['true', 'false'])

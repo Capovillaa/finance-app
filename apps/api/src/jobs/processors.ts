@@ -5,7 +5,7 @@ import { notificationEmail, sendEmail } from '../lib/email.js';
 import { resolveLocale } from '../lib/i18n.js';
 import { logger } from '../lib/logger.js';
 import { evaluateWorkspaceAlerts, workspacesWithAlerts } from '../modules/alerts/engine.js';
-import { refreshStaticRates } from '../modules/currencies/service.js';
+import { refreshRates } from '../modules/currencies/service.js';
 import { markDelivery, pendingDeliveries } from '../modules/notifications/service.js';
 import { purgeExpiredTokens } from '../modules/auth/tokens.js';
 import { purgeExpiredPreviews } from '../modules/imports/service.js';
@@ -117,12 +117,10 @@ export async function processMaintenance(data: MaintenanceJobData): Promise<{ ta
       return { task: data.task, affected };
     }
     case 'refresh_rates': {
-      // Only the static provider is implemented; a live provider would slot in
-      // behind the same call.
-      if (env.EXCHANGE_RATE_PROVIDER !== 'static') {
-        logger.warn({ provider: env.EXCHANGE_RATE_PROVIDER }, 'Live rate provider not implemented; using static rates');
-      }
-      const affected = await refreshStaticRates();
+      // Which provider answers is `EXCHANGE_RATE_PROVIDER`'s business, and a
+      // live provider that cannot be reached falls back inside the service
+      // rather than failing the job — see `refreshRates`.
+      const affected = await refreshRates();
       return { task: data.task, affected };
     }
     case 'purge_import_previews': {

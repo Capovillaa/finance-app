@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-293; see section 4 for the current command. The compiled `dist/server.js`
+319; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -461,15 +461,18 @@ D:\finance_app
 │   │   │                            # every module with routes also has
 │   │   │                            # responses.ts (what it returns — see 5e);
 │   │   │                            # imports also has mapping.ts: pure
-│   │   │                            # column/date/sign inference
+│   │   │                            # column/date/sign inference; currencies
+│   │   │                            # also has providers.ts: the live rate
+│   │   │                            # feeds, with an injectable fetch
 │   │   ├── scripts/
 │   │   │   ├── copy-assets.mjs      # build step: copies i18n/locales into dist
 │   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
 │   │   └── tests/
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
-│   │       │                        # import-mapping, openapi
+│   │       │                        # import-mapping, openapi, exchange-rates
 │   │       └── integration/         # auth, workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
+│   │                                # currencies,
 │   │                                # response-contracts (one success call per
 │   │                                #   endpoint that declares a response schema)
 │   └── web/                         # @finance/web — React client (Vite)
@@ -628,8 +631,8 @@ npm run dev:worker --workspace=@finance/api
 ### Tests
 
 ```bash
-npm test                 # all 293 — needs Postgres, and only Postgres
-npm run test:unit        # 160 pure units, no infrastructure at all
+npm test                 # all 319 — needs Postgres, and only Postgres
+npm run test:unit        # 178 pure units, no infrastructure at all
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
 npm run build --workspace=@finance/api
@@ -823,12 +826,11 @@ These are not preferences, they are workarounds for real failures observed here:
 
 ## 5. Next tasks, in priority order
 
-**Everything numbered 1–7 is built.** The next piece of work is **8, live
-exchange rates** — it is the only remaining item that changes what the product
-does, rather than how it is deployed or hardened. The three small client gaps
-after the list (bulk categorise / confirm / restore, reconciliation, and the
-untranslated strings in `SplitsDialog`) are each an afternoon at most and are
-good warm-up work if you want to start somewhere smaller.
+**Everything numbered 1–8 is built.** What is left — 9 and 10 — is about
+deploying and hardening rather than about what the product does. The three small
+client gaps after the list (bulk categorise / confirm / restore, reconciliation,
+and the untranslated strings in `SplitsDialog`) are each an afternoon at most and
+are the best place to start if you want a feature rather than an operations task.
 
 1. ~~**Web client scaffold.**~~ **Done.** Vite, Material-UI, Redux Toolkit and
    Recharts, with React Hook Form and Zod for forms. Auth, workspace switching,
@@ -869,26 +871,12 @@ good warm-up work if you want to start somewhere smaller.
    including the Postgres container coming up, `finance_test` being created
    from nothing, all 8 migrations applying and 222 tests passing. It is not a
    workflow that merely looks right; it has run.
-8. **Live exchange rates.** Today there is no live provider anywhere in the
-   app — `modules/currencies/service.ts`'s `refreshStaticRates()` re-inserts
-   the same hardcoded `STATIC_BRL_RATES` table (indicative BRL-based rates,
-   e.g. `USD: '0.1850'`) every time the `refresh_rates` maintenance job runs;
-   nothing is ever fetched from the internet. `env.EXCHANGE_RATE_PROVIDER`
-   already has an `'openexchangerates'` option in its Zod schema, but
-   `jobs/processors.ts`'s `processMaintenance` only logs a warning ("Live rate
-   provider not implemented; using static rates") when it sees that value and
-   falls back to the static table regardless — the option is a placeholder,
-   not a working path. Building this means: an HTTP client for a real
-   provider (Open Exchange Rates, exchangerate.host, or similar — pick one
-   with a free tier, this is a demo-scale app), a `fetchLiveRates()`
-   alternative to `refreshStaticRates()` in `currencies/service.ts`, wiring
-   `processMaintenance`'s `refresh_rates` case to call whichever the env var
-   selects, and an API key in `.env`. No schema change needed — the
-   `exchange_rates` table's `source` column already distinguishes `'static'`
-   rows from a real provider's. Every transaction already stores the rate that
-   applied on the day it happened (`docs/decisions.md`), so once real rates
-   are being written, that historical correctness becomes genuine rather than
-   only structurally supported.
+8. ~~**Live exchange rates.**~~ **Done** (section 5f). `EXCHANGE_RATE_PROVIDER`
+   now selects between the static table, **Frankfurter** (the ECB's daily
+   reference rates, no API key) and **Open Exchange Rates** (a key, USD-quoted
+   on the free plan). Verified against the real ECB feed, not only stubbed.
+   No schema change was needed — the `exchange_rates` table's `source` column
+   already distinguished a provider's rows from the static ones.
 9. **Rate-limit and auth hardening review** before any real deployment: the
    limiter falls back to in-memory when Redis is absent, and that fallback is
    per-process.
@@ -1466,6 +1454,73 @@ Both are the payoff, and both were invisible to a typecheck before:
 
 ---
 
+## 5f. Live exchange rates
+
+Task 8, built in a later session. Full reasoning is in `docs/decisions.md`,
+"Live exchange rates: one provider interface, and a fallback that cannot do
+harm". What you need in order not to break it:
+
+**`EXCHANGE_RATE_PROVIDER` picks one of three**, and `static` is still the
+default, so a checkout with no network behaves exactly as it did before:
+
+| Value | What it is | Needs |
+| --- | --- | --- |
+| `static` | seven indicative BRL pairs hardcoded in `service.ts` | nothing |
+| `frankfurter` | the ECB's daily reference rates, republished | nothing |
+| `openexchangerates` | commercial, USD-quoted on the free plan | `EXCHANGE_RATE_API_KEY` |
+
+**`modules/currencies/providers.ts` imports neither `config/env` nor
+`db/client`.** That is what lets its eighteen tests run in the unit lane with no
+infrastructure at all: `fetch` is injectable (`ProviderOptions.fetchImpl`), and
+everything else in the file is pure. The service decides *which* provider to
+build and from what configuration; the provider only knows how to talk to one.
+**Keep it that way** — the moment it reads `env`, the test file needs the same
+environment stubbing `tests/unit/openapi.test.ts` has to do.
+
+**Adding a provider** is: a payload schema, a `fetchLatest` that normalises into
+a `RateQuote` (base, date, rates as decimal *strings*), a case in
+`createRateProvider`, and the name in `LIVE_PROVIDERS` **and** in `env.ts`'s
+enum. Nothing else — `rebase()`, the filtering, the upsert and the fallback are
+all shared.
+
+Five things that are deliberate, in rough order of how expensive they'd be to
+rediscover:
+
+1. **A row carries the provider's date, not today's.** The ECB publishes on
+   business days, so a Sunday refresh rewrites Friday's row rather than
+   inventing a Sunday one. Do not "fix" this to `today()` — it is the whole
+   reason a historical conversion is genuinely historical.
+2. **A failed live refresh never falls back to the static table** unless there
+   are no rates on record at all. `getRate` already resolves the most recent
+   rate at or before the date it is asked about, so a missed day costs
+   freshness and nothing else; overwriting a real rate with an indicative one
+   every time the network hiccups would cost correctness.
+3. **Only currencies in the `currencies` table are stored.** `exchange_rates`
+   has foreign keys into it, and one unknown code fails the whole insert. This
+   is why ARS keeps its static rate under `frankfurter` — it is not an ECB
+   currency — which is correct, not a gap.
+4. **Rates become strings the moment they arrive** and are never a `number`
+   again, following the same rule money does. `rebase()` divides through
+   `Decimal`.
+5. **An error message may not carry the API key.** Open Exchange Rates
+   authenticates with `app_id` in the query string, so failures print the
+   origin and path only, and there is a test asserting the key does not appear.
+
+**A `.env` variable that exists but is empty is `''`, not `undefined`, and `??`
+will not save you.** `EXCHANGE_RATE_API_URL=` in `.env.example` turned
+`${endpoint}/latest` into `/latest` and `new URL` threw before a request was
+ever made. `env.ts` now normalises a blank optional string to `undefined` via
+`blankAsUndefined`; use it for any new optional string read from the
+environment.
+
+**Verified against the real ECB feed**, not only against a stub: six pairs
+landed in the development database, and `getRate` then answered BRL→USD
+directly, USD→BRL by inversion and USD→EUR by crossing through BRL. To repeat
+it, set `EXCHANGE_RATE_PROVIDER=frankfurter` and call `refreshRates()` — it is
+a dozen lines of scratch script and needs no key.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -1476,6 +1531,17 @@ Never `number`. `lib/money.ts` owns all arithmetic and rounds half-even. Amounts
 cross the API as strings. Every transaction also stores a `base_amount` in the
 workspace's base currency, converted at write time, so analytics never has to
 join rates at read time.
+
+**Exchange rates come from a provider behind one interface, and a failed
+refresh changes nothing.** `EXCHANGE_RATE_PROVIDER` selects the static table
+(the default), Frankfurter or Open Exchange Rates; `modules/currencies/
+providers.ts` normalises whichever answers into one shape and `rebase()`
+re-expresses it against the configured base currency, dropping any code the
+`currencies` table does not know. A row is stamped with the **provider's** date,
+so a transaction still converts at the rate that applied on its own day. A
+provider that cannot be reached is logged and skipped rather than papered over
+with indicative values — the static table is only written when there are no
+rates at all. See section 5f and `docs/decisions.md`.
 
 **Kysely over an ORM.** The reporting queries (recursive category ancestry,
 window functions for net-worth series) are the hard part of this domain, and a

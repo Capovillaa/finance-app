@@ -204,6 +204,16 @@ base currency and the `exchange_rate` used. Historical rows keep the rate that a
 date. Analytics aggregate `base_amount`, so a workspace mixing BRL and USD accounts still produces
 one coherent total.
 
+Rates themselves come from whichever provider `EXCHANGE_RATE_PROVIDER` names — `static` (indicative
+values in the code, the default and what a network-less checkout gets), `frankfurter` (the ECB's
+daily reference rates, no API key) or `openexchangerates` (a key, USD-quoted on the free plan).
+`modules/currencies/providers.ts` holds one `RateProvider` interface, an injectable `fetch` and a
+pure `rebase()` that re-expresses a provider's quote against our own base and drops any currency
+the `currencies` table does not know. Rows carry the **provider's** date, not the day of the
+refresh, which is what makes a historical conversion genuinely historical. A refresh that cannot
+reach its provider is logged and dropped rather than being papered over with static values — see
+`decisions.md`, "Live exchange rates: one provider interface, and a fallback that cannot do harm".
+
 ## Background work
 
 BullMQ over Redis, with stable repeat keys so restarts re-use the existing schedule.

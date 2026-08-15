@@ -1,9 +1,11 @@
 import { sql } from 'kysely';
+import { env } from '../../config/env.js';
 import { db, type Executor } from '../../db/client.js';
 import { today, type DateOnly } from '../../lib/dates.js';
 import { unprocessable } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import { Decimal, rate as formatRate } from '../../lib/money.js';
+import { createRateProvider, rebase, type RateProvider } from './providers.js';
 
 export interface CurrencyRecord {
   code: string;
@@ -178,4 +180,75 @@ export async function refreshStaticRates(asOf: DateOnly = today('UTC')): Promise
   const count = await upsertRates(rows);
   logger.info({ count, asOf }, 'Refreshed static exchange rates');
   return count;
+}
+
+/**
+ * Pulls today's rates from a live provider and stores them against the
+ * configured base currency.
+ *
+ * Two things are deliberate. The rows are stamped with the **provider's** own
+ * date rather than today's, because that is the day the rates are for — the ECB
+ * publishes on business days, so a Sunday refresh legitimately rewrites Friday's
+ * row. And only currencies the `currencies` table knows are stored; a provider
+ * publishing thirty of them against our eight would otherwise fail the insert on
+ * the first one we have never heard of.
+ */
+export async function fetchLiveRates(provider: RateProvider, base: string = env.BASE_CURRENCY): Promise<number> {
+  const supported = new Set((await listCurrencies()).map((c) => c.code.toUpperCase()));
+  const target = base.toUpperCase();
+  if (!supported.has(target)) {
+    throw new Error(`Base currency ${target} is not in the currencies table, so rates cannot be stored against it`);
+  }
+
+  const quote = await provider.fetchLatest([...supported], target);
+  const rows: UpsertRateInput[] = rebase(quote, target, supported).map((row) => ({
+    ...row,
+    asOf: quote.asOf,
+    source: provider.name,
+  }));
+
+  if (rows.length === 0) {
+    throw new Error(`${provider.name} returned no rates this workspace can store`);
+  }
+
+  const count = await upsertRates(rows);
+  logger.info(
+    { provider: provider.name, base: target, asOf: quote.asOf, count, quoted: rows.map((r) => r.quoteCode) },
+    'Refreshed live exchange rates',
+  );
+  return count;
+}
+
+/**
+ * The entry point the maintenance job calls: whichever provider the environment
+ * selects, with a fallback that cannot do harm.
+ *
+ * A failed live refresh must **not** overwrite good rates with indicative ones —
+ * `getRate` already resolves the most recent rate at or before the date it is
+ * asked about, so a missed day costs freshness and nothing else. The static
+ * table is therefore only written when there is nothing at all to fall back on,
+ * which is a fresh install whose very first refresh could not reach the network.
+ */
+export async function refreshRates(asOf: DateOnly = today('UTC')): Promise<number> {
+  if (env.EXCHANGE_RATE_PROVIDER === 'static') return refreshStaticRates(asOf);
+
+  try {
+    const provider = createRateProvider(env.EXCHANGE_RATE_PROVIDER, {
+      apiUrl: env.EXCHANGE_RATE_API_URL,
+      apiKey: env.EXCHANGE_RATE_API_KEY,
+      timeoutMs: env.EXCHANGE_RATE_TIMEOUT_MS,
+    });
+    return await fetchLiveRates(provider);
+  } catch (err) {
+    logger.error({ err, provider: env.EXCHANGE_RATE_PROVIDER }, 'Live exchange-rate refresh failed');
+    return seedStaticRatesIfEmpty(asOf);
+  }
+}
+
+async function seedStaticRatesIfEmpty(asOf: DateOnly): Promise<number> {
+  const existing = await db.selectFrom('exchange_rates').select('id').limit(1).executeTakeFirst();
+  if (existing) return 0;
+
+  logger.warn({ asOf }, 'No exchange rates on record; falling back to the indicative static table');
+  return refreshStaticRates(asOf);
 }
