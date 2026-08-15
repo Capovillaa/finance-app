@@ -1074,6 +1074,60 @@ in `SplitsDialog`; all nine strings are catalogue entries now.
 
 ---
 
+### One image, three entrypoints, and a migration that gates the rollout
+
+`apps/api/Dockerfile` had existed for several sessions and had never worked. It was written
+before `packages/schemas` did, and copied only `apps/api` — so `npm ci` could not resolve the
+workspace dependency and `tsc` could not find its types. It also ended `RUN npm ci || npm install`,
+which turned a lockfile mismatch into a silent fallback. Nothing ever built it, so nothing said so.
+
+**One image, three entrypoints.** The server, the worker and the migration runner are the same
+codebase by design, so they ship as one artifact and differ only by command. That is what makes
+"the worker runs the same code the API does" true of the thing deployed rather than only of the
+repository.
+
+**The migration is a gate, not a sidecar.** In the `app` compose profile `migrate` runs to
+completion and `api` and `worker` wait on `service_completed_successfully`. A failed migration
+stops the rollout instead of leaving a new binary talking to an old schema.
+
+Everything below was found by building and running the thing, and none of it is visible in a
+review of the file:
+
+- **`npm ci --ignore-scripts` does not stop a linked workspace's `prepare`.** `@finance/schemas`
+  compiles itself that way, so a dependency stage holding only manifests dies on
+  `TS5058: The specified path does not exist: 'tsconfig.json'`. The build copies the package whole
+  and lets `prepare` do its job; the production tree then comes from `npm prune --omit=dev` rather
+  than a second `npm ci --omit=dev`, which would hit the same wall with no compiler to run.
+- **`--workspace` scopes which scripts run, not what is installed.** With `apps/web/package.json`
+  in the context, npm installed the client's dependencies too and `prune` kept them — a workspace's
+  own dependencies are not "dev". MUI, Recharts, Framer Motion and 58 MB of icon fonts were sitting
+  in an API image. Omitting that one manifest took `node_modules` from 276 MB to 88 MB.
+- **npm nests what it cannot hoist.** `i18next` landed in `apps/api/node_modules`, and a runtime
+  stage that copied only the root tree produced an image that built, passed a file-existence check
+  and then died on boot with `ERR_MODULE_NOT_FOUND`. Both trees are copied now.
+- **`env_file` beats the image's `ENV`.** `.env` is a development file; without an explicit
+  `NODE_ENV: production` in `environment:` the container ran as `development` and asked pino for
+  `pino-pretty`, a devDependency the pruned image correctly lacks. pino throws on an unresolvable
+  transport *at import*, so the process died before there was a logger to report it — a crash loop
+  whose only clue was a stack trace about "transport target". `lib/logger.ts` now resolves that
+  transport defensively as well, because a missing pretty-printer should cost pretty printing and
+  nothing else.
+- **Debian slim, not alpine**, for the same reason `docker-compose.yml` pins Debian Postgres: a
+  musl image cannot exec its own `/bin/sh` under this machine's Docker Desktop/WSL2 setup.
+
+**CI builds the image and boots its module graph**, which is the part that keeps this from rotting
+again. `docker run … node -e "await import('/app/apps/api/dist/app.js')"` pulls in every route,
+service and library the server touches without opening a socket to anything — exactly the check
+that catches a missing dependency, and exactly what a file-existence pass misses.
+
+Verified by running it: `migrate` applying eight migrations and exiting, `api` reporting
+`{"status":"ready","database":"ok","redis":"ok"}` and healthy to Docker's own healthcheck, `worker`
+registering all four queues and delivering an alert email, a registration and an authenticated
+request round-tripping through the container, and a validation error coming back translated —
+which is also the proof that `copy-assets.mjs`'s catalogues made it into the image.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.
@@ -1084,6 +1138,8 @@ in `SplitsDialog`; all nine strings are catalogue entries now.
   checkout with no network behaves exactly as before.
 - **PDF export.** CSV export and a structured statement endpoint are implemented; rendering to PDF
   belongs with the client, which has the layout.
+- **Hosting.** The image and the compose profile exist and run (see "One image, three entrypoints"
+  above), but nothing is provisioned anywhere: no registry, no TLS termination, no secret store.
 - ~~**CSV import.**~~ Built — see "CSV import is preview-then-commit" above.
 - **OpenAPI response schemas (phase 2).** Underway rather than absent: the mechanism is built and
   two modules are described — see "Response schemas live beside the service" above. The remaining

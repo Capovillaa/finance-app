@@ -43,15 +43,53 @@ services:
       - "${MAILHOG_SMTP_PORT:-1025}:1025"
       - "${MAILHOG_UI_PORT:-8025}:8025"
 
+  # The `app` profile is the deployed shape of the system: one image, three
+  # entrypoints. `docker compose --profile app up -d` brings it up in the right
+  # order, because the schema has to be current before anything serves traffic.
+  #
+  #   migrate  runs to completion, then exits
+  #   api      starts only once migrate succeeded
+  #   worker   likewise
+  #
+  # A failed migration therefore stops the rollout instead of leaving a new
+  # binary talking to an old schema.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: finance-api
+    container_name: finance_migrate
+    profiles: ["app"]
+    # Not `unless-stopped`: this is a job, and a job that succeeded should stay
+    # exited rather than being restarted forever.
+    restart: "no"
+    command: ["node", "apps/api/dist/db/migrate.js", "up"]
+    env_file: .env
+    environment:
+      # See the note on the api service: `.env` is a development file and would
+      # otherwise put a production container into development mode.
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    image: finance-api
     container_name: finance_api
     profiles: ["app"]
     restart: unless-stopped
     env_file: .env
     environment:
+      # `env_file` beats the image's own ENV, and `.env` is a development file —
+      # without this the container runs as `development`, which among other
+      # things asks pino for the `pino-pretty` transport that a pruned
+      # production image does not contain. `environment` beats `env_file`.
+      NODE_ENV: production
       DATABASE_URL: postgres://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance}
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailhog
@@ -59,8 +97,8 @@ services:
     ports:
       - "${PORT:-4000}:4000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -68,19 +106,25 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    image: finance-api
     container_name: finance_worker
     profiles: ["app"]
     restart: unless-stopped
-    command: ["node", "dist/worker.js"]
+    command: ["node", "apps/api/dist/worker.js"]
     env_file: .env
     environment:
+      # `env_file` beats the image's own ENV, and `.env` is a development file —
+      # without this the container runs as `development`, which among other
+      # things asks pino for the `pino-pretty` transport that a pruned
+      # production image does not contain. `environment` beats `env_file`.
+      NODE_ENV: production
       DATABASE_URL: postgres://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance}
       REDIS_URL: redis://redis:6379
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 

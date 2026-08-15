@@ -638,6 +638,13 @@ The worker is a separate process too:
 npm run dev:worker --workspace=@finance/api
 ```
 
+To run the **built** system instead of the dev servers — the same image the
+deployment uses, with migrations gating startup — see section 5g:
+
+```bash
+docker compose --profile app up -d --build
+```
+
 | What | Where |
 | --- | --- |
 | API | http://localhost:4000 (`/health`, `/health/ready`, `/openapi.json`) |
@@ -695,7 +702,8 @@ below for what it was. Any output from these commands is now a real failure.
 
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
 Two jobs run in parallel: **check** (typecheck, both builds, the OpenAPI
-freshness check, the i18n check, unit tests — no services) and **test** (the full suite against a
+freshness check, the i18n check, unit tests, and building the production image
+and booting its module graph — no services) and **test** (the full suite against a
 `postgres:16` service container, then a migration rollback round-trip). Green on
 the first run, in about a minute.
 
@@ -850,11 +858,11 @@ These are not preferences, they are workarounds for real failures observed here:
 
 ## 5. Next tasks, in priority order
 
-**Everything numbered 1–8 is built.** What is left — 9 and 10 — is about
-deploying and hardening rather than about what the product does. The three small
-client gaps after the list (bulk categorise / confirm / restore, reconciliation,
-and the untranslated strings in `SplitsDialog`) are each an afternoon at most and
-are the best place to start if you want a feature rather than an operations task.
+**Everything numbered 1–8 and 10 is built.** The one item left on this list is
+**9, the rate-limit and auth hardening review** — the limiter falls back to
+in-memory when Redis is absent and that fallback is per-process, which matters
+now that the app can actually be deployed as more than one container. The
+smaller gaps listed after it are features rather than operations work.
 
 1. ~~**Web client scaffold.**~~ **Done.** Vite, Material-UI, Redux Toolkit and
    Recharts, with React Hook Form and Zod for forms. Auth, workspace switching,
@@ -904,11 +912,16 @@ are the best place to start if you want a feature rather than an operations task
 9. **Rate-limit and auth hardening review** before any real deployment: the
    limiter falls back to in-memory when Redis is absent, and that fallback is
    per-process.
-10. **Deployment story**: production Dockerfile for API and worker, plus a
-    migration step that runs before rollout.
+10. ~~**Deployment story**~~ **Done** (section 5g). One image, three
+    entrypoints — server, worker, migration runner — with `docker compose
+    --profile app up -d` bringing them up in an order where the schema is
+    current before anything serves traffic. CI now builds the image and boots
+    its module graph, because nothing ever building it is exactly how the old
+    Dockerfile came to be broken.
 
-Not started, deliberately: deployment, and any real payment or bank
-integration. Smaller known gaps, none of them oversights: ~~**bulk categorise,
+Not started, deliberately: any real payment or bank integration, and hosting
+this anywhere — the image and the compose profile exist and run (section 5g),
+but nothing is provisioned, and no registry, TLS or secret store is chosen. Smaller known gaps, none of them oversights: ~~**bulk categorise,
 confirm and restore have no UI**~~ — **built**, see section 2. That entry used
 to claim each was "one button", and only one of them was: bulk categorise needs
 a selection model, and restore needed the list endpoint to be able to return
@@ -1540,6 +1553,65 @@ landed in the development database, and `getRate` then answered BRL→USD
 directly, USD→BRL by inversion and USD→EUR by crossing through BRL. To repeat
 it, set `EXCHANGE_RATE_PROVIDER=frankfurter` and call `refreshRates()` — it is
 a dozen lines of scratch script and needs no key.
+
+---
+
+## 5g. Deployment: one image, three entrypoints
+
+Task 10. Full reasoning is in `docs/decisions.md`, "One image, three
+entrypoints, and a migration that gates the rollout". What you need in order not
+to break it:
+
+```bash
+docker compose --profile app up -d --build   # migrate, then api + worker
+docker compose --profile app logs -f api
+docker compose --profile app down
+```
+
+**`apps/api/Dockerfile` builds from the repository root**, never from its own
+directory — the API depends on the `@finance/schemas` workspace, so the context
+has to contain both packages. The old file copied only `apps/api` and could
+neither install nor compile; it had been broken for several sessions because
+nothing ever built it.
+
+**The `app` compose profile is the deployed shape**: `migrate` runs to
+completion, then `api` and `worker` start behind
+`depends_on: service_completed_successfully`. A failed migration stops the
+rollout instead of leaving a new binary talking to an old schema.
+
+Five things that will bite, all of them found by building and running rather
+than by reading:
+
+1. **`npm ci --ignore-scripts` does not stop a linked workspace's `prepare`.**
+   `@finance/schemas` compiles itself that way, so a stage holding only its
+   `package.json` fails with `TS5058: The specified path does not exist:
+   'tsconfig.json'`. The build copies the package whole and lets `prepare` do
+   its job; production deps come from `npm prune --omit=dev` afterwards rather
+   than from a second `npm ci`, which would hit the same wall with no compiler
+   installed.
+2. **`--workspace` scopes which scripts run, not what gets installed.** With
+   `apps/web/package.json` in the context, npm installed the client's tree too
+   and `prune` kept it — MUI, Recharts, Framer Motion and 58 MB of icon fonts
+   inside the API image. Leaving that manifest out of the build context is what
+   drops it. Do not "tidy up" by copying all the manifests for symmetry.
+3. **Copy the per-workspace `node_modules`, not just the root one.** npm hoists
+   what it can and nests what it cannot; it nested `i18next` under
+   `apps/api/node_modules`. The image built, every file-existence check passed,
+   and the container died on boot with `ERR_MODULE_NOT_FOUND`.
+4. **`env_file` beats the image's `ENV`.** `.env` is a development file, so the
+   compose services set `NODE_ENV: production` in `environment:` (which beats
+   `env_file`) — otherwise a production container runs as `development` and asks
+   pino for the `pino-pretty` transport that a pruned image does not contain.
+   `lib/logger.ts` now resolves that transport defensively too, because failing
+   at import means dying before there is a logger to say why.
+5. **Debian slim, not alpine**, for the same reason `docker-compose.yml` pins
+   Debian Postgres: a musl image cannot exec its own `/bin/sh` under this
+   machine's Docker Desktop/WSL2 setup.
+
+**CI builds the image and boots its module graph.** `docker run … node -e
+"await import('/app/apps/api/dist/app.js')"` pulls in every route, service and
+library without opening a socket, which is exactly the check that catches a
+missing dependency an existence test would miss.
 
 ---
 

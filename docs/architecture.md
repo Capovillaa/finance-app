@@ -21,7 +21,11 @@
 
 The API and the worker are the **same codebase and the same container image**, started with
 different entrypoints (`server.js` / `worker.js`). They share every service module, so a bill
-materialised by the worker goes through exactly the same code as one created from the API.
+materialised by the worker goes through exactly the same code as one created from the API. The
+migration runner (`db/migrate.js`) is the third entrypoint of that same image, and in the `app`
+compose profile it runs to completion before either of the others starts — so a failed migration
+stops the rollout rather than leaving a new binary talking to an old schema. See `decisions.md`,
+"One image, three entrypoints, and a migration that gates the rollout".
 
 ## Layers
 

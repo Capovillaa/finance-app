@@ -79,6 +79,29 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      # The Dockerfile rotted unnoticed for several sessions: it was written
+      # before `packages/schemas` existed and could neither install nor compile.
+      # Nothing catches that except building it, so CI does.
+      - name: Build the production image
+        run: docker build -f apps/api/Dockerfile -t finance-api:ci .
+
+      # Building proves it compiles; this proves it can *run*. Importing the
+      # express app factory pulls in every route, service and library the server
+      # touches, without opening a socket to anything — which is precisely the
+      # check that a file-existence pass fails: an image that built cleanly still
+      # died on boot with `ERR_MODULE_NOT_FOUND: i18next`, because npm had nested
+      # that package under `apps/api/node_modules` and only the root tree had
+      # been copied. The env values are the same throwaways the `test` job uses.
+      - name: The image can load the whole app graph
+        run: |
+          docker run --rm \
+            -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
+            -e JWT_ACCESS_SECRET=ci-access-secret-not-a-real-key-000000 \
+            -e JWT_REFRESH_SECRET=ci-refresh-secret-not-a-real-key-00000 \
+            -e LOG_LEVEL=silent \
+            finance-api:ci \
+            node --input-type=module -e "await import('/app/apps/api/dist/app.js'); console.log('app graph loaded')"
+
   test:
     name: Full suite (real Postgres)
     runs-on: ubuntu-latest

@@ -1,0 +1,19 @@
+# Keeping the build context small is most of the build's speed: the repository's
+# node_modules is far larger than its source, and copying it in would also
+# shadow the install the image does for itself.
+node_modules
+**/node_modules
+**/dist
+packages/schemas/dist
+
+.git
+.github
+.vscode
+
+# Never in an image. `.env` holds the real credentials; the example is the only
+# one that is safe, and nothing in the build reads it anyway.
+.env
+.env.*
+
+*.log
+coverage
