@@ -13,11 +13,16 @@ All requests and responses are JSON unless noted. Authenticated endpoints take
 > them** — a route cannot be added or a bound changed without the spec moving
 > too, and CI fails if the committed copy is stale.
 >
-> This file remains the authority on **responses**, which the spec does not
-> describe yet: the API's handlers return database rows rather than parsing them
-> through a schema, so there is nothing to generate from. Describing responses is
-> phase 2 — see `docs/decisions.md`, "The OpenAPI document is generated from the
-> app that boots".
+> **Responses are in the spec too, all 104 of them**, so it is now the authority
+> on what an endpoint returns as well — and unlike prose, those descriptions are
+> checked against real responses by the integration suite, which is what makes
+> them trustworthy. The client's TypeScript types are generated from the same
+> file. See `docs/decisions.md`, "Response schemas live beside the service, and
+> the test suite proves them".
+>
+> This file remains the place for the things a schema cannot carry: what an
+> endpoint is *for*, when to reach for it, and the per-type keys inside an alert
+> rule's free-form `config`.
 
 ## Conventions
 

@@ -15,6 +15,7 @@ export interface RecurringRecord {
   accountId: string;
   accountName?: string;
   categoryId: string | null;
+  categoryName?: string | null;
   type: Exclude<TransactionType, 'transfer'>;
   amount: string;
   currency: string;
@@ -60,6 +61,7 @@ interface RecurringRow {
   lead_time_days: number;
   is_active: boolean;
   account_name?: string;
+  category_name?: string | null;
 }
 
 export function toRule(row: RecurringRow): RecurrenceRule {
@@ -83,6 +85,7 @@ function toRecord(row: RecurringRow): RecurringRecord {
     accountId: row.account_id,
     ...(row.account_name !== undefined ? { accountName: row.account_name } : {}),
     categoryId: row.category_id,
+    ...(row.category_name !== undefined ? { categoryName: row.category_name } : {}),
     type: row.type as Exclude<TransactionType, 'transfer'>,
     amount: row.amount,
     currency: row.currency,
@@ -212,6 +215,7 @@ export async function listRecurring(
   let query = db
     .selectFrom('recurring_transactions')
     .leftJoin('accounts', 'accounts.id', 'recurring_transactions.account_id')
+    .leftJoin('categories', 'categories.id', 'recurring_transactions.category_id')
     .where('recurring_transactions.workspace_id', '=', workspaceId);
 
   if (!options.includeInactive) query = query.where('recurring_transactions.is_active', '=', true);
@@ -241,6 +245,7 @@ export async function listRecurring(
       'recurring_transactions.lead_time_days as lead_time_days',
       'recurring_transactions.is_active as is_active',
       'accounts.name as account_name',
+      'categories.name as category_name',
     ])
     .orderBy('recurring_transactions.next_occurrence_on', 'asc')
     .execute();
@@ -251,9 +256,12 @@ export async function listRecurring(
 export async function getRecurring(workspaceId: string, id: string): Promise<RecurringRecord> {
   const row = await db
     .selectFrom('recurring_transactions')
-    .selectAll()
-    .where('workspace_id', '=', workspaceId)
-    .where('id', '=', id)
+    .leftJoin('accounts', 'accounts.id', 'recurring_transactions.account_id')
+    .leftJoin('categories', 'categories.id', 'recurring_transactions.category_id')
+    .selectAll('recurring_transactions')
+    .select(['accounts.name as account_name', 'categories.name as category_name'])
+    .where('recurring_transactions.workspace_id', '=', workspaceId)
+    .where('recurring_transactions.id', '=', id)
     .executeTakeFirst();
   if (!row) throw notFound('resources.recurringTransaction');
   return toRecord(row as RecurringRow);

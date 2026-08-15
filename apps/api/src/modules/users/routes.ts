@@ -10,8 +10,10 @@ import { z } from 'zod/v4';
 import { db } from '../../db/client.js';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { NO_BODY, media, responds } from '../../middleware/responds.js';
 import { body, validate } from '../../middleware/validate.js';
 import { recordActivity } from '../activity/service.js';
+import { userResponse } from '../auth/responses.js';
 import { toPublicUser } from '../auth/service.js';
 import { revokeAllUserTokens } from '../auth/tokens.js';
 import { exportUserData } from './service.js';
@@ -31,6 +33,7 @@ userRouter.patch(
       baseCurrency: currencyField.optional(),
     }),
   }),
+  responds({ 200: userResponse }),
   asyncHandler(async (req, res) => {
     const input = body<{
       fullName?: string;
@@ -60,6 +63,13 @@ userRouter.patch(
 /** GDPR: a full machine-readable copy of everything tied to this account. */
 userRouter.get(
   '/me/export',
+  responds({
+    200: media(
+      'application/json',
+      'Every row tied to this account, as a downloadable file. The shape follows the database rather ' +
+        'than the API, so it is deliberately not modelled here.',
+    ),
+  }),
   asyncHandler(async (req, res) => {
     const data = await exportUserData(req.user!.id);
     res.setHeader('content-type', 'application/json; charset=utf-8');
@@ -76,6 +86,7 @@ userRouter.get(
 userRouter.delete(
   '/me',
   validate({ body: z.object({ confirm: z.literal(true) }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const userId = req.user!.id;
 

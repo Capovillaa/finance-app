@@ -5,13 +5,16 @@ import { db } from '../../db/client.js';
 import { notFound } from '../../lib/errors.js';
 import { asyncHandler } from '../../lib/http.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, uuidSchema, validate } from '../../middleware/validate.js';
+import { tagListResponse, tagResponse } from './responses.js';
 
 export const tagRouter: Router = Router({ mergeParams: true });
 
 tagRouter.get(
   '/',
   requireViewer,
+  responds({ 200: tagListResponse }),
   asyncHandler(async (req, res) => {
     const rows = await db
       .selectFrom('tags')
@@ -42,6 +45,7 @@ tagRouter.post(
   '/',
   requireEditor,
   validate({ body: z.object({ name: tagNameField, color: colorField.nullish() }) }),
+  responds({ 201: tagResponse }),
   asyncHandler(async (req, res) => {
     const input = body<{ name: string; color?: string | null }>(req);
     const tag = await db
@@ -62,6 +66,7 @@ tagRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: z.object({ workspaceId: uuidSchema, id: uuidSchema }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const result = await db

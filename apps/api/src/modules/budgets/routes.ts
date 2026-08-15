@@ -11,7 +11,9 @@ import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { booleanQueryWithDefault, dateSchema, positiveMoneySchema } from '../shared/schemas.js';
+import { budgetListResponse, budgetResponse } from './responses.js';
 import * as budgetService from './service.js';
 
 const idParams = z.object({ workspaceId: uuidSchema, id: uuidSchema });
@@ -34,6 +36,7 @@ budgetRouter.get(
       includeInactive: booleanQueryWithDefault(false),
     }),
   }),
+  responds({ 200: budgetListResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const options = query<{ activeOn?: string; includeInactive: boolean }>(req);
@@ -58,6 +61,7 @@ budgetRouter.post(
         .max(LIMITS.budgetLines.max, 'validation.maxBudgetLines'),
     }),
   }),
+  responds({ 201: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const input = body<Omit<budgetService.CreateBudgetInput, 'workspaceId' | 'baseCurrency' | 'createdBy'>>(req);
@@ -75,6 +79,7 @@ budgetRouter.get(
   '/:id',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);
@@ -93,6 +98,7 @@ budgetRouter.patch(
       rollover: z.boolean().optional(),
     }),
   }),
+  responds({ 200: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);
@@ -107,6 +113,7 @@ budgetRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await budgetService.deleteBudget(workspaceContext(req).id, id, req.user!.id);
@@ -118,6 +125,7 @@ budgetRouter.put(
   '/:id/lines',
   requireEditor,
   validate({ params: idParams, body: lineSchema }),
+  responds({ 200: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);
@@ -130,6 +138,7 @@ budgetRouter.delete(
   '/:id/lines/:lineId',
   requireEditor,
   validate({ params: idParams.extend({ lineId: uuidSchema }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id, lineId } = params<{ id: string; lineId: string }>(req);
     await budgetService.deleteBudgetLine(workspaceContext(req).id, id, lineId);
@@ -145,6 +154,7 @@ budgetRouter.post(
     params: idParams.extend({ lineId: uuidSchema }),
     body: z.object({ newLimit: positiveMoneySchema, reason: reasonField.nullish() }),
   }),
+  responds({ 200: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id, lineId } = params<{ id: string; lineId: string }>(req);
@@ -167,6 +177,7 @@ budgetRouter.post(
   '/:id/rollover',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 201: budgetResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);

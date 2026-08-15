@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAdmin, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, uuidSchema, validate } from '../../middleware/validate.js';
 import { today } from '../../lib/dates.js';
 import { evaluateWorkspaceAlerts } from './engine.js';
+import { alertEvaluationResponse, alertRuleListResponse, alertRuleResponse } from './responses.js';
 import * as alertService from './service.js';
 
 const alertTypeSchema = z.enum([
@@ -23,6 +25,7 @@ export const alertRouter: Router = Router({ mergeParams: true });
 alertRouter.get(
   '/',
   requireViewer,
+  responds({ 200: alertRuleListResponse }),
   asyncHandler(async (req, res) => {
     res.json({ rules: await alertService.listAlertRules(workspaceContext(req).id) });
   }),
@@ -41,6 +44,7 @@ alertRouter.put(
       scopeAccountId: uuidSchema.nullish(),
     }),
   }),
+  responds({ 200: alertRuleResponse }),
   asyncHandler(async (req, res) => {
     const input = body<Omit<alertService.UpsertAlertRuleInput, 'workspaceId' | 'actorId'>>(req);
     const rule = await alertService.upsertAlertRule({
@@ -56,6 +60,7 @@ alertRouter.delete(
   '/:id',
   requireAdmin,
   validate({ params: z.object({ workspaceId: uuidSchema, id: uuidSchema }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await alertService.deleteAlertRule(workspaceContext(req).id, id);
@@ -67,6 +72,7 @@ alertRouter.delete(
 alertRouter.post(
   '/evaluate',
   requireAdmin,
+  responds({ 200: alertEvaluationResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     res.json(await evaluateWorkspaceAlerts(workspace.id, today(workspace.timezone)));

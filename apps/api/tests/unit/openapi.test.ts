@@ -19,10 +19,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+// Type-only, so it is erased rather than hoisted above the assignments above.
+import type { ZodType } from 'zod/v4';
 
 const { createApp } = await import('../../src/app.js');
-const { buildDocument } = await import('../../src/openapi/document.js');
+const { buildDocument, responseCoverage } = await import('../../src/openapi/document.js');
+const { toResponseJsonSchema } = await import('../../src/openapi/schema.js');
 const { walkRoutes } = await import('../../src/openapi/walk.js');
+const { component } = await import('../../src/modules/shared/responses.js');
+const { z } = await import('zod/v4');
 
 const app = createApp();
 const routes = walkRoutes(app);
@@ -40,8 +45,32 @@ interface Operation {
   security: { bearerAuth?: unknown[] }[];
   parameters?: { name: string; in: string; required?: boolean; schema: Record<string, unknown> }[];
   requestBody?: { content: { 'application/json': { schema: Record<string, unknown> } } };
-  responses: Record<string, unknown>;
+  responses: Record<string, ResponseObject>;
 }
+
+interface ResponseObject {
+  $ref?: string;
+  description?: string;
+  content?: Record<string, { schema: Record<string, unknown> }>;
+}
+
+/** Every `$ref` string anywhere in the document, however deeply nested. */
+function collectRefs(node: unknown, found: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectRefs(item, found);
+    return found;
+  }
+  if (node === null || typeof node !== 'object') return found;
+
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === '$ref' && typeof value === 'string') found.push(value);
+    else collectRefs(value, found);
+  }
+  return found;
+}
+
+const jsonBody = (operation: Operation, status: string): Record<string, unknown> =>
+  operation.responses[status]!.content!['application/json']!.schema;
 
 const operations = Object.entries(document.paths).flatMap(([routePath, methods]) =>
   Object.entries(methods).map(([method, operation]) => ({ routePath, method, operation })),
@@ -143,17 +172,35 @@ describe('security', () => {
 });
 
 describe('errors', () => {
+  /**
+   * The taxonomy's own statuses. A route may also *declare* a status above 400 —
+   * `/health/ready` answers 503 with a body of its own — and that one is the
+   * route's, not the envelope's, which is why this is a list rather than
+   * "anything ≥ 400".
+   */
+  const ENVELOPE_STATUSES = ['400', '401', '403', '404', '409', '422', '429', '500'];
+
   it('describes the envelope once and refers to it from every error response', () => {
     expect(document.components.schemas.Error).toMatchObject({ type: 'object', required: ['error'] });
 
-    for (const { operation } of operations) {
+    for (const { routePath, method, operation } of operations) {
       for (const [status, response] of Object.entries(operation.responses)) {
-        if (status === '2XX') continue;
-        expect(response).toMatchObject({ $ref: expect.stringMatching(/^#\/components\/responses\//) });
+        if (!ENVELOPE_STATUSES.includes(status)) continue;
+        expect(response, `${method} ${routePath} ${status}`).toMatchObject({
+          $ref: expect.stringMatching(/^#\/components\/responses\//),
+        });
         const name = (response as { $ref: string }).$ref.split('/').pop()!;
         expect(document.components.responses[name], `${name} is referenced but not defined`).toBeDefined();
       }
     }
+  });
+
+  it("lets a route describe a failure of its own, where that is what it really returns", () => {
+    // Readiness answers 503 with the same body as 200, saying which dependency
+    // is down. That is a described response, not the shared error envelope.
+    const degraded = document.paths['/health/ready']!.get!.responses['503']!;
+    expect(degraded.$ref).toBeUndefined();
+    expect(degraded.content!['application/json']!.schema).toMatchObject({ type: 'object' });
   });
 
   it('gives a 429 only to routes that a rate limiter actually guards', () => {
@@ -195,6 +242,113 @@ describe('the rules that JSON Schema would otherwise drop', () => {
     ].schema as { properties: Record<string, { anyOf?: unknown[] }> };
 
     expect(body.properties.initialBalance!.anyOf).toEqual([{ type: 'string' }, { type: 'number' }]);
+  });
+});
+
+describe('responses', () => {
+  it('gives every operation a success response, described or honestly undescribed', () => {
+    for (const { routePath, method, operation } of operations) {
+      const success = Object.keys(operation.responses).filter(
+        (status) => status === '2XX' || Number(status) < 400,
+      );
+      expect(success.length, `${method} ${routePath} declares no success response`).toBeGreaterThan(0);
+    }
+  });
+
+  it('never publishes both a described status and the undescribed placeholder', () => {
+    for (const { routePath, method, operation } of operations) {
+      const statuses = Object.keys(operation.responses);
+      const described = statuses.some((status) => status !== '2XX' && Number(status) < 400);
+      expect(described && statuses.includes('2XX'), `${method} ${routePath}`).toBe(false);
+    }
+  });
+
+  it('resolves every $ref in the document to something the document defines', () => {
+    const defined = new Set([
+      ...Object.keys(document.components.schemas).map((name) => `#/components/schemas/${name}`),
+      ...Object.keys(document.components.responses).map((name) => `#/components/responses/${name}`),
+    ]);
+
+    for (const ref of collectRefs(document)) {
+      expect(defined, `${ref} is referenced but never defined`).toContain(ref);
+    }
+  });
+
+  it('describes a list endpoint as its envelope around a named component', () => {
+    const schema = jsonBody(document.paths['/api/v1/workspaces/{workspaceId}/accounts']!.get!, '200') as {
+      properties: { accounts: { items: { $ref: string } } };
+    };
+
+    expect(schema.properties.accounts.items.$ref).toBe('#/components/schemas/Account');
+    expect(document.components.schemas.Account).toBeDefined();
+  });
+
+  /**
+   * The response half's version of the money rule the request half already
+   * carries: an amount is a decimal string on the way out too, and a spec that
+   * let it be a JSON number would generate a client type that silently rounds.
+   */
+  it('publishes money as a string with a decimal pattern, never a number', () => {
+    expect(document.components.schemas.Money).toMatchObject({
+      type: 'string',
+      pattern: expect.stringContaining('\\d'),
+    });
+
+    const account = document.components.schemas.Account as {
+      properties: Record<string, { $ref?: string }>;
+    };
+    expect(account.properties.currentBalance!.$ref).toBe('#/components/schemas/Money');
+  });
+
+  /**
+   * A response schema describes the JSON that leaves the process, not the row
+   * the handler passed to `res.json()`. `createdAt` is a `Date` in the service
+   * and a string on the wire, and the wire is what a client sees.
+   */
+  it('describes a timestamp as an ISO string rather than an unrepresentable Date', () => {
+    expect(document.components.schemas.Timestamp).toMatchObject({ type: 'string', format: 'date-time' });
+
+    const account = document.components.schemas.Account as {
+      properties: Record<string, { $ref?: string }>;
+    };
+    expect(account.properties.createdAt!.$ref).toBe('#/components/schemas/Timestamp');
+  });
+
+  it('points a recursive schema at its own component, not at the document root', () => {
+    const node = document.components.schemas.CategoryNode as {
+      properties: { children: { items: { $ref: string } } };
+    };
+    expect(node.properties.children.items.$ref).toBe('#/components/schemas/CategoryNode');
+    expect(collectRefs(document)).not.toContain('#');
+  });
+
+  it('publishes a 204 with a description and no content', () => {
+    const response = document.paths['/api/v1/workspaces/{workspaceId}/accounts/{id}']!.delete!.responses['204']!;
+    expect(response.description).toBeTruthy();
+    expect(response.content).toBeUndefined();
+  });
+
+  it('reports how much of the router describes what it returns', () => {
+    const coverage = responseCoverage(app);
+    expect(coverage.total).toBe(routes.length);
+    expect(coverage.described).toBeGreaterThan(0);
+    expect(coverage.described).toBe(routes.filter((route) => route.responses).length);
+  });
+});
+
+describe('the response converter', () => {
+  it('refuses to publish a recursive schema that was never named', () => {
+    const anonymous: ZodType = z.object({
+      get child() {
+        return anonymous.optional();
+      },
+    });
+
+    expect(() => toResponseJsonSchema(anonymous)).toThrow(/component\(\)/);
+  });
+
+  it('refuses to reuse a component name, which would silently replace the first', () => {
+    expect(() => component('Account', z.object({}))).toThrow(/both named "Account"/);
   });
 });
 

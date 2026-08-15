@@ -57,12 +57,13 @@ jobs:
       - name: Build web
         run: npm run build --workspace=@finance/web
 
-      # The spec is generated from the app that boots, so it goes stale the
-      # moment a route changes and nobody regenerates it. Regenerating here and
-      # failing on a difference is the only thing that keeps the committed
-      # document honest. It walks the router and converts schemas — no database
-      # is involved, which is why it belongs in this job.
-      - name: OpenAPI document is up to date
+      # Two generated files, one chain: the API writes `docs/openapi.json` from
+      # the router it actually boots, and the client writes `src/api/schema.d.ts`
+      # from that. Both go stale the moment a route or a response schema changes
+      # and nobody regenerates them, so both are regenerated here and any
+      # difference fails the build — the only thing that keeps either honest.
+      # Neither step opens a database, which is why they belong in this job.
+      - name: OpenAPI document and client types are up to date
         run: npm run check:openapi
 
       # No Postgres, no Redis: money, dates, recurrence, anomaly detectors, CSV

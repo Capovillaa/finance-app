@@ -1,5 +1,6 @@
 import type { RequestHandler, Router } from 'express';
 import type { MemberRole } from '../db/types.js';
+import type { ResponseDeclarations } from '../middleware/responds.js';
 import type { ValidationSchemas } from '../middleware/validate.js';
 
 /**
@@ -27,6 +28,8 @@ import type { ValidationSchemas } from '../middleware/validate.js';
 export interface RouteMetadata {
   /** The schemas a `validate()` handler will parse `body` / `query` / `params` with. */
   schemas?: ValidationSchemas;
+  /** What a `responds()` handler declares — and, under test, enforces — the route returns. */
+  responses?: ResponseDeclarations;
   /** The minimum workspace role a `requireRole()` handler enforces. */
   role?: MemberRole;
   /** Set by `requireAuth`: everything at or below this point needs a bearer token. */

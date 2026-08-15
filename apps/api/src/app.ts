@@ -9,10 +9,12 @@ import { asyncHandler } from './lib/http.js';
 import { pingRedis } from './lib/redis.js';
 import { mount } from './lib/route-metadata.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
+import { responds } from './middleware/responds.js';
 import { resolveRequestLocale } from './middleware/locale.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
 import { httpLogger, requestId } from './middleware/request-context.js';
 import { buildDocument } from './openapi/document.js';
+import { healthResponse, openApiDocumentResponse, readinessResponse } from './openapi/service-responses.js';
 import { apiRouter } from './routes.js';
 
 export function createApp(): Express {
@@ -41,13 +43,14 @@ export function createApp(): Express {
 
   // Liveness: the process is up. Kept dependency-free so a database blip does
   // not cause the orchestrator to restart a healthy container.
-  app.get('/health', (_req, res) => {
+  app.get('/health', responds({ 200: healthResponse }), (_req, res) => {
     res.json({ status: 'ok', uptime: process.uptime(), env: env.NODE_ENV });
   });
 
   // Readiness: this instance can actually serve traffic.
   app.get(
     '/health/ready',
+    responds({ 200: readinessResponse, 503: readinessResponse }),
     asyncHandler(async (_req, res) => {
       const checks = await Promise.allSettled([pingDatabase(), pingRedis()]);
       const [database, redis] = checks.map((check) => (check.status === 'fulfilled' ? 'ok' : 'down'));
@@ -65,7 +68,7 @@ export function createApp(): Express {
   // Built once on first request: walking the router and converting every schema
   // is pure work over structures that never change after boot.
   let document: unknown;
-  app.get('/openapi.json', (_req, res) => {
+  app.get('/openapi.json', responds({ 200: openApiDocumentResponse }), (_req, res) => {
     document ??= buildDocument(app);
     res.json(document);
   });

@@ -19,10 +19,20 @@ import {
   withWorkspace,
   workspaceContext,
 } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { booleanQueryWithDefault } from '../shared/schemas.js';
 import { listActivity } from '../activity/service.js';
 import { acceptInvitation, createInvitation, listInvitations, revokeInvitation } from './invitations.js';
+import {
+  acceptedInvitationResponse,
+  activityPageResponse,
+  invitationListResponse,
+  invitationResponse,
+  memberListResponse,
+  workspaceListResponse,
+  workspaceResponse,
+} from './responses.js';
 import * as workspaceService from './service.js';
 
 const createWorkspaceSchema = z.object({
@@ -49,6 +59,7 @@ workspaceRouter.use(requireAuth);
 workspaceRouter.get(
   '/',
   validate({ query: z.object({ includeArchived: booleanQueryWithDefault(false) }) }),
+  responds({ 200: workspaceListResponse }),
   asyncHandler(async (req, res) => {
     const { includeArchived } = query<{ includeArchived: boolean }>(req);
     res.json({ workspaces: await workspaceService.listWorkspacesForUser(req.user!.id, { includeArchived }) });
@@ -58,6 +69,7 @@ workspaceRouter.get(
 workspaceRouter.post(
   '/',
   validate({ body: createWorkspaceSchema }),
+  responds({ 201: workspaceResponse }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof createWorkspaceSchema>>(req);
     const workspace = await workspaceService.createWorkspace({
@@ -74,6 +86,7 @@ workspaceRouter.get(
   validate({ params: workspaceParamSchema }),
   withWorkspace,
   requireViewer,
+  responds({ 200: workspaceResponse }),
   asyncHandler(async (req, res) => {
     const { workspaceId } = params<{ workspaceId: string }>(req);
     res.json({ workspace: await workspaceService.getWorkspaceForUser(workspaceId, req.user!.id) });
@@ -85,6 +98,7 @@ workspaceRouter.patch(
   validate({ params: workspaceParamSchema, body: updateWorkspaceSchema }),
   withWorkspace,
   requireAdmin,
+  responds({ 200: workspaceResponse }),
   asyncHandler(async (req, res) => {
     const { workspaceId } = params<{ workspaceId: string }>(req);
     const input = body<z.infer<typeof updateWorkspaceSchema>>(req);
@@ -97,6 +111,7 @@ workspaceRouter.delete(
   validate({ params: workspaceParamSchema }),
   withWorkspace,
   requireOwner,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { workspaceId } = params<{ workspaceId: string }>(req);
     await workspaceService.archiveWorkspace(workspaceId, req.user!.id);
@@ -111,6 +126,7 @@ workspaceRouter.get(
   validate({ params: workspaceParamSchema }),
   withWorkspace,
   requireViewer,
+  responds({ 200: memberListResponse }),
   asyncHandler(async (req, res) => {
     res.json({ members: await workspaceService.listMembers(workspaceContext(req).id) });
   }),
@@ -124,6 +140,7 @@ workspaceRouter.patch(
   }),
   withWorkspace,
   requireAdmin,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { userId } = params<{ userId: string }>(req);
     const { role } = body<{ role: 'admin' | 'editor' | 'viewer' }>(req);
@@ -137,6 +154,7 @@ workspaceRouter.delete(
   validate({ params: workspaceParamSchema.extend({ userId: uuidSchema }) }),
   withWorkspace,
   requireAdmin,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { userId } = params<{ userId: string }>(req);
     await workspaceService.removeMember(workspaceContext(req).id, userId, req.user!.id);
@@ -149,6 +167,7 @@ workspaceRouter.post(
   validate({ params: workspaceParamSchema, body: z.object({ newOwnerId: uuidSchema }) }),
   withWorkspace,
   requireOwner,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { newOwnerId } = body<{ newOwnerId: string }>(req);
     await workspaceService.transferOwnership(workspaceContext(req).id, newOwnerId, req.user!.id);
@@ -163,6 +182,7 @@ workspaceRouter.get(
   validate({ params: workspaceParamSchema }),
   withWorkspace,
   requireAdmin,
+  responds({ 200: invitationListResponse }),
   asyncHandler(async (req, res) => {
     res.json({ invitations: await listInvitations(workspaceContext(req).id) });
   }),
@@ -179,6 +199,7 @@ workspaceRouter.post(
   }),
   withWorkspace,
   requireAdmin,
+  responds({ 201: invitationResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const input = body<{ email: string; role: 'admin' | 'editor' | 'viewer' }>(req);
@@ -202,6 +223,7 @@ workspaceRouter.delete(
   validate({ params: workspaceParamSchema.extend({ invitationId: uuidSchema }) }),
   withWorkspace,
   requireAdmin,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { invitationId } = params<{ invitationId: string }>(req);
     await revokeInvitation(workspaceContext(req).id, invitationId, req.user!.id);
@@ -224,6 +246,7 @@ workspaceRouter.get(
   }),
   withWorkspace,
   requireViewer,
+  responds({ 200: activityPageResponse }),
   asyncHandler(async (req, res) => {
     const filters = query<{
       page: number;
@@ -266,6 +289,7 @@ invitationRouter.post(
       token: z.string().min(LIMITS.invitationToken.min).max(LIMITS.invitationToken.max),
     }),
   }),
+  responds({ 200: acceptedInvitationResponse }),
   asyncHandler(async (req, res) => {
     const { token } = body<{ token: string }>(req);
     const result = await acceptInvitation(token, currentUser(req).id);

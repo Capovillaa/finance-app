@@ -24,10 +24,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const target = path.resolve(here, '../../../docs/openapi.json');
 
 const { createApp } = await import('../src/app.js');
-const { buildDocument } = await import('../src/openapi/document.js');
+const { buildDocument, responseCoverage } = await import('../src/openapi/document.js');
 
-const document = `${JSON.stringify(buildDocument(createApp()), null, 2)}\n`;
+const app = createApp();
+const document = `${JSON.stringify(buildDocument(app), null, 2)}\n`;
 const check = process.argv.includes('--check');
+
+// Response schemas are authored per endpoint, so the document is complete for
+// requests and progressively complete for responses. Printing the ratio keeps
+// that honest: an operation with no schema publishes a bare `2XX`.
+const coverage = responseCoverage(app);
+console.log(`Response schemas: ${coverage.described}/${coverage.total} operations described.`);
 
 if (check) {
   const committed = await readFile(target, 'utf8').catch(() => null);

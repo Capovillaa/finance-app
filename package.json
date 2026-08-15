@@ -21,12 +21,13 @@
     "test": "npm run build:schemas && npm run test --workspace=@finance/api",
     "test:unit": "npm run build:schemas && npm run test:unit --workspace=@finance/api",
     "typecheck": "npm run build:schemas && npm run typecheck --workspaces --if-present",
-    "generate:openapi": "npm run build:schemas && npm run generate:openapi --workspace=@finance/api",
-    "check:openapi": "npm run build:schemas && npm run check:openapi --workspace=@finance/api",
+    "generate:openapi": "npm run build:schemas && npm run generate:openapi --workspace=@finance/api && npm run generate:types --workspace=@finance/web",
+    "check:openapi": "npm run build:schemas && npm run check:openapi --workspace=@finance/api && npm run check:types --workspace=@finance/web",
     "migrate": "npm run migrate --workspace=@finance/api",
     "seed": "npm run seed --workspace=@finance/api",
     "infra:up": "docker compose up -d postgres redis mailhog",
     "infra:down": "docker compose down",
-    "infra:reset": "docker compose down -v && docker compose up -d postgres redis mailhog"
+    "infra:reset": "docker compose down -v && docker compose up -d postgres redis mailhog",
+    "//openapi": "The contract chain: the API generates docs/openapi.json from the router, and the client generates its response types from that file. Both steps run together so the two can never be regenerated apart."
   }
 }

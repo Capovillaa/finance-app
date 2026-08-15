@@ -25,12 +25,14 @@ materialised by the worker goes through exactly the same code as one created fro
 
 ## Layers
 
-Each domain lives in `src/modules/<domain>/` and is split in two:
+Each domain lives in `src/modules/<domain>/` and is split in three:
 
 - **`service.ts`** — all business logic and database access. Framework-free: no `req`, no `res`.
   This is what the worker calls, and what makes the same behaviour reachable from a job, a
   script, or a future GraphQL layer.
 - **`routes.ts`** — HTTP concerns only: validation schemas, role requirements, status codes.
+- **`responses.ts`** — the Zod description of what the module returns, beside the query that
+  builds it, because the change that invalidates a response schema is a change to that query.
 
 Cross-cutting concerns sit in `src/lib` (money, dates, recurrence, errors, logging, redis, email)
 and `src/middleware` (auth, RBAC, validation, rate limiting, error translation). `src/openapi`
@@ -72,9 +74,12 @@ Two rules follow, and both are load-bearing:
   what a field accepts must not change what it accepts; see `decisions.md` for the two ways that
   went wrong when tried the obvious way.
 
-The document describes **requests only**. Handlers return database rows straight from Kysely, so
-there is no response schema to convert — that is phase 2, and it is why the web client's
-`api/types.ts` is still written by hand.
+The document describes **requests and responses**. Requests were always describable — they are
+Zod schemas already. Responses were not: handlers return database rows straight from Kysely, so
+each shape had to be authored, in `modules/<domain>/responses.ts`, and declared on its route with
+`responds()`. That declaration is enforced rather than decorative — under `NODE_ENV=test` every
+outgoing body is parsed against it and a mismatch fails the request, which is the only reason to
+trust a hand-authored schema. The web client's types are generated from the result.
 
 ## Web client
 
@@ -86,7 +91,8 @@ apps/web/src/
   api/
     api.ts                   single RTK Query service, tag types declared once
     baseQuery.ts             fetch base query + transparent single-flight refresh
-    types.ts                 hand-written response shapes; value sets from @finance/schemas
+    schema.d.ts              GENERATED from docs/openapi.json — never edited
+    types.ts                 names for what is in schema.d.ts; value sets from @finance/schemas
     endpoints/                one file per API module (accounts.ts, budgets.ts, ...)
   features/<domain>/          form schemas built on @finance/schemas, dialogs,
                                cards — one folder per API module

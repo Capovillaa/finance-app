@@ -1,21 +1,25 @@
 import type { Express } from 'express';
 import { createRequire } from 'node:module';
+import { globalRegistry, type ZodType } from 'zod/v4';
 import { env } from '../config/env.js';
 import { ERROR_CODES, STATUS_BY_CODE, type ErrorCode } from '../lib/errors.js';
-import { mergeObjectShapes, toJsonSchema, type JsonSchema } from './schema.js';
+import { isNoBody, isSchemaBody, type ResponseDeclarations } from '../middleware/responds.js';
+import { mergeObjectShapes, toJsonSchema, toResponseJsonSchema, type JsonSchema } from './schema.js';
 import { walkRoutes, type RouteRecord } from './walk.js';
 
 /**
  * Builds the OpenAPI 3.1 document from the running app.
  *
- * **Phase 1 describes requests, not responses.** Every request rule in this API
- * is already a Zod schema, so paths, parameters, bodies, security and the error
- * envelope all generate from code that runs. Responses have no schemas at all —
- * services return Kysely rows and routes `res.json()` them — so describing them
- * means authoring a schema per endpoint, which is a larger job than everything
- * here combined and is deliberately left for phase 2. Success responses are
- * therefore published as the `2XX` range with a description and no content,
- * which is honest about what is known rather than guessing a shape.
+ * Requests were always describable: every rule in this API is a Zod schema
+ * already, so paths, parameters, bodies, security and the error envelope come
+ * out of code that runs. **Responses had no schemas at all** — services return
+ * Kysely rows and routes `res.json()` them — so each one had to be authored, and
+ * is, beside the service that produces it in `modules/<domain>/responses.ts`.
+ *
+ * A route that has been given a `responds()` publishes its real success shape. A
+ * route that has not still publishes the `2XX` placeholder, which says what is
+ * known rather than guessing; `responseCoverage()` reports how many of each
+ * there are, so the gap is a number rather than an impression.
  */
 
 const require = createRequire(import.meta.url);
@@ -152,7 +156,86 @@ function parametersFor(route: RouteRecord): JsonSchema[] {
   return parameters;
 }
 
-function responsesFor(route: RouteRecord): Record<string, JsonSchema> {
+/** What a status means when the schema does not say something better. */
+const STATUS_TEXT: Record<string, string> = {
+  '200': 'Success.',
+  '201': 'Created.',
+  '202': 'Accepted.',
+  '204': 'No content.',
+  '503': 'Service unavailable.',
+};
+
+/**
+ * The success half of an operation's responses.
+ *
+ * Named schemas reached on the way are merged into `components`, which the
+ * caller owns: `Account` is authored once and referenced from the five
+ * operations that return one, so it has to be collected across the whole walk
+ * rather than per operation.
+ */
+function successResponses(
+  declarations: ResponseDeclarations | undefined,
+  components: Record<string, JsonSchema>,
+): Record<string, JsonSchema> {
+  if (!declarations) {
+    return {
+      '2XX': {
+        description:
+          'The request succeeded. This route has no response schema yet, so its shape is not described ' +
+          'here — read `docs/api.md` for it.',
+      },
+    };
+  }
+
+  const responses: Record<string, JsonSchema> = {};
+
+  for (const [status, body] of Object.entries(declarations)) {
+    const fallback = STATUS_TEXT[status] ?? 'Success.';
+
+    if (isNoBody(body)) {
+      responses[status] = { description: fallback };
+      continue;
+    }
+
+    if (!isSchemaBody(body)) {
+      responses[status] = {
+        description: body.description,
+        content: { [body.contentType]: { schema: { type: 'string' } } },
+      };
+      continue;
+    }
+
+    const { schema, components: reached } = toResponseJsonSchema(body);
+
+    for (const [id, definition] of Object.entries(reached)) {
+      const existing = components[id];
+      if (existing && JSON.stringify(existing) !== JSON.stringify(definition)) {
+        throw new Error(`Two different response schemas were published as component "${id}".`);
+      }
+      components[id] = definition;
+    }
+
+    // An envelope's own `.describe()` becomes the response's description, where
+    // OpenAPI wants it; leaving a copy on the schema too would print it twice.
+    const described = descriptionOf(body);
+    if (described !== undefined && schema.description === described) delete schema.description;
+
+    responses[status] = {
+      description: described ?? fallback,
+      content: { 'application/json': { schema } },
+    };
+  }
+
+  return responses;
+}
+
+/** A response schema's own `.describe()`, used as the response object's description. */
+function descriptionOf(schema: ZodType): string | undefined {
+  const meta = globalRegistry.get(schema) as { description?: string } | undefined;
+  return meta?.description;
+}
+
+function responsesFor(route: RouteRecord, components: Record<string, JsonSchema>): Record<string, JsonSchema> {
   const named = ['InternalError'];
   if (route.rateLimited) named.push('RateLimited');
   if (route.authenticated) named.push('Unauthorized');
@@ -165,13 +248,7 @@ function responsesFor(route: RouteRecord): Record<string, JsonSchema> {
   // the method writing at all rather than the request carrying a body.
   if (WRITE_METHODS.has(route.method)) named.push('Conflict');
 
-  const responses: Record<string, JsonSchema> = {
-    '2XX': {
-      description:
-        'The request succeeded. Response bodies are not described yet — see the note on phase 2 in ' +
-        '`docs/decisions.md` — so a caller should read `docs/api.md` for the shape.',
-    },
-  };
+  const responses = successResponses(route.responses, components);
 
   const statusFor = (name: string): string => {
     const code = (Object.keys(ERROR_RESPONSE_NAMES) as ErrorCode[]).find(
@@ -185,7 +262,7 @@ function responsesFor(route: RouteRecord): Record<string, JsonSchema> {
   return responses;
 }
 
-function operationFor(route: RouteRecord): JsonSchema {
+function operationFor(route: RouteRecord, components: Record<string, JsonSchema>): JsonSchema {
   const parameters = parametersFor(route);
 
   return {
@@ -203,18 +280,25 @@ function operationFor(route: RouteRecord): JsonSchema {
           },
         }
       : {}),
-    responses: responsesFor(route),
+    responses: responsesFor(route, components),
     ...(route.authenticated ? { security: [{ [SECURITY_SCHEME]: [] }] } : { security: [] }),
   };
+}
+
+/** How much of the router describes what it returns. Reported by the generate script. */
+export function responseCoverage(app: Express): { described: number; total: number } {
+  const routes = walkRoutes(app);
+  return { described: routes.filter((route) => route.responses).length, total: routes.length };
 }
 
 export function buildDocument(app: Express): JsonSchema {
   const routes = walkRoutes(app);
   const paths: Record<string, Record<string, JsonSchema>> = {};
+  const schemas: Record<string, JsonSchema> = {};
 
   for (const route of routes) {
     paths[route.path] ??= {};
-    paths[route.path]![route.method] = operationFor(route);
+    paths[route.path]![route.method] = operationFor(route, schemas);
   }
 
   const responses: Record<string, JsonSchema> = {};
@@ -239,7 +323,9 @@ export function buildDocument(app: Express): JsonSchema {
         'It is committed to the repository and checked in CI, which is what stops it from drifting.\n\n' +
         'Money crosses this API as a **decimal string**, never a JSON number. Every amount is stored as ' +
         '`NUMERIC(19,4)`.\n\n' +
-        'Response bodies are not described yet — that is phase 2.',
+        'Response schemas are authored beside the service that produces the row, and are checked against ' +
+        'real responses by the test suite. An operation that still answers `2XX` with no content is one ' +
+        'whose shape has not been described yet.',
     },
     servers: [{ url: env.API_BASE_URL }],
     tags,
@@ -254,7 +340,11 @@ export function buildDocument(app: Express): JsonSchema {
             'Refresh tokens are opaque, rotate on every use, and are tracked in families.',
         },
       },
-      schemas: { Error: errorSchema() },
+      // Sorted so the component list is stable whatever order the walk reached
+      // them in; a reordered file would otherwise look like a contract change.
+      schemas: Object.fromEntries(
+        [['Error', errorSchema()] as const, ...Object.entries(schemas)].sort(([a], [b]) => a.localeCompare(b)),
+      ),
       responses,
     },
     security: [],

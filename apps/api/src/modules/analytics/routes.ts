@@ -2,9 +2,23 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { media, responds } from '../../middleware/responds.js';
 import { query, uuidSchema, validate } from '../../middleware/validate.js';
 import { addMonths, periodRange, startOfMonth, today } from '../../lib/dates.js';
 import { dateSchema } from '../shared/schemas.js';
+import {
+  budgetVarianceResponse,
+  categoryBreakdownResponse,
+  comparisonResponse,
+  dashboardResponse,
+  insightsResponse,
+  monthlyStatementResponse,
+  netWorthResponse,
+  savingsRateResponse,
+  summaryResponse,
+  trendsResponse,
+  yearOverYearResponse,
+} from './responses.js';
 import * as analytics from './service.js';
 import * as reports from '../reports/service.js';
 
@@ -28,6 +42,7 @@ function resolveRange(workspaceTimezone: string, from?: string, to?: string) {
 analyticsRouter.get(
   '/dashboard',
   validate({ params: workspaceParams }),
+  responds({ 200: dashboardResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     res.json(
@@ -39,6 +54,7 @@ analyticsRouter.get(
 analyticsRouter.get(
   '/summary',
   validate({ params: workspaceParams, query: rangeQuery }),
+  responds({ 200: summaryResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { from, to } = query<{ from?: string; to?: string }>(req);
@@ -57,6 +73,7 @@ analyticsRouter.get(
       limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
   }),
+  responds({ 200: categoryBreakdownResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const options = query<{ from?: string; to?: string; type: 'expense' | 'income'; depth: 0 | 1 | 2; limit?: number }>(req);
@@ -81,6 +98,7 @@ analyticsRouter.get(
       months: z.coerce.number().int().min(1).max(60).default(12),
     }),
   }),
+  responds({ 200: trendsResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const options = query<{ from?: string; to?: string; unit: 'day' | 'week' | 'month' | 'year'; months: number }>(req);
@@ -95,6 +113,7 @@ analyticsRouter.get(
 analyticsRouter.get(
   '/net-worth',
   validate({ params: workspaceParams, query: z.object({ months: z.coerce.number().int().min(1).max(60).default(12) }) }),
+  responds({ 200: netWorthResponse }),
   asyncHandler(async (req, res) => {
     const { months } = query<{ months: number }>(req);
     res.json({ points: await analytics.netWorthTrend(workspaceContext(req).id, months) });
@@ -104,6 +123,7 @@ analyticsRouter.get(
 analyticsRouter.get(
   '/savings-rate',
   validate({ params: workspaceParams, query: z.object({ months: z.coerce.number().int().min(1).max(60).default(12) }) }),
+  responds({ 200: savingsRateResponse }),
   asyncHandler(async (req, res) => {
     const { months } = query<{ months: number }>(req);
     res.json({ points: await analytics.savingsRateTrend(workspaceContext(req).id, months) });
@@ -113,6 +133,7 @@ analyticsRouter.get(
 analyticsRouter.get(
   '/budget-variance',
   validate({ params: workspaceParams, query: z.object({ asOf: dateSchema.optional() }) }),
+  responds({ 200: budgetVarianceResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { asOf } = query<{ asOf?: string }>(req);
@@ -136,6 +157,7 @@ analyticsRouter.get(
       offset: z.coerce.number().int().min(-24).max(-1).default(-1),
     }),
   }),
+  responds({ 200: comparisonResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const options = query<{ unit: 'day' | 'week' | 'month' | 'quarter' | 'year'; anchor?: string; offset: number }>(req);
@@ -153,6 +175,7 @@ analyticsRouter.get(
 analyticsRouter.get(
   '/insights',
   validate({ params: workspaceParams }),
+  responds({ 200: insightsResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     res.json({ insights: await analytics.insights(workspace.id, workspace.baseCurrency, today(workspace.timezone)) });
@@ -168,6 +191,7 @@ reportRouter.use(requireViewer);
 reportRouter.get(
   '/statement',
   validate({ params: workspaceParams, query: z.object({ month: dateSchema.optional() }) }),
+  responds({ 200: monthlyStatementResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { month } = query<{ month?: string }>(req);
@@ -187,6 +211,7 @@ reportRouter.get(
     params: workspaceParams,
     query: z.object({ year: z.coerce.number().int().min(2000).max(2100).optional() }),
   }),
+  responds({ 200: yearOverYearResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { year } = query<{ year?: number }>(req);
@@ -203,6 +228,13 @@ reportRouter.get(
       accountIds: z.union([z.string(), z.array(z.string())]).optional(),
       categoryIds: z.union([z.string(), z.array(z.string())]).optional(),
     }),
+  }),
+  responds({
+    200: media(
+      'text/csv',
+      'The filtered ledger as a CSV attachment. Sent as text, so a client must not let ' +
+        '`fetch` try to parse it as JSON.',
+    ),
   }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
@@ -230,6 +262,7 @@ reportRouter.get(
 reportRouter.get(
   '/export/statement.csv',
   validate({ params: workspaceParams, query: z.object({ month: dateSchema.optional() }) }),
+  responds({ 200: media('text/csv', "One month's statement as a CSV attachment.") }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { month } = query<{ month?: string }>(req);

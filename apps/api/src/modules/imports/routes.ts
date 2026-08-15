@@ -4,8 +4,15 @@ import { CSV_DELIMITERS } from '../../lib/csv.js';
 import { asyncHandler } from '../../lib/http.js';
 import { t } from '../../lib/i18n.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { IMPORT_COLUMNS } from './mapping.js';
+import {
+  importBatchListResponse,
+  importCommitResponse,
+  importPreviewResponse,
+  importRevertResponse,
+} from './responses.js';
 import * as importService from './service.js';
 
 const batchParams = z.object({ workspaceId: uuidSchema, batchId: uuidSchema });
@@ -70,6 +77,7 @@ importRouter.get(
   '/',
   requireViewer,
   validate({ query: z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) }) }),
+  responds({ 200: importBatchListResponse }),
   asyncHandler(async (req, res) => {
     const { limit } = query<{ limit: number }>(req);
     res.json({ batches: await importService.listImportBatches(workspaceContext(req).id, limit) });
@@ -80,6 +88,7 @@ importRouter.post(
   '/preview',
   requireEditor,
   validate({ body: previewSchema }),
+  responds({ 201: importPreviewResponse }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof previewSchema>>(req);
     const preview = await importService.previewImport({
@@ -95,6 +104,7 @@ importRouter.post(
   '/:batchId/commit',
   requireEditor,
   validate({ params: batchParams, body: commitSchema }),
+  responds({ 201: importCommitResponse }),
   asyncHandler(async (req, res) => {
     const { batchId } = params<{ batchId: string }>(req);
     const { rows } = body<z.infer<typeof commitSchema>>(req);
@@ -112,6 +122,7 @@ importRouter.delete(
   '/:batchId',
   requireEditor,
   validate({ params: batchParams }),
+  responds({ 200: importRevertResponse }),
   asyncHandler(async (req, res) => {
     const { batchId } = params<{ batchId: string }>(req);
     const reverted = await importService.revertImport(workspaceContext(req).id, batchId, req.user!.id);

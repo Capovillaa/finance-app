@@ -765,6 +765,10 @@ what is known instead of guessing a shape. Until phase 2 lands, `apps/web/src/ap
 stays hand-written: a half-generated types file where nobody can tell which half is which is
 worse than an honest one.
 
+*Phase 2 is now underway — see "Response schemas live beside the service" below. Routes that
+have been given one publish their real shape; the rest still publish the `2XX` placeholder,
+and `apps/web/src/api/types.ts` stays hand-written until they all do.*
+
 **Everything published is derived, never assumed.** The security requirement comes from
 `requireAuth`, the 403 from `requireRole`, the 429 from whichever rate limiter is actually
 mounted in front — which is why `/health` and `/openapi.json`, sitting outside `/api/v1`,
@@ -780,6 +784,141 @@ difference, in the `check` job, since no database is involved.
 
 ---
 
+### Response schemas live beside the service, and the test suite proves them
+
+Phase 1 left every success response published as a bare `2XX`. Describing them means
+*authoring* a schema per endpoint rather than converting one, because a handler returns a
+Kysely row and `res.json()`s it — there is nothing to read. Two questions had to be settled
+before any of that could be written: where the schemas live, and what stops them from being
+wrong.
+
+**They live in `modules/<domain>/responses.ts`, not in one `openapi/responses/` module.**
+The alternative is tidier to look at and worse to maintain. A response shape is produced by
+a specific query and the mapper beside it — `AccountRecord` and `toRecord()` are ten lines
+apart in `accounts/service.ts` — and the change that invalidates a response schema is a
+change to that query. Keeping the schema in the same folder puts the two under one diff and
+one review; a central tree puts them in different halves of the repository and relies on
+whoever edited the `SELECT` remembering that a parallel file exists. That failure is silent:
+the spec still generates, still validates, and now describes last month's row.
+
+It also extends a convention rather than inventing one. Every domain folder is already
+`routes.ts` + `service.ts`, so `responses.ts` reads as the third member of a set. The one
+thing a central module would genuinely have offered — a home for shapes more than one domain
+returns — is served by `modules/shared/responses.ts`, which is the response side of the
+`shared/schemas.ts` the request side already had. The split is by *ownership*, not by
+layer: a domain's shapes sit with the domain, the scalars and envelopes everyone uses sit in
+`shared`.
+
+**A response schema describes the wire, not the row.** These two differ, and the difference
+is the whole reason a hand-written mirror of the service interface would have been wrong: a
+`timestamp` column arrives from `pg` as a JS `Date` and only becomes an ISO string when
+Express serialises it. The schemas describe the string. This is the mirror image of the
+request side's `io: 'input'` — there the transform runs after the schema, here it runs
+after the handler — and both come down to describing the JSON, which is the only thing a
+caller ever sees.
+
+**`responds()` is enforced under test, which is the load-bearing part.** A hand-authored
+response schema is a guess about someone else's SQL, and a spec that describes a shape the
+API does not return is worse than one that describes nothing. So `responds({ 200: schema })`
+is not only a stamp for the generator: under `NODE_ENV=test` it wraps `res.json` and parses
+every outgoing body — serialised first, so what is checked is exactly what is published —
+and fails the request loudly on a mismatch. It also fails on a *success status the route
+does not declare*, which catches the opposite drift: a handler that starts answering 200
+where its declaration still says 201. Outside tests it is a `next()`.
+
+That turns the existing integration suite into the verification. It was checked by
+deliberately typing one money field as a number: 25 tests failed with the field named in the
+message, rather than passing quietly. Reach matters as much as strictness, though — a schema
+no test ever exercises is an assertion nobody made — so
+`tests/integration/response-contracts.test.ts` makes one successful call to every endpoint
+that declares a schema, which the domain tests do not: they drive most of the failure paths
+and only some of the success ones.
+
+**Named components, including the scalars.** A schema wrapped in `component('Account', …)`
+is published once under `components/schemas` and `$ref`'d everywhere, which Zod does for
+free: an `id` in a schema's metadata makes `toJSONSchema` extract it into `$defs`, and the
+generator moves those into `components/schemas` and repoints the references. Recursion falls
+out of the same mechanism — a category's children resolve to a reference back to
+`CategoryNode` instead of the `#` that Zod emits for a schema that is its own root, which
+would have pointed at the whole document.
+
+`Money`, `Timestamp`, `DateOnly`, `Uuid`, `CurrencyCode` and `Integer` are components too.
+That looks like over-naming until you count the bytes: an ISO instant compiles to a
+300-character pattern, and inlining it beside every `createdAt` in a hundred operations
+buries the file in one regular expression. Named, each is written once, every use reads as
+`Money` rather than as a pattern, and a generated client picks the names up as type aliases.
+They stay composable because Zod does not carry a component's `id` onto a derivative, so
+`money.describe('…')` publishes prose beside the `$ref` and `timestamp.nullable()` an
+`anyOf` around it, instead of quietly redefining the component under the same name.
+
+**Envelopes stay anonymous.** `{ account: Account }` is not a concept a caller has a word
+for, it is one endpoint's packaging; naming it would fill the component list with wrappers
+nobody refers to. Only the things with names get names.
+
+**Two things the authoring caught immediately.** A category's `kind` has three members, not
+two: the API has always been able to return `transfer`, and the client's hand-written types
+said otherwise. And `GET /categories` genuinely returns two shapes — `?shape=tree` nests
+children, `?shape=flat` omits the key entirely — so it is published as a union rather than
+flattened into an optional field, because "children is sometimes missing" and "children is
+missing exactly when you asked for flat" are different promises and only the second is true.
+
+**One operational wrinkle worth knowing.** Zod's metadata registry is a module-level
+singleton that refuses a repeated id, and it does not share a source module's lifetime:
+`vitest` with `pool: forks, singleFork` re-evaluates `src/` for each test file while leaving
+`node_modules` cached, so the component names register once per file and the second load
+threw `ID Money already exists in the registry`. `component()` evicts the previous
+registration, which belongs to a module instance the process has already finished with; the
+duplicate-name guard that actually matters is a `Set` in the same module, reset by the same
+re-evaluation.
+
+**Coverage is a number, not an impression.** `npm run generate:openapi` prints how many of
+the router's operations describe what they return, and a unit test asserts that no operation
+publishes both a described status and the `2XX` placeholder. It reached **104 of 104**, and
+`RESPONSE_REACH=1` confirms the suite makes a successful call to every one of them — so no
+schema in the document is an assertion nobody checked.
+
+---
+
+### The client's response types are generated, and `api/types.ts` only names them
+
+With every operation described, `apps/web/src/api/types.ts` stopped being hand-written.
+`openapi-typescript` turns `docs/openapi.json` into `apps/web/src/api/schema.d.ts`, and
+`types.ts` is now a hundred lines of aliases over it. The chain has no hand-copied link left:
+a Zod schema beside a service → the generated specification → the generated client types →
+the fifteen RTK Query endpoint files, which were **not touched at all**, because the aliases
+keep every name they already import.
+
+**Why an alias layer rather than importing the generated file directly.** The generated
+names are unusable at a call site —
+`operations['getWorkspacesByWorkspaceIdAnalyticsDashboard']['responses']['200']['content']['application/json']`
+is the dashboard summary — and there is no reason for a component to know its own type's
+provenance. `types.ts` assigns names and nothing else: `Ok<'operationId'>` for an envelope
+one endpoint returns, `components['schemas'][…]` for anything published as a component. The
+rule that keeps it honest is that **no field list is written there**, so it cannot drift; the
+earlier worry about a half-generated file where nobody can tell which half is which does not
+apply, because no half is authored.
+
+Two things it deliberately does not take from the specification. The closed value sets —
+`AccountType`, `WorkspaceRole`, `BudgetPeriod` — still come from `@finance/schemas`, where
+both apps read one declaration, rather than from the spec's inlined copy of the same list.
+And `Page<T>` stays a real generic: OpenAPI 3.1 has none, so the API publishes the six
+envelope fields around each item type separately, and a conditional type pins the hand-written
+generic against a real paginated operation so it still fails to compile if the envelope moves.
+
+**It found a bug on the first typecheck, which was the point.** Exactly one error came out of
+the whole client: `RecurringRow.tsx` renders `accountName · categoryName`, and
+`RecurringTransaction` has no `categoryName` — the API never selected it. The hand-written
+type had claimed `categoryName?: string | null`, so the field had been silently `undefined`
+since the redesign and every schedule had shown only its account. The join was added beside
+the `accountName` one it should always have sat next to.
+
+**Both generated files are checked in CI, in one step.** `npm run generate:openapi` writes
+the specification and then the client types; `npm run check:openapi` regenerates both and
+fails on any difference. Running them as one command is what stops the two from being
+regenerated apart.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.
@@ -790,8 +929,7 @@ difference, in the `check` job, since no database is involved.
 - **PDF export.** CSV export and a structured statement endpoint are implemented; rendering to PDF
   belongs with the client, which has the layout.
 - ~~**CSV import.**~~ Built — see "CSV import is preview-then-commit" above.
-- **OpenAPI response schemas (phase 2).** Requests, paths, security and the error envelope are
-  generated and checked in CI; responses are not described, because handlers return Kysely rows
-  and there is no schema to convert. Success is published as the `2XX` range with no content.
-  This is what stands between the project and replacing `apps/web/src/api/types.ts` with
-  generated types — see "The OpenAPI document is generated from the app that boots" above.
+- **OpenAPI response schemas (phase 2).** Underway rather than absent: the mechanism is built and
+  two modules are described — see "Response schemas live beside the service" above. The remaining
+  modules still publish success as the `2XX` range with no content, and `apps/web/src/api/types.ts`
+  stays hand-written until they do not.

@@ -11,8 +11,15 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAdmin, requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { booleanQueryWithDefault, moneySchema, dateSchema } from '../shared/schemas.js';
+import {
+  accountListResponse,
+  accountResponse,
+  reconciliationListResponse,
+  reconciliationResultResponse,
+} from './responses.js';
 import * as accountService from './service.js';
 
 const accountTypeSchema = z.enum(ACCOUNT_TYPES);
@@ -44,6 +51,7 @@ accountRouter.get(
   '/',
   requireViewer,
   validate({ query: z.object({ includeArchived: booleanQueryWithDefault(false) }) }),
+  responds({ 200: accountListResponse }),
   asyncHandler(async (req, res) => {
     const { includeArchived } = query<{ includeArchived: boolean }>(req);
     const workspace = workspaceContext(req);
@@ -59,6 +67,7 @@ accountRouter.post(
   '/',
   requireEditor,
   validate({ body: createAccountSchema }),
+  responds({ 201: accountResponse }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof createAccountSchema>>(req);
     const account = await accountService.createAccount({
@@ -74,6 +83,7 @@ accountRouter.get(
   '/:id',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: accountResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     res.json({ account: await accountService.getAccount(workspaceContext(req).id, id) });
@@ -84,6 +94,7 @@ accountRouter.patch(
   '/:id',
   requireEditor,
   validate({ params: idParams, body: updateAccountSchema }),
+  responds({ 200: accountResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<z.infer<typeof updateAccountSchema>>(req);
@@ -97,6 +108,7 @@ accountRouter.delete(
   '/:id',
   requireAdmin,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await accountService.deleteAccount(workspaceContext(req).id, id, req.user!.id);
@@ -108,6 +120,7 @@ accountRouter.get(
   '/:id/reconciliations',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: reconciliationListResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     res.json({ reconciliations: await accountService.listReconciliations(workspaceContext(req).id, id) });
@@ -128,6 +141,7 @@ accountRouter.post(
       markTransactions: z.boolean().optional(),
     }),
   }),
+  responds({ 201: reconciliationResultResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<{

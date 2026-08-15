@@ -15,9 +15,19 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler, paginationSchema } from '../../lib/http.js';
 import { requireEditor, requireViewer, roleAtLeast, workspaceContext } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { booleanQuerySchema, booleanQueryWithDefault, csvUuidArray, dateSchema, moneySchema, positiveMoneySchema } from '../shared/schemas.js';
 import { confirmScheduledTransaction } from '../recurring/service.js';
+import {
+  bulkCategorizeResponse,
+  commentResponse,
+  splitsResponse,
+  transactionDetailResponse,
+  transactionPageResponse,
+  transactionResponse,
+  transferResponse,
+} from './responses.js';
 import * as transactionService from './service.js';
 
 const idParams = z.object({ workspaceId: uuidSchema, id: uuidSchema });
@@ -66,6 +76,7 @@ transactionRouter.get(
   '/',
   requireViewer,
   validate({ query: listQuerySchema }),
+  responds({ 200: transactionPageResponse }),
   asyncHandler(async (req, res) => {
     const q = query<z.infer<typeof listQuerySchema>>(req);
     const { page, pageSize, ...filters } = q;
@@ -82,6 +93,7 @@ transactionRouter.post(
   '/',
   requireEditor,
   validate({ body: createSchema }),
+  responds({ 201: transactionResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const input = body<z.infer<typeof createSchema>>(req);
@@ -110,6 +122,7 @@ transactionRouter.post(
       status: z.enum(TRANSFER_STATUSES).optional(),
     }),
   }),
+  responds({ 201: transferResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const input = body<Omit<transactionService.CreateTransferInput, 'workspaceId' | 'baseCurrency' | 'createdBy'>>(req);
@@ -135,6 +148,7 @@ transactionRouter.post(
       categoryId: uuidSchema.nullable(),
     }),
   }),
+  responds({ 200: bulkCategorizeResponse }),
   asyncHandler(async (req, res) => {
     const input = body<{ transactionIds: string[]; categoryId: string | null }>(req);
     const updated = await transactionService.bulkCategorize(
@@ -151,6 +165,7 @@ transactionRouter.get(
   '/:id',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: transactionDetailResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const workspaceId = workspaceContext(req).id;
@@ -181,6 +196,7 @@ transactionRouter.patch(
       tagIds: z.array(uuidSchema).max(LIMITS.tagsPerTransaction.max, 'validation.maxTags').optional(),
     }),
   }),
+  responds({ 200: transactionResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);
@@ -201,6 +217,7 @@ transactionRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await transactionService.deleteTransaction(workspaceContext(req).id, id, req.user!.id);
@@ -212,6 +229,7 @@ transactionRouter.post(
   '/:id/restore',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await transactionService.restoreTransaction(workspaceContext(req).id, id, req.user!.id);
@@ -223,6 +241,7 @@ transactionRouter.post(
   '/:id/confirm',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await confirmScheduledTransaction(workspaceContext(req).id, id, req.user!.id);
@@ -250,6 +269,7 @@ transactionRouter.put(
         .max(50),
     }),
   }),
+  responds({ 200: splitsResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const { splits } = body<{ splits: transactionService.SplitInput[] }>(req);
@@ -264,6 +284,7 @@ transactionRouter.post(
     params: idParams.extend({ splitId: uuidSchema }),
     body: z.object({ settled: z.boolean().default(true) }),
   }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { splitId } = params<{ splitId: string }>(req);
     const { settled } = body<{ settled: boolean }>(req);
@@ -283,6 +304,7 @@ transactionRouter.post(
       body: z.string().min(LIMITS.commentBody.min).max(LIMITS.commentBody.max),
     }),
   }),
+  responds({ 201: commentResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<{ body: string }>(req);
@@ -295,6 +317,7 @@ transactionRouter.delete(
   '/:id/comments/:commentId',
   requireViewer,
   validate({ params: idParams.extend({ commentId: uuidSchema }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { commentId } = params<{ commentId: string }>(req);
     const workspace = workspaceContext(req);

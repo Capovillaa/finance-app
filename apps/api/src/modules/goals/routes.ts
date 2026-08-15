@@ -13,7 +13,9 @@ import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { dateSchema, positiveMoneySchema } from '../shared/schemas.js';
+import { goalDetailResponse, goalListResponse, goalResponse } from './responses.js';
 import * as goalService from './service.js';
 
 const idParams = z.object({ workspaceId: uuidSchema, id: uuidSchema });
@@ -27,6 +29,7 @@ goalRouter.get(
   '/',
   requireViewer,
   validate({ query: z.object({ status: goalStatusSchema.optional() }) }),
+  responds({ 200: goalListResponse }),
   asyncHandler(async (req, res) => {
     const options = query<{ status?: z.infer<typeof goalStatusSchema> }>(req);
     res.json({ goals: await goalService.listGoals(workspaceContext(req).id, options) });
@@ -49,6 +52,7 @@ goalRouter.post(
       color: colorField.nullish(),
     }),
   }),
+  responds({ 201: goalResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const input = body<Omit<goalService.CreateGoalInput, 'workspaceId' | 'createdBy' | 'currency'> & { currency?: string }>(req);
@@ -66,6 +70,7 @@ goalRouter.get(
   '/:id',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: goalDetailResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const workspaceId = workspaceContext(req).id;
@@ -93,6 +98,7 @@ goalRouter.patch(
       accountId: uuidSchema.nullish(),
     }),
   }),
+  responds({ 200: goalResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<goalService.UpdateGoalInput>(req);
@@ -104,6 +110,7 @@ goalRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await goalService.deleteGoal(workspaceContext(req).id, id, req.user!.id);
@@ -123,6 +130,7 @@ goalRouter.post(
       note: z.string().max(LIMITS.goalContributionNote.max).nullish(),
     }),
   }),
+  responds({ 201: goalResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<Omit<goalService.ContributionInput, 'workspaceId' | 'goalId' | 'createdBy'>>(req);
@@ -140,6 +148,7 @@ goalRouter.delete(
   '/:id/contributions/:contributionId',
   requireEditor,
   validate({ params: idParams.extend({ contributionId: uuidSchema }) }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { contributionId } = params<{ contributionId: string }>(req);
     await goalService.deleteContribution(workspaceContext(req).id, contributionId);

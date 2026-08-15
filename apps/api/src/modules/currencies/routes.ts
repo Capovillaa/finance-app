@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { responds } from '../../middleware/responds.js';
 import { query, validate } from '../../middleware/validate.js';
 import { today } from '../../lib/dates.js';
 import { dateSchema } from '../shared/schemas.js';
+import { currencyListResponse, exchangeRateResponse } from './responses.js';
 import * as currencyService from './service.js';
 
 export const currencyRouter: Router = Router();
@@ -13,6 +15,7 @@ currencyRouter.use(requireAuth);
 
 currencyRouter.get(
   '/',
+  responds({ 200: currencyListResponse }),
   asyncHandler(async (_req, res) => {
     res.json({ currencies: await currencyService.listCurrencies() });
   }),
@@ -27,6 +30,7 @@ currencyRouter.get(
       asOf: dateSchema.optional(),
     }),
   }),
+  responds({ 200: exchangeRateResponse }),
   asyncHandler(async (req, res) => {
     const { from, to, asOf } = query<{ from: string; to: string; asOf?: string }>(req);
     const date = asOf ?? today('UTC');

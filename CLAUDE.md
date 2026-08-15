@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-259; see section 4 for the current command. The compiled `dist/server.js`
+293; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -446,9 +446,11 @@ D:\finance_app
 │   │   │   │                        # csv (reader + writer, both directions),
 │   │   │   │                        # route-metadata (stampRoute + mount: what
 │   │   │   │                        #   the app records about its own shape)
-│   │   │   ├── middleware/          # auth, validate, error handling, locale
+│   │   │   ├── middleware/          # auth, validate, error handling, locale,
+│   │   │   │                        # responds (declares + enforces a response shape)
 │   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
-│   │   │   │                        # JSON Schema), document.ts (-> the spec)
+│   │   │   │                        # JSON Schema), document.ts (-> the spec),
+│   │   │   │                        # service-responses.ts (/health, /openapi.json)
 │   │   │   ├── jobs/                # queues.ts, processors.ts
 │   │   │   └── modules/             # one folder per domain, each routes.ts +
 │   │   │                            # service.ts: accounts, activity, alerts,
@@ -456,8 +458,10 @@ D:\finance_app
 │   │   │                            # currencies, goals, imports, notifications,
 │   │   │                            # recurring, reports, shared, tags,
 │   │   │                            # transactions, users, workspaces
-│   │   │                            # (imports also has mapping.ts: pure
-│   │   │                            #  column/date/sign inference)
+│   │   │                            # every module with routes also has
+│   │   │                            # responses.ts (what it returns — see 5e);
+│   │   │                            # imports also has mapping.ts: pure
+│   │   │                            # column/date/sign inference
 │   │   ├── scripts/
 │   │   │   ├── copy-assets.mjs      # build step: copies i18n/locales into dist
 │   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
@@ -465,10 +469,15 @@ D:\finance_app
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
 │   │       │                        # import-mapping, openapi
 │   │       └── integration/         # auth, workspaces, transactions, imports,
-│   │                                # budgets-analytics, recurring-alerts
+│   │                                # budgets-analytics, recurring-alerts,
+│   │                                # response-contracts (one success call per
+│   │                                #   endpoint that declares a response schema)
 │   └── web/                         # @finance/web — React client (Vite)
 │       ├── index.html
 │       ├── vite.config.ts
+│       ├── scripts/
+│       │   └── generate-types.mjs   # docs/openapi.json -> src/api/schema.d.ts;
+│       │                            #   --check for CI
 │       └── src/
 │           ├── main.tsx             # entrypoint: store, theme, router
 │           ├── App.tsx              # routes
@@ -479,7 +488,8 @@ D:\finance_app
 │           ├── api/
 │           │   ├── api.ts           # the single RTK Query service + tag types
 │           │   ├── baseQuery.ts     # fetch base query + transparent refresh
-│           │   ├── types.ts         # hand-written mirror of API response shapes
+│           │   ├── schema.d.ts      # GENERATED from docs/openapi.json; do not edit
+│           │   ├── types.ts         # names for what is in schema.d.ts; no field lists
 │           │   └── endpoints/       # one file per backend module: accounts.ts,
 │           │                        # alerts.ts, analytics.ts, auth.ts,
 │           │                        # budgets.ts, categories.ts, goals.ts,
@@ -525,9 +535,11 @@ D:\finance_app
 │           └── fields.ts            # the API's request fields (no transforms)
 ├── docs/
 │   ├── architecture.md              # system design
-│   ├── api.md                       # endpoint reference (responses live here)
+│   ├── api.md                       # endpoint reference: what each one is for
 │   ├── openapi.json                 # GENERATED — `npm run generate:openapi`;
-│   │                                # do not hand-edit, CI checks it
+│   │                                # do not hand-edit, CI checks it. Requests
+│   │                                # AND responses; the client's types come
+│   │                                # out of this file
 │   ├── decisions.md                 # decision log (see section 6)
 │   └── finance_management_project_prompt.md   # original brief
 ├── infra/postgres/init/             # container init SQL
@@ -540,12 +552,15 @@ D:\finance_app
 ```
 
 **API module convention:** every domain folder in `apps/api` is exactly
-`routes.ts` (Express router, Zod validation, no business logic) plus
-`service.ts` (all logic, owns its own SQL). Follow this when adding domains.
-Two rules that a new module has to obey, both enforced by something that will
-fail loudly rather than silently: **import Zod from `zod/v4`**, not `'zod'`, and
+`routes.ts` (Express router, Zod validation, no business logic), `service.ts`
+(all logic, owns its own SQL) and **`responses.ts`** (the Zod description of what
+it returns — section 5e). Follow this when adding domains.
+Three rules that a new module has to obey, all enforced by something that will
+fail loudly rather than silently: **import Zod from `zod/v4`**, not `'zod'`,
 **mount the router with `mount()`** from `lib/route-metadata.ts` rather than
-`.use()` — the OpenAPI walker throws on a router whose path it cannot recover.
+`.use()` — the OpenAPI walker throws on a router whose path it cannot recover —
+and **declare what each route returns with `responds()`**, which the test suite
+then enforces against the real response.
 Nothing else is needed for the new endpoints to appear in the specification;
 the tag, the role, the security requirement and the 429 all follow from the
 middleware already on the routes. Run `npm run generate:openapi` afterwards.
@@ -613,21 +628,25 @@ npm run dev:worker --workspace=@finance/api
 ### Tests
 
 ```bash
-npm test                 # all 259 — needs Postgres, and only Postgres
-npm run test:unit        # 148 pure units, no infrastructure at all
+npm test                 # all 293 — needs Postgres, and only Postgres
+npm run test:unit        # 160 pure units, no infrastructure at all
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
 npm run build --workspace=@finance/api
 npm run build --workspace=@finance/web
-npm run generate:openapi # rewrite docs/openapi.json from the app
-npm run check:openapi    # fail if that file is stale (this is the CI step)
+npm run generate:openapi # rewrite docs/openapi.json AND apps/web/src/api/schema.d.ts
+npm run check:openapi    # fail if either is stale (this is the CI step)
 ```
 
-**`npm run generate:openapi` after any route change**, or CI fails on the stale
-committed spec — as will `tests/unit/openapi.test.ts`, which compares the two.
-It needs no database: the script stubs the environment variables `config/env.ts`
-demands, because generating walks the router and converts schemas without
-opening a connection.
+**`npm run generate:openapi` after any route or response-schema change**, or CI
+fails on the stale committed files — as will `tests/unit/openapi.test.ts`, which
+compares the spec against a freshly built document. It writes **two** generated
+files, in a chain: the API produces `docs/openapi.json` from the router it boots,
+and the client produces `apps/web/src/api/schema.d.ts` from that. They are
+regenerated by one command precisely so they cannot be regenerated apart.
+Neither step needs a database — the script stubs the environment variables
+`config/env.ts` demands, because generating walks the router and converts schemas
+without opening a connection.
 
 Each of the root scripts above builds `@finance/schemas` first — see the
 shared-package convention in section 3 for why, and for the one case where you
@@ -804,6 +823,13 @@ These are not preferences, they are workarounds for real failures observed here:
 
 ## 5. Next tasks, in priority order
 
+**Everything numbered 1–7 is built.** The next piece of work is **8, live
+exchange rates** — it is the only remaining item that changes what the product
+does, rather than how it is deployed or hardened. The three small client gaps
+after the list (bulk categorise / confirm / restore, reconciliation, and the
+untranslated strings in `SplitsDialog`) are each an afternoon at most and are
+good warm-up work if you want to start somewhere smaller.
+
 1. ~~**Web client scaffold.**~~ **Done.** Vite, Material-UI, Redux Toolkit and
    Recharts, with React Hook Form and Zod for forms. Auth, workspace switching,
    and the API client are wired.
@@ -823,18 +849,17 @@ These are not preferences, they are workarounds for real failures observed here:
    themselves are deliberately *not* shared. Four real divergences were found
    and fixed in the process, and the API's field-validation errors are now
    translated as a direct consequence.
-6. ~~**OpenAPI generation.**~~ **Phase 1 done** (section 5d). `docs/openapi.json`
-   is generated from the running app, served at `/openapi.json`, and checked in
-   CI. **Phase 2 — response schemas — is still open**, and is what would let
-   `apps/web/src/api/types.ts` be replaced by `openapi-typescript` output
-   (7.13.0; it takes the spec and needs no Zod). It is endpoint-by-endpoint work:
-   services return Kysely rows and routes `res.json()` them, so there is nothing
-   to convert and a schema has to be authored for each. **Until it lands, leave
-   `api/types.ts` alone** — a half-generated types file where nobody can tell
-   which half is which is worse than the honest hand-written one. Doing it also
-   means deciding whether response schemas live beside each service or in one
-   `openapi/responses/` module; the former keeps them next to the query that
-   produces the row.
+6. ~~**OpenAPI generation.**~~ **Done, both phases.** Phase 1 (section 5d)
+   generates `docs/openapi.json` from the running app, serves it at
+   `/openapi.json`, and checks it in CI. Phase 2 (section 5e) describes
+   **104 of 104 operations**, every one of them checked against a real response
+   by the test suite — and `apps/web/src/api/types.ts` is no longer
+   hand-written: `openapi-typescript` turns the spec into
+   `apps/web/src/api/schema.d.ts`, and `types.ts` only assigns names to what is
+   in it. Doing it found one real bug (a recurring schedule's `categoryName` was
+   never selected, so the Recurring screen had silently shown only the account
+   name since the redesign) and one divergence (a category's `kind` has three
+   members, not the two the client's types claimed).
 7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
    `vite.config.ts` type error it would have tripped over was fixed rather than
    worked around, so the client's own `npm run build` is on the critical path.
@@ -871,12 +896,16 @@ These are not preferences, they are workarounds for real failures observed here:
     migration step that runs before rollout.
 
 Not started, deliberately: deployment, and any real payment or bank
-integration. Smaller known gaps, none of them oversights: bulk categorise,
-confirm and restore have no UI though the API has them; account reconciliation
-and per-account statement history have no UI; the workspace settings screen
-cannot create a workspace (the switcher does that); a revoked invitation cannot
-be re-sent, because the token only ever exists in the email; CSV import reads
-files as UTF-8 only, and supports no other statement format (OFX, QIF).
+integration. Smaller known gaps, none of them oversights, all re-checked while
+generating the client's types: **bulk categorise, confirm and restore have no
+UI** though the API has them and now publishes their exact shapes
+(`POST /transactions/bulk-categorize`, `/:id/confirm`, `/:id/restore` — each is
+one button); **account reconciliation and per-account statement history have no
+UI**, though `AccountReconciliation` and `ReconciliationResult` are both in the
+specification; the workspace settings screen cannot create a workspace (the
+switcher does that); a revoked invitation cannot be re-sent, because the token
+only ever exists in the email; CSV import reads files as UTF-8 only, and
+supports no other statement format (OFX, QIF).
 
 One real gap found while building the import dialog and left alone as out of
 scope: **`features/transactions/SplitsDialog.tsx` still has four hardcoded
@@ -1097,8 +1126,10 @@ What exists now:
    module means `mount(...)` in `routes.ts` and nothing else — the tag, the
    security requirement, the role and the 429 all follow from the code.
 
-**Phase 2 — responses — is not built,** and `apps/web/src/api/types.ts` is
-still hand-written on purpose. See the end of this section.
+**Phase 2 — responses — is done; see section 5e**, which supersedes the
+"responses are the expensive half" note in the design below. All 104 operations
+describe what they return, and `apps/web/src/api/types.ts` is generated from
+that rather than hand-written.
 
 ---
 
@@ -1253,6 +1284,13 @@ Split it:
   (7.13.0; it takes the spec and needs no Zod). **Until phase 2 lands, leave
   `api/types.ts` alone** — a half-generated types file where nobody can tell
   which half is which is worse than the honest hand-written one.
+  **[built as]** exactly this, and `openapi-typescript` 7.13.0 was the right
+  call. The one thing the split did not anticipate is that authoring a response
+  schema is guesswork unless something checks it, so `responds()` enforces every
+  declaration against the real body under test — see section 5e. `types.ts`
+  survives as an alias layer over the generated `schema.d.ts` rather than being
+  deleted, because the generated names are unusable at a call site; it holds no
+  field lists, so the worry above does not apply.
 
 ### Serving and checking it
 
@@ -1300,6 +1338,134 @@ database, but `config/env.ts` parses the environment at import time and CI's
 
 ---
 
+## 5e. OpenAPI phase 2 — response schemas, and the generated client types
+
+**Done.** All **104 of 104 operations** describe what they return, every one is
+exercised by a real call in the suite, and `apps/web/src/api/types.ts` no longer
+describes a single structure by hand. Full reasoning is in `docs/decisions.md`
+("Response schemas live beside the service, and the test suite proves them" and
+"The client's response types are generated"). This is what you need in order to
+extend it without breaking it.
+
+### The chain
+
+```
+apps/api/src/modules/<domain>/responses.ts     Zod, authored beside the query
+        ↓  responds({ 200: … }) on the route, enforced under NODE_ENV=test
+docs/openapi.json                              npm run generate:openapi
+        ↓  openapi-typescript
+apps/web/src/api/schema.d.ts                   GENERATED — never edit
+        ↓  aliases only, no field lists
+apps/web/src/api/types.ts                      the names the app imports
+```
+
+`npm run generate:openapi` runs both generation steps; `npm run check:openapi`
+regenerates both and fails on any difference, which is the CI step. **They are
+one command on purpose** — regenerating the spec without the client types would
+let the two drift.
+
+### Where things live
+
+| What | Where |
+| --- | --- |
+| A domain's response schemas | `modules/<domain>/responses.ts` — beside the query that builds it |
+| Scalars and cross-module shapes | `modules/shared/responses.ts` — the response side of `shared/schemas.ts` |
+| `/health`, `/health/ready`, `/openapi.json` | `openapi/service-responses.ts` — they belong to no module |
+| The declaration + the runtime check | `middleware/responds.ts` |
+| Zod → components conversion | `openapi/schema.ts`'s `toResponseJsonSchema` |
+
+**Beside the service, deliberately, not in one `openapi/responses/` tree.** The
+change that invalidates a response schema is a change to the `SELECT` above it;
+keeping the two in one folder puts them in one diff. A central tree relies on
+whoever edited the query remembering a parallel file exists, and that failure is
+silent — the spec still generates and now describes last month's row.
+
+### Adding or changing an endpoint
+
+1. Write or extend `modules/<domain>/responses.ts`. Build fields from
+   `shared/responses.ts` (`money`, `dateOnly`, `timestamp`, `uuid`, `integer`,
+   `currencyCode`, `percent`, `jsonObject`, `dateRange`, `periodTotals`,
+   `page(item)`), and wrap anything a caller has a *word* for in
+   `component('Account', …)`.
+2. Put `responds({ 200: theEnvelope })` on the route, between `validate()` and
+   the handler. A 204 is `responds({ 204: NO_BODY })`; a CSV or file download is
+   `responds({ 200: media('text/csv', '…') })`.
+3. Make sure a test *succeeds* against it — see "reach" below.
+4. `npm run generate:openapi`, then `npm test`.
+
+A new name for the client goes in `apps/web/src/api/types.ts` as an alias:
+`components['schemas'][…]` for a component, `Ok<'operationId'>` for an envelope
+only one endpoint returns. **Never write a field list in that file.**
+
+### The six rules
+
+1. **A response schema describes the wire, not the row.** A `timestamp` column is
+   a JS `Date` in the service and an ISO string in the response; the schema says
+   string, and `responds()` checks it against `JSON.parse(JSON.stringify(body))`
+   so the two cannot disagree. This is the response-side twin of the request
+   side's `io: 'input'`.
+2. **`responds()` is enforced under `NODE_ENV=test`.** It parses every outgoing
+   body against the declaration and fails the request loudly on a mismatch — and
+   also on a *success status the route does not declare*, which catches a handler
+   that starts answering 200 where its declaration still says 201. Outside tests
+   it is a `next()`.
+3. **Reach matters as much as strictness.** A schema no test succeeds against is
+   an assertion nobody made. `RESPONSE_REACH=1 npx vitest run 2>&1 | grep -o
+   "REACH .*" | sort -u` lists every declaration the suite exercises; anything
+   declared and missing from that list belongs in
+   `tests/integration/response-contracts.test.ts`, which exists to close exactly
+   that gap. It is currently 104/104.
+4. **Name the concepts, not the packaging.** `Account` and `CategoryNode` are
+   components; `{ account: Account }` is not. The scalars (`Money`, `Timestamp`,
+   `DateOnly`, `Uuid`, `CurrencyCode`, `Integer`) are components too — an ISO
+   instant compiles to a 300-character pattern and inlining it beside every
+   `createdAt` in a hundred operations buries the document.
+5. **`component()` composes; `.describe()` on one is safe.** Zod does not carry a
+   component's `id` onto a derivative, so `money.describe('…')` emits prose beside
+   the `$ref` and `timestamp.nullable()` an `anyOf` around it. What you must not
+   do is name two different schemas the same thing — `component()` throws.
+6. **A recursive schema must be named.** Zod emits `$ref: "#"` for a schema that
+   is its own root, which points at the whole document; the converter throws
+   rather than publish that. `component()` gives it somewhere to point.
+
+### Traps already hit
+
+- **Never compose a component with `.and()`.** A Zod intersection publishes as
+  `allOf`, and the component branch carries `additionalProperties: false`, so a
+  strict validator rejects every property contributed by the other branch. Use
+  `.extend()`, which inlines the fields and drops the id — `periodTotals.extend({
+  range: dateRange })` in `analytics/responses.ts` is the reference case.
+- **Zod's metadata registry is a process-wide singleton that refuses a repeated
+  id, and it outlives a source module.** `vitest` with `pool: forks, singleFork`
+  re-evaluates `src/` per test file while `node_modules` stays cached, so the six
+  test files that import the app registered `Money` six times and the second
+  threw `ID Money already exists in the registry`. `component()` evicts the stale
+  registration; the guard that matters is its own `Set`, reset by the same
+  re-evaluation. **Do not "simplify" that eviction away.**
+- **`GET /categories` really returns two shapes**, so it is published as a union
+  of the two envelopes rather than as one with an optional `children`. A caller
+  picks the branch its `?shape=` asked for.
+- **Some fields are legitimately optional because a join supplies them.**
+  `Transaction.accountName`, `RecurringTransaction.categoryName` and
+  `Tag.usageCount` are present on the list and detail queries and absent from
+  create and update, which use `returningAll()` on one table. The schemas say
+  `.optional()` and mean it.
+
+### What describing them found
+
+Both are the payoff, and both were invisible to a typecheck before:
+
+1. **`RecurringTransaction.categoryName` was never selected.** `RecurringRow.tsx`
+   renders `accountName · categoryName`, the hand-written client type claimed the
+   field existed, and the API had never joined it — so every schedule had shown
+   only its account name since the redesign. The join was added beside the
+   `accountName` one it should always have sat next to, and the row now reads
+   `Checking · Alimentação` in a real browser.
+2. **A category's `kind` has three members**, not two: `transfer` is reachable and
+   the client's `CategoryKind` had said otherwise.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -1328,16 +1494,25 @@ typecheck is a real gate. `apps/web` is a separate case and correctly uses
 `apps/api` resolves it through Node's own resolver and NodeNext is the stricter
 of the two to satisfy.
 
-**The OpenAPI document is generated from the running app, and describes requests
-only.** `docs/openapi.json` comes out of `apps/api/src/openapi/`, which walks the
-Express router rather than reading a list, so it cannot drift from the code; CI
-fails if the committed copy is stale. Responses are not described — handlers
-return database rows, so there is nothing to convert — which is why
-`apps/web/src/api/types.ts` is still hand-written. Two constraints follow for
-future work: **`apps/api` is on `zod/v4`** (v3 schemas cannot be converted at
-all), and **a rule restated for the spec goes in `.meta()`**, never in a real
-check, so that documenting a rule cannot change which requests the API accepts.
-See section 5d and `docs/decisions.md`.
+**The OpenAPI document is generated from the running app.** `docs/openapi.json`
+comes out of `apps/api/src/openapi/`, which walks the Express router rather than
+reading a list, so it cannot drift from the code; CI fails if the committed copy
+is stale. Two constraints follow for future work: **`apps/api` is on `zod/v4`**
+(v3 schemas cannot be converted at all), and **a rule restated for the spec goes
+in `.meta()`**, never in a real check, so that documenting a rule cannot change
+which requests the API accepts. See section 5d and `docs/decisions.md`.
+
+**Response schemas are authored beside the service, and enforced by the tests.**
+Handlers return database rows, so unlike requests there was nothing to convert —
+each shape is written by hand in `modules/<domain>/responses.ts` and declared on
+the route with `responds()`. That declaration is not documentation only: under
+`NODE_ENV=test` every outgoing body is parsed against it and a mismatch fails the
+request, which is the only reason to trust a hand-authored schema. A schema
+describes the **wire** (an ISO string), not the row (a `Date`). All 104
+operations are described and all 104 are reached by a passing test, so
+**`apps/web/src/api/types.ts` is now generated**: `openapi-typescript` writes
+`apps/web/src/api/schema.d.ts` from the spec and `types.ts` only assigns names to
+what is in it — never a field list. See section 5e and `docs/decisions.md`.
 
 **Validation rules live in `@finance/schemas`; the parsers do not.** Every bound,
 value set, pattern and rejection message both apps must agree on is declared once

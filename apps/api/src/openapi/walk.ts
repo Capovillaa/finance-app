@@ -2,6 +2,7 @@ import type { Express, RequestHandler } from 'express';
 import type { ZodType } from 'zod/v4';
 import type { MemberRole } from '../db/types.js';
 import { mountInfo, routeMetadata, type RouteMetadata } from '../lib/route-metadata.js';
+import type { ResponseDeclarations } from '../middleware/responds.js';
 
 /**
  * Turns the Express app into a list of routes.
@@ -41,6 +42,12 @@ export interface RouteRecord {
   params: ZodType[];
   query: ZodType[];
   body?: ZodType;
+  /**
+   * What the route declares it returns, per status code. Absent on a route that
+   * has not been given a `responds()` yet — the document publishes the honest
+   * "success, shape not described" placeholder for those.
+   */
+  responses?: ResponseDeclarations;
 }
 
 /** Express's internals, named. None of this is in `@types/express`. */
@@ -63,6 +70,7 @@ interface Context {
   params: ZodType[];
   query: ZodType[];
   body?: ZodType;
+  responses?: ResponseDeclarations;
 }
 
 /**
@@ -79,7 +87,7 @@ function moduleFromPrefix(prefix: string, current: string): string {
 
 function absorb(context: Context, metadata: RouteMetadata | undefined): Context {
   if (!metadata) return context;
-  const { schemas, role, authenticated, rateLimited } = metadata;
+  const { schemas, responses, role, authenticated, rateLimited } = metadata;
   return {
     ...context,
     authenticated: context.authenticated || authenticated === true,
@@ -88,6 +96,7 @@ function absorb(context: Context, metadata: RouteMetadata | undefined): Context 
     params: schemas?.params ? [...context.params, schemas.params] : context.params,
     query: schemas?.query ? [...context.query, schemas.query] : context.query,
     body: schemas?.body ?? context.body,
+    responses: responses ?? context.responses,
   };
 }
 
@@ -163,6 +172,7 @@ export function walkRoutes(app: Express): RouteRecord[] {
             params: routeContext.params,
             query: routeContext.query,
             ...(routeContext.body ? { body: routeContext.body } : {}),
+            ...(routeContext.responses ? { responses: routeContext.responses } : {}),
           });
         }
         continue;

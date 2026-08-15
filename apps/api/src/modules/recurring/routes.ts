@@ -19,7 +19,14 @@ import { asyncHandler } from '../../lib/http.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { addDays, today } from '../../lib/dates.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { booleanQueryWithDefault, dateSchema, positiveMoneySchema } from '../shared/schemas.js';
+import {
+  materializeResponse,
+  recurringDetailResponse,
+  recurringListResponse,
+  recurringResponse,
+} from './responses.js';
 import * as recurringService from './service.js';
 
 const idParams = z.object({ workspaceId: uuidSchema, id: uuidSchema });
@@ -30,6 +37,7 @@ recurringRouter.get(
   '/',
   requireViewer,
   validate({ query: z.object({ includeInactive: booleanQueryWithDefault(false) }) }),
+  responds({ 200: recurringListResponse }),
   asyncHandler(async (req, res) => {
     const options = query<{ includeInactive: boolean }>(req);
     res.json({ recurring: await recurringService.listRecurring(workspaceContext(req).id, options) });
@@ -66,6 +74,7 @@ recurringRouter.post(
         { message: 'validation.intervalRequired', path: ['intervalCount'] },
       ),
   }),
+  responds({ 201: recurringResponse }),
   asyncHandler(async (req, res) => {
     const input = body<Omit<recurringService.CreateRecurringInput, 'workspaceId' | 'createdBy'>>(req);
     const recurring = await recurringService.createRecurring({
@@ -81,6 +90,7 @@ recurringRouter.get(
   '/:id',
   requireViewer,
   validate({ params: idParams }),
+  responds({ 200: recurringDetailResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const workspaceId = workspaceContext(req).id;
@@ -109,6 +119,7 @@ recurringRouter.patch(
       leadTimeDays: leadTimeDaysField.optional(),
     }),
   }),
+  responds({ 200: recurringResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<recurringService.UpdateRecurringInput>(req);
@@ -120,6 +131,7 @@ recurringRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await recurringService.deleteRecurring(workspaceContext(req).id, id, req.user!.id);
@@ -135,6 +147,7 @@ recurringRouter.post(
     params: idParams,
     body: z.object({ through: dateSchema.optional() }),
   }),
+  responds({ 200: materializeResponse }),
   asyncHandler(async (req, res) => {
     const workspace = workspaceContext(req);
     const { id } = params<{ id: string }>(req);

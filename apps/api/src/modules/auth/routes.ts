@@ -12,10 +12,12 @@ import { z } from 'zod/v4';
 import { requireAuth } from '../../middleware/auth.js';
 import { authRateLimit } from '../../middleware/rate-limit.js';
 import { clientIp } from '../../middleware/request-context.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, validate } from '../../middleware/validate.js';
 import { asyncHandler } from '../../lib/http.js';
 import { unauthorized } from '../../lib/errors.js';
 import { db } from '../../db/client.js';
+import { authResultResponse, tokenPairResponse, userResponse } from './responses.js';
 import * as authService from './service.js';
 import { toPublicUser } from './service.js';
 
@@ -75,6 +77,7 @@ authRouter.post(
   '/register',
   authRateLimit,
   validate({ body: registerSchema }),
+  responds({ 201: authResultResponse }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof registerSchema>>(req);
     const result = await authService.register(input, {
@@ -90,6 +93,7 @@ authRouter.post(
   '/login',
   authRateLimit,
   validate({ body: loginSchema }),
+  responds({ 200: authResultResponse }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof loginSchema>>(req);
     const result = await authService.login(input, {
@@ -104,6 +108,7 @@ authRouter.post(
 authRouter.post(
   '/refresh',
   validate({ body: refreshSchema }),
+  responds({ 200: tokenPairResponse }),
   asyncHandler(async (req, res) => {
     const fromBody = body<z.infer<typeof refreshSchema>>(req).refreshToken;
     const token = fromBody ?? (req.cookies?.[REFRESH_COOKIE] as string | undefined);
@@ -121,6 +126,7 @@ authRouter.post(
 authRouter.post(
   '/logout',
   validate({ body: refreshSchema }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const fromBody = body<z.infer<typeof refreshSchema>>(req).refreshToken;
     const token = fromBody ?? (req.cookies?.[REFRESH_COOKIE] as string | undefined);
@@ -133,6 +139,7 @@ authRouter.post(
 authRouter.post(
   '/logout-all',
   requireAuth,
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     await authService.logout(undefined, req.user!.id);
     res.clearCookie(REFRESH_COOKIE, { path: '/api/v1/auth' });
@@ -145,6 +152,7 @@ authRouter.post(
   requireAuth,
   authRateLimit,
   validate({ body: changePasswordSchema }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof changePasswordSchema>>(req);
     await authService.changePassword(req.user!.id, input.currentPassword, input.newPassword);
@@ -156,6 +164,7 @@ authRouter.post(
 authRouter.get(
   '/me',
   requireAuth,
+  responds({ 200: userResponse }),
   asyncHandler(async (req, res) => {
     const user = await db
       .selectFrom('users')

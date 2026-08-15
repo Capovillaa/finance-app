@@ -8,29 +8,68 @@ import type {
   RecurringFrequency,
   WorkspaceRole as SharedWorkspaceRole,
 } from '@finance/schemas';
+import type { components, operations } from './schema';
 
 /**
- * Response shapes returned by @finance/api.
+ * The names this app calls the API's response shapes by.
  *
- * The *structures* here are still hand-written and mirror the service-layer
- * interfaces in `apps/api/src/modules/*`; generating them is what OpenAPI
- * generation (CLAUDE.md, next task 6) is for. What is no longer hand-written is
- * every closed set of values below — those come from `@finance/schemas`, so
- * adding an account type or a goal status on the server is a compile error here
- * rather than a `string` the client silently fails to render.
+ * **Nothing here describes a structure any more.** Every shape below is read out
+ * of `schema.d.ts`, which `npm run generate:openapi` writes from
+ * `docs/openapi.json`, which the API generates from the Zod schemas beside each
+ * service — and those are checked against real responses by the integration
+ * suite. The chain has no hand-copied link in it, so a field that changes on the
+ * server is a compile error here rather than `undefined` at runtime.
  *
- * Money is always a decimal string — never a number. Anything that looks like a
- * currency amount here is typed `Money` to make that impossible to forget.
+ * What this file still does is *name* things, for two reasons. A generated name
+ * like `operations['getWorkspacesByWorkspaceIdAnalyticsDashboard']['responses']['200']['content']['application/json']`
+ * is not something to write at a call site; and the closed value sets
+ * (`AccountType`, `WorkspaceRole`, …) are better taken from `@finance/schemas`,
+ * where both apps read them from one declaration, than from the spec's inlined
+ * copy of the same list.
+ *
+ * Adding a name: alias `components['schemas'][…]` for anything the API publishes
+ * as a component, and `Ok<'operationId'>` for an envelope that only one endpoint
+ * returns. Never write a field list.
  */
 
-/** A decimal amount with up to four places, e.g. `"1250.0000"`. */
-export type Money = string;
+type Schemas = components['schemas'];
+
+/** The 200/201 JSON body of one operation, by its `operationId` in the spec. */
+type Ok<Id extends keyof operations> = operations[Id]['responses'] extends {
+  200: { content: { 'application/json': infer Body } };
+}
+  ? Body
+  : operations[Id]['responses'] extends { 201: { content: { 'application/json': infer Body } } }
+    ? Body
+    : never;
+
+/** The JSON request body of one operation. */
+type Sends<Id extends keyof operations> = operations[Id] extends {
+  requestBody: { content: { 'application/json': infer Body } };
+}
+  ? Body
+  : never;
+
+// ---------------------------------------------------------------------------
+// Scalars
+// ---------------------------------------------------------------------------
+
+/** A decimal amount with up to four places, e.g. `"1250.0000"`. Never a number. */
+export type Money = Schemas['Money'];
 
 /** A calendar date, `YYYY-MM-DD`. */
-export type DateOnly = string;
+export type DateOnly = Schemas['DateOnly'];
 
-/** An ISO 8601 timestamp. Dates cross the wire serialised, not as `Date`. */
-export type Timestamp = string;
+/** An ISO 8601 instant. Dates cross the wire serialised, not as `Date`. */
+export type Timestamp = Schemas['Timestamp'];
+
+// ---------------------------------------------------------------------------
+// Closed value sets
+//
+// From `@finance/schemas` rather than from the spec: both apps read them from
+// one declaration there, so adding an account type on the server is a compile
+// error here without a regeneration step in between.
+// ---------------------------------------------------------------------------
 
 export type WorkspaceRole = SharedWorkspaceRole;
 
@@ -41,223 +80,110 @@ export type TransactionType = LedgerType;
 
 export type TransactionStatus = LedgerStatus;
 
-export type CategoryKind = 'income' | 'expense';
+export type CategoryKind = Schemas['Category']['kind'];
 
 /** Derived by the API from spend against limit; not a value any request sends. */
-export type BudgetStatus = 'on_track' | 'warning' | 'exceeded';
+export type BudgetStatus = Schemas['BudgetLineProgress']['status'];
 
 export type BudgetPeriod = SharedBudgetPeriod;
 
-export type NotificationSeverity = 'info' | 'warning' | 'critical';
+export type NotificationSeverity = Schemas['Notification']['severity'];
+
+export type GoalCategory = SharedGoalCategory;
+
+export type GoalStatus = SharedGoalStatus;
+
+export type RecurrenceFrequency = RecurringFrequency;
+
+export type AlertRuleType = Schemas['AlertRule']['type'];
+
+export type NotificationChannel = Schemas['AlertRule']['channels'][number];
 
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
-export interface ApiErrorDetail {
-  path: string;
-  message: string;
-}
+/** The single error envelope every endpoint uses. */
+export type ApiErrorBody = Schemas['Error'];
 
-/** The single error envelope every endpoint uses. See docs/api.md. */
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details?: ApiErrorDetail[];
-    requestId?: string;
-  };
-}
+export type ApiErrorDetail = NonNullable<NonNullable<ApiErrorBody['error']['details']>[number]>;
 
 // ---------------------------------------------------------------------------
 // Pagination
 // ---------------------------------------------------------------------------
 
-export interface Page<T> {
-  items: T[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-  hasMore: boolean;
-}
+/**
+ * The pagination envelope, which the client wants as a generic and the API
+ * cannot publish as one — OpenAPI 3.1 has no generics, so the six fields are
+ * written around each item type separately.
+ *
+ * Bridged rather than retyped: the fields come from a real paginated operation
+ * with its `items` swapped out, so a change to the envelope on the server
+ * reaches every `Page<T>` here without anyone editing this line.
+ */
+type PageEnvelope = Omit<Ok<'getWorkspacesByWorkspaceIdTransactions'>, 'items'>;
+
+export type Page<T> = PageEnvelope & { items: T[] };
 
 // ---------------------------------------------------------------------------
 // Auth and users
 // ---------------------------------------------------------------------------
 
-export interface User {
-  id: string;
-  email: string;
-  fullName: string;
-  locale: string;
-  timezone: string;
-  baseCurrency: string;
-  avatarUrl: string | null;
-}
+export type User = Schemas['User'];
 
-export interface AuthResult {
-  user: User;
-  accessToken: string;
-  /** Also set as an HttpOnly cookie; the browser client ignores this field. */
-  refreshToken: string;
-  expiresIn: number;
-  defaultWorkspaceId?: string;
-}
+export type AuthResult = Ok<'postAuthLogin'>;
 
-export interface TokenPair {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-}
+export type TokenPair = Ok<'postAuthRefresh'>;
 
-export interface LoginRequest {
-  email: string;
-  password: string;
-}
+export type LoginRequest = Sends<'postAuthLogin'>;
 
-export interface RegisterRequest {
-  email: string;
-  password: string;
-  fullName: string;
-  locale?: string;
-  timezone?: string;
-  baseCurrency?: string;
-  workspaceName?: string;
-}
+export type RegisterRequest = Sends<'postAuthRegister'>;
 
 // ---------------------------------------------------------------------------
 // Workspaces
 // ---------------------------------------------------------------------------
 
-export interface Workspace {
-  id: string;
-  name: string;
-  type: string;
-  ownerId: string;
-  baseCurrency: string;
-  timezone: string;
-  role: WorkspaceRole;
-  memberCount: number;
-  settings?: Record<string, unknown>;
-  createdAt: Timestamp;
-  archivedAt: Timestamp | null;
-}
+export type Workspace = Schemas['Workspace'];
 
-export interface WorkspaceMember {
-  userId: string;
-  email: string;
-  fullName: string;
-  avatarUrl: string | null;
-  role: WorkspaceRole;
-  joinedAt: Timestamp;
-}
+export type WorkspaceMember = Schemas['WorkspaceMember'];
 
 /**
  * A pending seat. The token itself is never returned by the list endpoint — it
  * only ever leaves the server inside the invitation email — so the client can
  * show and revoke an invitation but cannot re-send its link.
  */
-export interface WorkspaceInvitation {
-  id: string;
-  email: string;
-  role: Exclude<WorkspaceRole, 'owner'>;
-  status: 'pending' | 'accepted' | 'revoked' | 'expired' | string;
-  invitedByName: string | null;
-  expiresAt: Timestamp;
-  createdAt: Timestamp;
-}
+export type WorkspaceInvitation = Schemas['WorkspaceInvitation'];
+
+export type ActivityItem = Schemas['ActivityItem'];
 
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
 
-export interface Account {
-  id: string;
-  name: string;
-  type: AccountType;
-  currency: string;
-  institution: string | null;
-  initialBalance: Money;
-  currentBalance: Money;
-  /** Cleared balance plus anything still pending. */
-  availableBalance: Money;
-  creditLimit: Money | null;
-  statementDay: number | null;
-  dueDay: number | null;
-  color: string | null;
-  icon: string | null;
-  isArchived: boolean;
-  createdAt: Timestamp;
-}
+export type Account = Schemas['Account'];
 
-export interface AccountListResponse {
-  accounts: Account[];
-  totalBalance: Money;
-  balanceByCurrency: Record<string, Money>;
-}
+export type AccountListResponse = Ok<'getWorkspacesByWorkspaceIdAccounts'>;
+
+export type AccountReconciliation = Schemas['AccountReconciliation'];
+
+export type ReconciliationResult = Schemas['ReconciliationResult'];
 
 // ---------------------------------------------------------------------------
 // Categories
 // ---------------------------------------------------------------------------
 
-export interface Category {
-  id: string;
-  parentId: string | null;
-  name: string;
-  kind: CategoryKind;
-  depth: number;
-  color: string | null;
-  icon: string | null;
-  isSystem: boolean;
-  isArchived: boolean;
-  sortOrder: number;
-}
+export type Category = Schemas['Category'];
 
 /** `GET /categories?shape=tree` returns the same rows nested. */
-export interface CategoryNode extends Category {
-  children: CategoryNode[];
-}
+export type CategoryNode = Schemas['CategoryNode'];
 
 // ---------------------------------------------------------------------------
 // Transactions
 // ---------------------------------------------------------------------------
 
-export interface Transaction {
-  id: string;
-  accountId: string;
-  accountName?: string;
-  categoryId: string | null;
-  categoryName?: string | null;
-  type: TransactionType;
-  status: TransactionStatus;
-  amount: Money;
-  currency: string;
-  baseAmount: Money;
-  exchangeRate: string;
-  description: string;
-  merchant: string | null;
-  notes: string | null;
-  occurredOn: DateOnly;
-  transferGroupId: string | null;
-  counterAccountId: string | null;
-  recurringTransactionId: string | null;
-  isReconciled: boolean;
-  paidByUserId: string | null;
-  createdBy: string | null;
-  createdByName?: string | null;
-  tags?: string[];
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
+export type Transaction = Schemas['Transaction'];
 
-export interface Tag {
-  id: string;
-  name: string;
-  color: string | null;
-  /** Present on the list endpoint only — `POST /tags` does not compute it. */
-  usageCount?: number;
-}
+export type Tag = Schemas['Tag'];
 
 /**
  * One person's share of a transaction.
@@ -266,301 +192,76 @@ export interface Tag {
  * guarantees the shares of a transaction add up to the absolute value of its
  * amount — so the client never has to reconcile them.
  */
-export interface TransactionSplit {
-  id: string;
-  userId: string;
-  fullName: string;
-  shareAmount: Money;
-  sharePercent: string | null;
-  settledAt: Timestamp | null;
-  note: string | null;
-}
+export type TransactionSplit = Schemas['TransactionSplit'];
 
-export interface TransactionComment {
-  id: string;
-  body: string;
-  userId: string;
-  fullName: string;
-  avatarUrl: string | null;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
+export type TransactionComment = Schemas['TransactionComment'];
 
 /** `GET /transactions/:id` returns the row with everything hanging off it. */
-export interface TransactionDetail {
-  transaction: Transaction;
-  splits: TransactionSplit[];
-  comments: TransactionComment[];
-}
+export type TransactionDetail = Ok<'getWorkspacesByWorkspaceIdTransactionsById'>;
 
 // ---------------------------------------------------------------------------
 // Budgets
 // ---------------------------------------------------------------------------
 
-export interface BudgetLineProgress {
-  id: string;
-  categoryId: string;
-  categoryName: string;
-  categoryColor: string | null;
-  includeSubcategories: boolean;
-  limitAmount: Money;
-  spentAmount: Money;
-  remainingAmount: Money;
-  percentUsed: number;
-  alertThresholdPercent: number;
-  status: BudgetStatus;
-}
+export type BudgetLineProgress = Schemas['BudgetLineProgress'];
 
-export interface BudgetProgress {
-  id: string;
-  name: string;
-  period: BudgetPeriod;
-  startDate: DateOnly;
-  endDate: DateOnly;
-  currency: string;
-  rollover: boolean;
-  isActive: boolean;
-  totalLimit: Money;
-  totalSpent: Money;
-  totalRemaining: Money;
-  percentUsed: number;
-  /** Fraction of the period elapsed, so the UI can show pace vs spend. */
-  periodProgressPercent: number;
-  lines: BudgetLineProgress[];
-}
+export type BudgetProgress = Schemas['BudgetProgress'];
 
 // ---------------------------------------------------------------------------
 // Goals
 // ---------------------------------------------------------------------------
 
-export type GoalCategory = SharedGoalCategory;
+export type Goal = Schemas['Goal'];
 
-export type GoalStatus = SharedGoalStatus;
-
-export interface Goal {
-  id: string;
-  name: string;
-  description: string | null;
-  category: GoalCategory;
-  targetAmount: Money;
-  currentAmount: Money;
-  remainingAmount: Money;
-  progressPercent: number;
-  currency: string;
-  targetDate: DateOnly | null;
-  accountId: string | null;
-  status: GoalStatus;
-  priority: number;
-  color: string | null;
-  achievedAt: Timestamp | null;
-  /** Contribution per month needed to hit the target by `targetDate`. */
-  requiredMonthlyContribution: Money | null;
-  daysRemaining: number | null;
-  /** True when the goal is behind the pace implied by its deadline. */
-  offTrack: boolean;
-  createdAt: Timestamp;
-}
-
-export interface GoalContribution {
-  id: string;
-  amount: Money;
-  occurredOn: DateOnly;
-  note: string | null;
-  transactionId: string | null;
-  createdByName: string | null;
-  createdAt: Timestamp;
-}
+export type GoalContribution = Schemas['GoalContribution'];
 
 // ---------------------------------------------------------------------------
 // Recurring
 // ---------------------------------------------------------------------------
 
-export type RecurrenceFrequency = RecurringFrequency;
-
-export interface RecurringTransaction {
-  id: string;
-  name: string;
-  accountId: string;
-  accountName?: string;
-  categoryId: string | null;
-  categoryName?: string | null;
-  type: 'income' | 'expense';
-  /** Signed, as stored (negative for expenses) — unlike the create/update input, which takes a positive magnitude. */
-  amount: Money;
-  currency: string;
-  description: string;
-  merchant: string | null;
-  frequency: RecurrenceFrequency;
-  intervalCount: number;
-  byWeekday: number[] | null;
-  dayOfMonth: number | null;
-  monthOfYear: number | null;
-  startDate: DateOnly;
-  endDate: DateOnly | null;
-  occurrenceLimit: number | null;
-  occurrencesCreated: number;
-  nextOccurrenceOn: DateOnly | null;
-  autoPost: boolean;
-  leadTimeDays: number;
-  isActive: boolean;
-  /** Human-readable description of the schedule, e.g. "Monthly on the 1st". */
-  summary: string;
-}
+export type RecurringTransaction = Schemas['RecurringTransaction'];
 
 // ---------------------------------------------------------------------------
 // Alerts
 // ---------------------------------------------------------------------------
 
-export type AlertRuleType =
-  | 'budget_threshold'
-  | 'budget_exceeded'
-  | 'large_transaction'
-  | 'unusual_spending'
-  | 'duplicate_transaction'
-  | 'bill_due'
-  | 'goal_milestone'
-  | 'low_balance';
+export type AlertRule = Schemas['AlertRule'];
 
-export type NotificationChannel = 'in_app' | 'email' | 'push';
-
-export interface AlertRule {
-  id: string;
-  type: AlertRuleType;
-  isEnabled: boolean;
-  config: Record<string, unknown>;
-  channels: NotificationChannel[];
-  scopeCategoryId: string | null;
-  scopeAccountId: string | null;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-export interface AlertEvaluationSummary {
-  workspaceId: string;
-  notificationsCreated: number;
-  byType: Record<string, number>;
-}
+export type AlertEvaluationSummary = Ok<'postWorkspacesByWorkspaceIdAlertsEvaluate'>;
 
 // ---------------------------------------------------------------------------
 // Analytics
 // ---------------------------------------------------------------------------
 
-export interface DateRange {
-  start: DateOnly;
-  end: DateOnly;
-}
+export type DateRange = Schemas['DateRange'];
 
-export interface PeriodTotals {
-  income: Money;
-  expenses: Money;
-  net: Money;
-  savingsRate: number;
-}
+export type PeriodTotals = Schemas['PeriodTotals'];
 
-export interface CategoryBreakdownItem {
-  categoryId: string | null;
-  categoryName: string;
-  categoryColor: string | null;
-  parentId: string | null;
-  total: Money;
-  transactionCount: number;
-  percentOfTotal: number;
-}
+export type CategoryBreakdownItem = Schemas['CategoryBreakdownItem'];
 
-export interface ComparisonResult {
-  current: PeriodTotals & { range: DateRange };
-  previous: PeriodTotals & { range: DateRange };
-  incomeChangePercent: number;
-  expenseChangePercent: number;
-  netChange: Money;
-}
+export type ComparisonResult = Ok<'getWorkspacesByWorkspaceIdAnalyticsCompare'>;
 
-export interface TrendPoint {
-  period: string;
-  periodStart: DateOnly;
-  income: Money;
-  expenses: Money;
-  net: Money;
-}
+export type TrendPoint = Schemas['TrendPoint'];
 
-export interface NetWorthPoint {
-  periodEnd: DateOnly;
-  balance: Money;
-}
+export type NetWorthPoint = Ok<'getWorkspacesByWorkspaceIdAnalyticsNetWorth'>['points'][number];
 
-export interface SavingsRatePoint {
-  period: string;
-  income: Money;
-  expenses: Money;
-  saved: Money;
-  savingsRate: number;
-}
+export type SavingsRatePoint = Ok<'getWorkspacesByWorkspaceIdAnalyticsSavingsRate'>['points'][number];
 
-export interface SpendingInsight {
-  type: 'overspend' | 'savings_opportunity' | 'trend' | 'positive';
-  title: string;
-  detail: string;
-  data?: Record<string, unknown>;
-}
+export type SpendingInsight = Ok<'getWorkspacesByWorkspaceIdAnalyticsInsights'>['insights'][number];
 
-export interface DashboardBudget {
-  id: string;
-  name: string;
-  percentUsed: number;
-  status: BudgetStatus | string;
-  totalLimit: Money;
-  totalSpent: Money;
-}
+export type BudgetVarianceRow = Ok<'getWorkspacesByWorkspaceIdAnalyticsBudgetVariance'>['rows'][number];
 
-export interface UpcomingBill {
-  id: string;
-  name: string;
-  amount: Money;
-  currency: string;
-  dueOn: DateOnly;
-}
+export type DashboardSummary = Ok<'getWorkspacesByWorkspaceIdAnalyticsDashboard'>;
 
-export interface DashboardGoal {
-  id: string;
-  name: string;
-  progressPercent: number;
-  targetAmount: Money;
-  currentAmount: Money;
-}
+export type DashboardBudget = DashboardSummary['budgets'][number];
 
-export interface DashboardSummary {
-  asOf: DateOnly;
-  baseCurrency: string;
-  totalBalance: Money;
-  balanceByCurrency: Record<string, Money>;
-  accounts: Account[];
-  month: PeriodTotals & { range: DateRange };
-  monthOverMonth: ComparisonResult;
-  topCategories: CategoryBreakdownItem[];
-  budgets: DashboardBudget[];
-  recentTransactions: Transaction[];
-  upcomingBills: UpcomingBill[];
-  goals: DashboardGoal[];
-  unreadNotifications: number;
-}
+export type UpcomingBill = DashboardSummary['upcomingBills'][number];
+
+export type DashboardGoal = DashboardSummary['goals'][number];
 
 // ---------------------------------------------------------------------------
 // Reports
 // ---------------------------------------------------------------------------
-
-export interface StatementAccountBalance {
-  id: string;
-  name: string;
-  currency: string;
-  closingBalance: Money;
-}
-
-export interface StatementBudget {
-  name: string;
-  totalLimit: Money;
-  totalSpent: Money;
-  percentUsed: number;
-}
 
 /**
  * A closed statement for one month.
@@ -570,145 +271,54 @@ export interface StatementBudget {
  * next year returns the same figures. Both balances are in `baseCurrency`;
  * `accounts[].closingBalance` is in each account's own currency.
  */
-export interface MonthlyStatement {
-  workspaceId: string;
-  range: DateRange;
-  baseCurrency: string;
-  openingBalance: Money;
-  closingBalance: Money;
-  totals: PeriodTotals;
-  /** Top-level categories only — the server rolls subcategories up at depth 0. */
-  categories: CategoryBreakdownItem[];
-  accounts: StatementAccountBalance[];
-  budgets: StatementBudget[];
-  transactionCount: number;
-}
+export type MonthlyStatement = Ok<'getWorkspacesByWorkspaceIdReportsStatement'>['statement'];
 
-export interface YearOverYearRow {
-  /** The `MM` half of the month key, shared by both years. */
-  month: string;
-  currentIncome: Money;
-  currentExpenses: Money;
-  previousIncome: Money;
-  previousExpenses: Money;
-  /** 0 when the prior year had no spending in that month — not a 100% fall. */
-  expenseChangePercent: number;
-}
+export type StatementAccountBalance = MonthlyStatement['accounts'][number];
+
+export type StatementBudget = MonthlyStatement['budgets'][number];
+
+export type YearOverYearRow = Ok<'getWorkspacesByWorkspaceIdReportsYearOverYear'>['rows'][number];
 
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 
-export interface Notification {
-  id: string;
-  workspaceId: string | null;
-  type: string;
-  severity: NotificationSeverity;
-  title: string;
-  message: string;
-  data: Record<string, unknown>;
-  readAt: Timestamp | null;
-  createdAt: Timestamp;
-}
+export type Notification = Schemas['Notification'];
 
-export type NotificationPage = Page<Notification> & { unreadCount: number };
+export type NotificationPage = Ok<'getNotifications'>;
+
+// ---------------------------------------------------------------------------
+// Currencies
+// ---------------------------------------------------------------------------
+
+export type Currency = Schemas['Currency'];
 
 // ---------------------------------------------------------------------------
 // CSV import
 // ---------------------------------------------------------------------------
 
 /** The fields an import can fill, each mapped to a zero-based column index. */
-export interface ImportColumnMapping {
-  date?: number;
-  description?: number;
-  amount?: number;
-  debit?: number;
-  credit?: number;
-  direction?: number;
-  merchant?: number;
-  notes?: number;
-  category?: number;
-  externalId?: number;
-}
+export type ImportColumnMapping = Schemas['ImportColumnMapping'];
 
 export type ImportColumn = keyof ImportColumnMapping;
 
 /** `dmy` and `mdy` are the two readings of the same `01/02/2026`. */
-export type ImportDateFormat = 'iso' | 'dmy' | 'mdy';
+export type ImportDateFormat = ImportOptions['dateFormat'];
 
 /** One signed column, separate debit/credit columns, or a magnitude plus a D/C flag. */
-export type ImportSignConvention = 'signed' | 'debit_credit' | 'direction_flag';
+export type ImportSignConvention = ImportOptions['signConvention'];
 
-export interface ImportOptions {
-  delimiter: string;
-  hasHeader: boolean;
-  mapping: ImportColumnMapping;
-  dateFormat: ImportDateFormat;
-  decimalSeparator: '.' | ',';
-  signConvention: ImportSignConvention;
-  invertAmounts: boolean;
-}
+export type ImportOptions = Schemas['ImportOptions'];
 
 /** Everything the client may override when asking for a fresh preview. */
 export type ImportOptionOverrides = Partial<ImportOptions>;
 
-export interface ImportRowIssue {
-  field: string;
-  /** Already rendered in the request's locale by the server. */
-  message: string;
-}
+export type ImportRowIssue = Schemas['ImportRowIssue'];
 
-export interface ImportPreviewRow {
-  /** 1-based line in the source file, header included. */
-  lineNumber: number;
-  occurredOn: DateOnly | null;
-  description: string;
-  merchant: string | null;
-  notes: string | null;
-  /** Signed, in the account's currency: negative is money leaving. */
-  amount: Money | null;
-  type: 'income' | 'expense' | null;
-  categoryId: string | null;
-  /** The file's own category text when it matched nothing in the workspace. */
-  categoryName: string | null;
-  externalId: string | null;
-  errors: ImportRowIssue[];
-  duplicateOfTransactionId: string | null;
-  duplicateOfLineNumber: number | null;
-  raw: string[];
-}
+export type ImportPreviewRow = Schemas['ImportPreviewRow'];
 
-export interface ImportPreview {
-  batchId: string;
-  accountId: string;
-  accountName: string;
-  currency: string;
-  filename: string | null;
-  headers: string[];
-  options: ImportOptions;
-  /** The mapping came from this account's last import rather than from a guess. */
-  mappingRecalled: boolean;
-  /** The file reads either way round and nothing in it settles the question. */
-  dateFormatAmbiguous: boolean;
-  rows: ImportPreviewRow[];
-  counts: { total: number; ready: number; invalid: number; duplicate: number };
-  totals: { inflow: Money; outflow: Money; net: Money };
-  expiresAt: Timestamp;
-}
+export type ImportPreview = Schemas['ImportPreview'];
 
-export type ImportBatchStatus = 'preview' | 'committed' | 'reverted';
+export type ImportBatch = Schemas['ImportBatch'];
 
-export interface ImportBatch {
-  id: string;
-  accountId: string;
-  accountName: string;
-  status: ImportBatchStatus;
-  filename: string | null;
-  rowCount: number;
-  importedCount: number;
-  createdBy: string | null;
-  createdByName: string | null;
-  createdAt: Timestamp;
-  committedAt: Timestamp | null;
-  revertedAt: Timestamp | null;
-}
+export type ImportBatchStatus = ImportBatch['status'];

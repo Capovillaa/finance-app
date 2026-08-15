@@ -2,8 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod/v4';
 import { asyncHandler } from '../../lib/http.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { NO_BODY, responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { booleanQueryWithDefault } from '../shared/schemas.js';
+import {
+  categoryListResponse,
+  categoryResponse,
+  categoryTemplateResponse,
+} from './responses.js';
 import * as categoryService from './service.js';
 import { DEFAULT_CATEGORY_TEMPLATE } from './defaults.js';
 
@@ -22,6 +28,7 @@ categoryRouter.get(
       shape: z.enum(['tree', 'flat']).default('tree'),
     }),
   }),
+  responds({ 200: categoryListResponse }),
   asyncHandler(async (req, res) => {
     const options = query<{ includeArchived: boolean; kind?: 'income' | 'expense' | 'transfer'; shape: string }>(req);
     const records = await categoryService.listCategories(workspaceContext(req).id, {
@@ -33,7 +40,7 @@ categoryRouter.get(
   }),
 );
 
-categoryRouter.get('/template', requireViewer, (_req, res) => {
+categoryRouter.get('/template', requireViewer, responds({ 200: categoryTemplateResponse }), (_req, res) => {
   res.json({ template: DEFAULT_CATEGORY_TEMPLATE });
 });
 
@@ -50,6 +57,7 @@ categoryRouter.post(
       sortOrder: z.number().int().min(0).max(9999).optional(),
     }),
   }),
+  responds({ 201: categoryResponse }),
   asyncHandler(async (req, res) => {
     const input = body<Parameters<typeof categoryService.createCategory>[0]>(req);
     const category = await categoryService.createCategory({ ...input, workspaceId: workspaceContext(req).id });
@@ -71,6 +79,7 @@ categoryRouter.patch(
       isArchived: z.boolean().optional(),
     }),
   }),
+  responds({ 200: categoryResponse }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     const input = body<categoryService.UpdateCategoryInput>(req);
@@ -82,6 +91,7 @@ categoryRouter.delete(
   '/:id',
   requireEditor,
   validate({ params: idParams }),
+  responds({ 204: NO_BODY }),
   asyncHandler(async (req, res) => {
     const { id } = params<{ id: string }>(req);
     await categoryService.deleteCategory(workspaceContext(req).id, id);
