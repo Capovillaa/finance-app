@@ -48,6 +48,20 @@ jobs:
       - name: Build shared schemas
         run: npm run build:schemas
 
+      # A dependency is only as current as the last time somebody looked. This
+      # gate is deliberately narrower than a bare `npm audit`: it fails on a
+      # high or critical advisory in a *runtime* dependency — the code that
+      # actually ships in the image — and reports everything else without
+      # failing. A build tool's dev-server advisory is worth knowing about and
+      # is not a reason to block an unrelated pull request, which is exactly how
+      # a noisy gate ends up being ignored or deleted.
+      - name: Production dependencies carry no high or critical advisory
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Full advisory report (informational)
+        if: always()
+        run: npm audit || true
+
       - name: Typecheck (schemas, api and web)
         run: npm run typecheck
 

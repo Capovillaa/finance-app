@@ -56,9 +56,12 @@ Worth knowing about, because two of them are patterns that can recur:
    rejection is raised after the commit. **Never throw from inside a transaction
    when the write must survive.**
 2. **`GET /transactions` returned 500 unconditionally.** An `async` helper
-   resolved to a Kysely query builder. Builders are deliberately thenable and
-   throw when awaited, so the async machinery detonated. **Never return a query
-   builder from an `async` function** — wrap it in an object.
+   resolved to a Kysely query builder. Builders were deliberately thenable and
+   threw when awaited, so the async machinery detonated. **Never return a query
+   builder from an `async` function** — wrap it in an object. Note that the
+   *symptom* has changed since: Kysely 0.28 removed `preventAwait`, so awaiting
+   a builder no longer throws — it resolves to the builder object. The rule
+   stands; breaking it is now silent rather than loud.
 3. **`z.coerce.boolean()` inverted every boolean query flag.** `"false"` is a
    truthy string, so `?includeSubcategories=false` meant `true`. Fixed across
    seven route files; use `booleanQuerySchema` / `booleanQueryWithDefault` from
@@ -484,6 +487,9 @@ D:\finance_app
 │   │   │                            # column/date/sign inference; currencies
 │   │   │                            # also has providers.ts: the live rate
 │   │   │                            # feeds, with an injectable fetch
+│   │   ├── Dockerfile               # the production image: one artifact, three
+│   │   │                            # entrypoints (server, worker, migrate).
+│   │   │                            # Build from the REPO ROOT — see 5g
 │   │   ├── scripts/
 │   │   │   ├── copy-assets.mjs      # build step: copies i18n/locales into dist
 │   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
@@ -567,10 +573,15 @@ D:\finance_app
 │   ├── decisions.md                 # decision log (see section 6)
 │   └── finance_management_project_prompt.md   # original brief
 ├── infra/postgres/init/             # container init SQL
-├── .github/workflows/ci.yml         # typecheck + build + full suite
+├── .github/workflows/ci.yml         # typecheck, builds, generated-file and
+│                                    # i18n checks, unit tests, image build +
+│                                    # boot; and the full suite on Postgres
 ├── .gitignore
 ├── .gitattributes                   # LF in the repo, native in the tree
-├── docker-compose.yml               # postgres, redis, mailhog
+├── .dockerignore                    # keeps node_modules and .env out of the
+│                                    # build context
+├── docker-compose.yml               # postgres, redis, mailhog; plus the `app`
+│                                    # profile — migrate, api, worker (see 5g)
 └── package.json                     # workspace root; also pins `vite` to
                                      # dedupe it — see "Environment quirks"
 ```
@@ -668,6 +679,9 @@ npm run build --workspace=@finance/api
 npm run build --workspace=@finance/web
 npm run generate:openapi # rewrite docs/openapi.json AND apps/web/src/api/schema.d.ts
 npm run check:openapi    # fail if either is stale (this is the CI step)
+
+npm audit --omit=dev --audit-level=high   # the CI gate: runtime deps only
+npm audit                                 # everything, including dev tooling
 ```
 
 **`npm run generate:openapi` after any route or response-schema change**, or CI
@@ -701,11 +715,17 @@ below for what it was. Any output from these commands is now a real failure.
 ### CI
 
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
-Two jobs run in parallel: **check** (typecheck, both builds, the OpenAPI
-freshness check, the i18n check, unit tests, and building the production image
-and booting its module graph — no services) and **test** (the full suite against a
-`postgres:16` service container, then a migration rollback round-trip). Green on
-the first run, in about a minute.
+Two jobs run in parallel: **check** (the dependency-advisory gate, typecheck,
+both builds, the OpenAPI freshness check, the i18n check, unit tests, and
+building the production image and booting its module graph — no services) and
+**test** (the full suite against a `postgres:16` service container, then a
+migration rollback round-trip). Green on the first run, in about a minute.
+
+**The advisory gate is deliberately narrow.** It fails on a high or critical
+advisory in a **runtime** dependency (`npm audit --omit=dev --audit-level=high`)
+and reports the rest without failing. A bare `npm audit` blocks unrelated pull
+requests whenever a build tool publishes a dev-server advisory, and a gate that
+blocks for reasons nobody accepts gets deleted. See section 5h.
 
 The workflow declares **no repository secrets**: the JWT values in it are
 deliberately fake and the test database is created and discarded within the run.
@@ -848,11 +868,13 @@ These are not preferences, they are workarounds for real failures observed here:
   `@vitejs/plugin-react` hoisted to root — so `react()` returned root-vite-5's
   `Plugin` while `defineConfig` in `apps/web` wanted web-vite-6's
   `PluginOption`. The fix is one line: **`vite` is now a root `devDependency`**
-  pinned to `^6.4.3`. npm then hoists vite 6 to the root (where
-  `plugin-react` and `apps/web` both resolve it) and nests vite 5 under
-  `node_modules/vitest/`, so the test runner is completely untouched — the
-  suite was 222-green before and after. **Do not remove `vite` from the root
-  `package.json` thinking it is unused; it is there to force that dedupe.**
+  pinned to `^6.4.3`. npm then hoists vite 6 to the root, where
+  `plugin-react` and `apps/web` both resolve it — the suite was 222-green
+  before and after. **Do not remove `vite` from the root `package.json`
+  thinking it is unused; it is there to force that dedupe.** Since the
+  dependency-upgrade session (5h) the dedupe is total rather than partial:
+  vitest 3 accepts `^6`, so it resolves the same root copy instead of nesting
+  its own vite 5, and the tree now holds **exactly one vite**.
 
 ---
 
@@ -912,12 +934,6 @@ smaller gaps listed after it are features rather than operations work.
 9. **Rate-limit and auth hardening review** before any real deployment: the
    limiter falls back to in-memory when Redis is absent, and that fallback is
    per-process.
-10. ~~**Deployment story**~~ **Done** (section 5g). One image, three
-    entrypoints — server, worker, migration runner — with `docker compose
-    --profile app up -d` bringing them up in an order where the schema is
-    current before anything serves traffic. CI now builds the image and boots
-    its module graph, because nothing ever building it is exactly how the old
-    Dockerfile came to be broken.
 
 Not started, deliberately: any real payment or bank integration, and hosting
 this anywhere — the image and the compose profile exist and run (section 5g),
@@ -1615,6 +1631,62 @@ missing dependency an existence test would miss.
 
 ---
 
+## 5h. Clearing the dependency advisories
+
+`npm audit` reported **nine advisories — 1 critical, 3 high, 5 moderate** across
+four root packages. All nine are gone; the tree audits clean including dev
+dependencies. Full reasoning is in `docs/decisions.md` ("Dependency advisories
+are fixed by upgrading, and the gate is on what ships"). What you need here:
+
+| Package | Was | Now | Ships? |
+| --- | --- | --- | --- |
+| `kysely` | 0.27.6 | **0.29.5** | yes — API runtime |
+| `nodemailer` | 6.10.1 | **9.0.5** | yes — API runtime |
+| `react-router-dom` | 6.30.4 | **7.18.2** | yes — client bundle |
+| `vitest` | 2.1.9 | **3.2.7** | no — dev only |
+
+**`npm audit fix` fixes none of them.** Verified by running it: it reports no
+changes and the same nine findings. Every one needed an explicit major bump, so
+do not expect the automated path to help here or next time.
+
+Five things to know before touching any of this:
+
+1. **Kysely 0.29 moved the migration API to `kysely/migration`.** `Migrator`,
+   `Migration` and `MigrationProvider` now import from the subpath; the root
+   export resolves to a `KyselyTypeError` telling you so at compile time.
+   `db/migrate.ts` and `db/migrations/index.ts` are the two files affected.
+2. **Kysely 0.28 removed `preventAwait`**, so awaiting a query builder no longer
+   throws — it resolves to the builder object. See the amended bug 2 in section
+   1: the rule is unchanged, the failure is now silent.
+3. **`vitest` stopped at 3.2.7 on purpose, and 4.x is a separate decision.**
+   Vitest 4 removes `poolOptions` and maps `singleFork` onto `maxWorkers: 1,
+   isolate: false` — which is *not* what `singleFork` meant. `singleFork` keeps
+   re-evaluating the module graph per test file, and `component()` in
+   `openapi/schema.ts` is written around exactly that (see section 5e's registry
+   trap). Moving to vitest 4 means reasoning about that first.
+4. **The vite tree is now a single copy.** vitest 3 accepts `^6` and resolves the
+   root `vite` 6.4.3 rather than nesting its own vite 5. The root `vite` pin
+   matters more than before, not less — see "Environment quirks".
+5. **`react-router-dom` 7 needed no source change.** Every import the client uses
+   is API-identical in v7. There was no in-major fix to take: 6.30.4 is the
+   newest v6 on the registry and the open redirect is fixed in 7.18.0.
+
+**Two of the four upgrades are invisible to `npm test`, so neither was trusted
+to it.** `sendEmail` short-circuits under `NODE_ENV=test` and never builds a
+transporter, so nodemailer was verified by delivering a real invitation through
+the compiled `dist/lib/email.js` into MailHog and reading it back out of
+MailHog's API. React Router has no tests at all, so it was driven in Chrome —
+signed-out redirect, all eight sidebar routes, history back/forward, a signed-in
+deep-link reload and the unknown-path catch-all, 15 checks green. Kysely is the
+one the suite does cover well: 320 tests of real SQL, plus a migration
+up/down/status round-trip, since `Migrator` is the piece that moved.
+
+**The CI gate added with this work fails only on high-or-critical advisories in
+runtime dependencies.** Dev-tool findings are reported and do not block. The
+reasoning is under "CI" in section 4.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -1707,6 +1779,28 @@ of history.
 `ON CONFLICT DO UPDATE`,** because the uniqueness rule is an expression index
 over `COALESCE(scope_*, <sentinel>)` and Postgres cannot infer a conflict target
 from one.
+
+**The API, the worker and the migration runner are one image with three
+commands, and the migration gates the rollout.** They are the same codebase, so
+they ship as one artifact; `docker compose --profile app up -d` runs `migrate`
+to completion and starts the other two behind
+`service_completed_successfully`, which means a failed migration stops the
+deploy rather than leaving a new binary on an old schema. The image is built
+from the **repository root**, because the API depends on the `@finance/schemas`
+workspace — the old Dockerfile copied only `apps/api` and had been unbuildable
+for several sessions, unnoticed, because nothing ever built it. CI now does,
+and boots the compiled app's module graph afterwards. See section 5g and
+`docs/decisions.md`.
+
+**A dependency advisory is fixed by upgrading, not by arguing it is
+unreachable.** Three of the Kysely advisories genuinely are unreachable from
+this codebase — no `sql.lit`, no JSON-path helpers, no `Kysely<any>`, and
+Postgres rather than MySQL — but that is an argument someone has to re-make by
+hand every time the query layer changes. All nine findings were cleared by
+version bumps instead (section 5h). What CI gates on afterwards is narrower than
+`npm audit`: high-or-critical in a **runtime** dependency, because a gate that
+blocks a pull request over a build tool's dev-server advisory is a gate that
+gets deleted. See `docs/decisions.md`.
 
 **Tests run against real Postgres, not mocks**, and reset state with `DELETE`
 rather than `TRUNCATE`. TRUNCATE forces an fsync per relation; across every table

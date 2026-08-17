@@ -265,6 +265,38 @@ outage degrades latency, not correctness. Caching is bypassed entirely under `NO
 - CSV export escapes leading `=`/`+`/`-`/`@` so a transaction description cannot become a formula
 - Errors ≥500 return a fixed message; the detail stays in the logs with the request id
 
+## How it ships
+
+`apps/api/Dockerfile` produces **one image with three commands**, matching the shape at the top of
+this document: `dist/server.js`, `dist/worker.js` and `dist/db/migrate.js`. It is built from the
+repository root, because the API consumes `@finance/schemas` as a workspace — the build compiles
+the shared package first, then the API, then prunes to production dependencies.
+
+`docker compose --profile app up -d` is the deployment in miniature:
+
+```
+postgres (healthy) ──▶ migrate (runs to completion) ──┬──▶ api
+                                                      └──▶ worker
+```
+
+`api` and `worker` wait on `service_completed_successfully`, so the schema is always current before
+anything serves traffic or picks up a job, and a failed migration stops the rollout instead of
+leaving a new binary talking to an old schema. The API's container healthcheck probes `/health`
+(liveness, no dependencies) rather than `/health/ready`, because a container is not unhealthy
+merely because a database it does not own is briefly unavailable.
+
+CI builds this image on every push and then imports the compiled app factory inside it, which
+loads every route, service and library without opening a socket. That is what stops the image
+rotting: the previous Dockerfile was broken for several sessions purely because nothing built it.
+The traps involved — npm running a linked workspace's `prepare` regardless of `--ignore-scripts`,
+`--workspace` not scoping *installs*, and npm nesting a dependency where only the root tree was
+being copied — are written up in `decisions.md`, "One image, three entrypoints, and a migration
+that gates the rollout".
+
+What is deliberately not decided here: where this runs, how images reach a registry, where TLS
+terminates, and where production secrets come from. The compose profile is a working local
+rehearsal of the rollout order, not a hosting plan.
+
 ## Scaling notes
 
 - Time-ordered UUIDv7 primary keys keep inserts on the right edge of the index instead of

@@ -1128,6 +1128,77 @@ which is also the proof that `copy-assets.mjs`'s catalogues made it into the ima
 
 ---
 
+### Dependency advisories are fixed by upgrading, and the gate is on what ships
+
+`npm audit` reported nine advisories — one critical, three high, five moderate — across four root
+packages: `kysely`, `nodemailer`, `react-router-dom` and `vitest`. `npm audit fix` without `--force`
+was a no-op on every one of them; verified by running it, which reported no changes and the same
+nine findings. Every fix therefore meant an explicit major-version decision, so each was made on
+what the package does here rather than on the severity label.
+
+**Two of the four are runtime dependencies of the API.** `kysely` 0.27.6 carried three high SQL
+injection advisories, and `nodemailer` 6.10.1 carried eight, the worst of them a message-level
+`raw` option that bypasses `disableFileAccess`/`disableUrlAccess` and turns a send into an
+arbitrary file read and a full-response SSRF. None of the three Kysely advisories is reachable from
+this codebase — there is no `sql.lit`, no `JSONPathBuilder`, no `Kysely<any>`, and the MySQL
+escaping bug needs MySQL — but *reachability is not a fix*. It is an argument that has to be
+re-made by hand every time the query layer is touched, by someone who remembers the argument
+exists. Upgrading retires it. Both went to the current release: `kysely` 0.29.5 and `nodemailer`
+9.0.5.
+
+**`react-router-dom` had no in-major fix at all.** The open redirect via a backslash in `<Link>`
+and `useNavigate` is fixed in 7.18.0, and no 6.x fix was published — 6.30.4 is the newest v6 on the
+registry and the advisory's fixed range starts at 7.18.0. The choice was a major upgrade or an
+unpatched redirect in a signed-in app. It went to 7.18.2 and needed **no source
+change** — every import in `apps/web` (`BrowserRouter`, `Routes`, `Route`, `Navigate`, `Outlet`,
+`NavLink`, `Link`, `useNavigate`, `useLocation`) is API-identical in v7.
+
+**`vitest` went to 3.2.7 rather than to 4.1.10, and that is the one place the newest version was
+deliberately not taken.** Vitest 4 removes `poolOptions` and documents `poolOptions.forks.singleFork`
+as migrating to `maxWorkers: 1, isolate: false` — but those are not the same thing. `singleFork`
+runs every test file in one process while still re-evaluating the module graph per file;
+`isolate: false` stops re-evaluating it. That re-evaluation is load-bearing here: `component()` in
+`openapi/schema.ts` evicts stale ids from Zod's process-wide metadata registry precisely because
+`src/` is re-evaluated per test file while `node_modules` stays cached, and the guard it depends on
+is a `Set` reset by that same re-evaluation. Taking vitest 4 would have meant reasoning about that
+interaction to fix a critical that requires a `--ui` server this project never starts. 3.2.7 clears
+every advisory in the tree with the config untouched, and vitest 4 stays available as its own
+change, on its own merits.
+
+That choice also **collapsed the vite tree from three copies to one**: vitest 2 pinned its own vite
+5, while vitest 3 accepts `^6` and dedupes onto the root `vite` 6.4.3 that is pinned to force
+exactly that kind of dedupe (see "CI gates on everything" above). The nested vite 5 and its
+vulnerable esbuild are simply gone rather than patched.
+
+**One source change was needed, and it is Kysely's.** 0.29 moved the migration API behind
+`kysely/migration`; the root export now resolves to a `KyselyTypeError` that says so at compile
+time, which is a good way to ship a move. `db/migrate.ts` and `db/migrations/index.ts` import from
+the subpath now. Worth knowing separately: 0.28 removed `preventAwait`, so **awaiting a query
+builder no longer throws** — it now resolves to the builder object. The bug in section 1 of
+`CLAUDE.md` ("never return a query builder from an `async` function") is still a bug, but its
+failure mode changed from a loud detonation to a silent wrong value.
+
+**What the test suite could not prove, and what was done instead.** All 320 tests pass, which is a
+strong signal for Kysely — they are real SQL against real Postgres — and a real signal for nothing
+else. `sendEmail` short-circuits under `NODE_ENV=test` and never constructs a transporter, so the
+nodemailer 6 → 9 jump was completely unexercised; it was verified by sending a real invitation
+through the compiled `dist/lib/email.js` to MailHog and reading the delivered message back out of
+MailHog's API, subject header correctly encoded. React Router has no tests here at all, so it was
+verified in Chrome: the signed-out deep-link redirect, all eight sidebar routes, history back and
+forward, a signed-in deep-link reload, and the unknown-path catch-all — fifteen checks, no
+router-related console errors. Both follow the rule the redesign and i18n sessions arrived at
+independently: a typecheck and a build prove the code parses.
+
+**The CI gate is narrower than `npm audit` on purpose.** It fails on a high or critical advisory in
+a **runtime** dependency (`npm audit --omit=dev --audit-level=high`) and reports everything else
+without failing. A bare `npm audit` would block unrelated pull requests every time a build tool
+publishes a dev-server advisory — the vitest chain above was four of the nine findings and none of
+it ships in the image — and a gate that blocks for reasons nobody accepts is a gate that gets
+deleted. The informational step keeps the moderate and dev-only findings visible, which is what
+they warrant.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

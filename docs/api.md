@@ -406,3 +406,8 @@ starting with `=`, `+`, `-` or `@` are escaped against formula injection.
 
 `GET /health` — liveness, no dependencies. `GET /health/ready` — checks Postgres and Redis,
 503 when degraded.
+
+The container healthcheck uses `/health`, not `/health/ready`: a container is not unhealthy
+merely because a database it does not own is briefly unavailable, and restarting it would not
+help. Point an orchestrator's *readiness* probe at `/health/ready` and its *liveness* probe at
+`/health`.

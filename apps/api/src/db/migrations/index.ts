@@ -1,4 +1,4 @@
-import type { Migration } from 'kysely';
+import type { Migration } from 'kysely/migration';
 import * as m001 from './001_foundation.js';
 import * as m002 from './002_workspaces.js';
 import * as m003 from './003_accounts_categories.js';

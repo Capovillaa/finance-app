@@ -1,4 +1,8 @@
-import { Migrator, type Kysely, type MigrationProvider } from 'kysely';
+import type { Kysely } from 'kysely';
+// Kysely 0.29 moved the migration API behind its own entry point, so that a
+// project which never migrates through Kysely does not pay for it. The root
+// export now resolves to a `KyselyTypeError` that says so at compile time.
+import { Migrator, type MigrationProvider } from 'kysely/migration';
 import { createDb, createPool, db as defaultDb } from './client.js';
 import { migrations } from './migrations/index.js';
 import type { Database } from './types.js';
