@@ -46,9 +46,11 @@ generates the API's own description by walking the router — see "The API descr
 
 1. `requestId` assigns a correlation id, echoed as `x-request-id` and attached to every log line.
 2. `httpLogger` logs the request, with authorization headers and anything password-shaped redacted.
-3. `globalRateLimit` consumes a Redis token bucket keyed by user id, falling back to IP.
-4. `requireAuth` verifies the JWT **and reloads the user**, so a suspended account stops working
-   immediately rather than at token expiry.
+3. `globalRateLimit` consumes two Redis token buckets: the calling address, and — when the bearer
+   token verifies — the signed-in user. It has to verify the token itself, because it is mounted
+   above every `requireAuth` and `req.user` does not exist yet at this point.
+4. `requireAuth` verifies the JWT **and reloads the user**, so a suspended account, or one whose
+   sessions have been revoked, stops working immediately rather than at token expiry.
 5. `withWorkspace` resolves `:workspaceId` and proves membership, attaching the caller's role.
 6. `requireViewer` / `requireEditor` / `requireAdmin` / `requireOwner` narrow by role.
 7. `validate({ params, query, body })` parses with Zod and *replaces* the request parts with the
@@ -59,6 +61,15 @@ generates the API's own description by walking the router — see "The API descr
 
 Steps 4–6 are what enforce tenant isolation. Because they are mounted once in `src/routes.ts`
 rather than repeated per route, a new endpoint cannot forget them.
+
+Step 3 depends on `req.ip` being real, which depends on `TRUST_PROXY`. `X-Forwarded-For` is a
+client-supplied header, so it is believed only when the deployment says something is in front to
+send it; the default is to trust nothing, and every address-keyed budget is otherwise resettable by
+changing a string. Credential endpoints add a second limiter charging the *account* being
+attempted, on its own longer window, which is the bound that survives an attacker with addresses to
+spare. When Redis is unreachable both fall back to a per-process counter carrying
+`1/RATE_LIMIT_INSTANCES` of the budget, log that they have done so, and — on credential endpoints
+only — fail closed if even that cannot answer.
 
 ## The API describes itself
 

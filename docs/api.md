@@ -60,6 +60,13 @@ plain length cap, say — which falls back to Zod's own English wording.
 | `rate_limited` | 429 | Too many requests; see `retry-after` |
 | `internal_error` | 500 | Logged with `requestId`; message is generic |
 
+**Rate limiting.** Every response under `/api/v1` carries `x-ratelimit-limit`,
+`x-ratelimit-remaining` and `x-ratelimit-reset` (seconds) for whichever budget is closest to
+running out; a 429 additionally carries `retry-after`. All four are exposed through CORS, so a
+browser client can read them. Requests are charged to **two** budgets at once — the signed-in user
+and the calling address — and credential endpoints are charged to the calling address *and* the
+account being attempted, independently, so rotating addresses does not reset an account's budget.
+
 **Paginated** responses:
 
 ```json
@@ -79,15 +86,20 @@ Accept `?page=` and `?pageSize=` (max 200).
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/register` | Creates the user **and** their personal workspace with default categories and alert rules. Returns tokens and `defaultWorkspaceId`. |
-| POST | `/login` | Rate limited per IP and per email. |
+| POST | `/login` | Rate limited per address and, separately, per account. |
 | POST | `/refresh` | Rotates the refresh token. Reusing a rotated token revokes the whole family. |
-| POST | `/logout` | Revokes the presented refresh token. |
-| POST | `/logout-all` | Revokes every session for the user. |
-| POST | `/change-password` | Requires the current password; signs all sessions out. |
+| POST | `/logout` | Revokes the presented refresh token. Other sessions keep working. |
+| POST | `/logout-all` | Revokes every session for the user, **immediately** — access tokens included. |
+| POST | `/change-password` | Requires the current password; signs all sessions out immediately. |
 | GET | `/me` | Current user. |
 
 The refresh token is returned in the body *and* set as an HttpOnly cookie scoped to `/api/v1/auth`,
 so a browser client never has to store it in JavaScript.
+
+Revocation reaches the access token too, not just the refresh token: `logout-all`, a password
+change and account deletion all move the user's `tokens_valid_from` forward, and an access token
+issued before that instant is refused on its next request rather than surviving until it expires.
+Signing straight back in works immediately, including within the same second.
 
 ```bash
 curl -X POST localhost:4000/api/v1/auth/register -H 'content-type: application/json' \

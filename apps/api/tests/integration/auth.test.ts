@@ -159,6 +159,73 @@ describe('authenticated routes', () => {
   });
 });
 
+describe('session invalidation', () => {
+  it('kills the access token immediately, not when it expires', async () => {
+    const user = await registerUser();
+
+    // Working before.
+    expect((await api().get('/api/v1/auth/me').set(user.auth)).status).toBe(200);
+
+    const all = await api().post('/api/v1/auth/logout-all').set(user.auth).send();
+    expect(all.status).toBe(204);
+
+    // Revoking the refresh tokens alone would leave this working for the rest
+    // of ACCESS_TOKEN_TTL — a quarter of an hour in which a session the user
+    // just ended is still spending their data.
+    const after = await api().get('/api/v1/auth/me').set(user.auth);
+    expect(after.status).toBe(401);
+    expect(after.body.error.message).toMatch(/session/i);
+  });
+
+  it('lets the user sign straight back in, in the same second', async () => {
+    const user = await registerUser();
+
+    await api().post('/api/v1/auth/logout-all').set(user.auth).send();
+
+    // The trap this guards: a cut-off compared against a JWT's whole-second
+    // `iat` cannot tell a token issued just before it from one issued just
+    // after, so the replacement handed out by this very login would be refused
+    // by the next request. The token carries milliseconds for that reason.
+    const again = await api()
+      .post('/api/v1/auth/login')
+      .send({ email: user.email, password: user.password });
+    expect(again.status).toBe(200);
+
+    const me = await api()
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${again.body.accessToken}`);
+    expect(me.status).toBe(200);
+    expect(me.body.user.id).toBe(user.id);
+  });
+
+  it('ends one device without touching the others', async () => {
+    const user = await registerUser();
+    const second = await api()
+      .post('/api/v1/auth/login')
+      .send({ email: user.email, password: user.password });
+    expect(second.status).toBe(200);
+
+    // A plain logout revokes the presented refresh token and nothing else, so
+    // the other session's access token has to survive it.
+    const out = await api().post('/api/v1/auth/logout').send({ refreshToken: user.refreshToken });
+    expect(out.status).toBe(204);
+
+    const other = await api()
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${second.body.accessToken}`);
+    expect(other.status).toBe(200);
+  });
+
+  it('answers the revocation in the language the request asked for', async () => {
+    const user = await registerUser();
+    await api().post('/api/v1/auth/logout-all').set(user.auth).send();
+
+    const response = await api().get('/api/v1/auth/me').set(user.auth).set('Accept-Language', 'pt-BR');
+    expect(response.status).toBe(401);
+    expect(response.body.error.message).toMatch(/sessão/i);
+  });
+});
+
 describe('password change', () => {
   it('rejects a wrong current password and signs every session out on success', async () => {
     const user = await registerUser();

@@ -1199,6 +1199,100 @@ they warrant.
 
 ---
 
+### Rate limiting is two-dimensional, and a forwarded header is only trusted when something sends it
+
+The limiter looked right and was not. Reviewing it before a real deployment turned up three
+defects that shared one shape: the code said what it meant to do in a comment, and did something
+else, in a way nothing observable would ever contradict. A rate limiter that is quietly not
+limiting looks exactly like a rate limiter with no traffic.
+
+**`X-Forwarded-For` is a header the client sends.** `app.set('trust proxy', 1)` was unconditional,
+with a comment claiming every deployment target sits behind one reverse proxy. This repo's own
+compose profile publishes the API straight onto a host port with nothing in front of it. So
+`req.ip` was whatever the caller wrote, and every IP-keyed budget could be reset by changing a
+string — measured, against a running instance: six credential attempts from six invented addresses,
+all allowed, against a limit of three. It is now `TRUST_PROXY`, defaulting to **false**. This is
+the right default for the same reason `EXCHANGE_RATE_PROVIDER` defaults to `static`: the safe
+configuration is the one you get by not knowing about the setting.
+
+**A single key is not two dimensions.** Credential endpoints were keyed on `` `${ip}:${email}` ``,
+under a docstring saying this stopped an attacker rotating IPs to brute-force one account. It did
+the opposite of that. Every new address produced a new key, so rotation handed back the *whole*
+budget, per address, against the same account — the combined key is strictly weaker than keying on
+the account alone. They are two limiters now, charged independently: one per address over the
+short window, one per account over a long one (`AUTH_RATE_LIMIT_MAX_PER_ACCOUNT`, fifteen minutes),
+because the per-account bound is the one that has to survive an attacker who has addresses to
+spare. Verified against a running instance: eight attempts on one account from eight different
+addresses, cut off at the fifth, with a second account from those same addresses untouched.
+
+**A limiter mounted above `requireAuth` cannot read `req.user`.** The global limiter keyed on
+`req.user?.id ?? req.ip`, and is mounted on `/api/v1`, outside every `requireAuth` in the app —
+so `req.user` was always `undefined` and it had been a pure IP limiter for its whole life. Nothing
+failed; a whole office behind one address just shared 300 requests a minute and nobody could have
+told you why. The identity is now recovered by verifying the bearer token in the limiter itself
+(an HMAC over a few hundred bytes), and a request that fails verification is charged to its address
+— which matters, because otherwise a stream of forged tokens would mint a fresh budget per request.
+Both buckets are charged, not one or the other: the per-user budget is the everyday limit, and a
+deliberately looser per-address budget stays as a backstop against a flood, or against someone
+farming accounts from one place.
+
+**The fallback needed to be smaller, faster and audible.** When Redis is unreachable the limiter
+falls back to an in-process counter, which is right — a counter being unavailable must not become
+an outage. But it fell back to the *full* budget, so N instances would together allow N times the
+advertised limit at precisely the moment the system was least healthy; the budget is now divided by
+`RATE_LIMIT_INSTANCES`. It was also completely silent, so it now says so once a minute. And it was
+not, in fact, fast: with ioredis's offline queue on, a command issued during an outage is parked
+until the connection returns rather than failing, so the first request after Redis stopped hung for
+over two minutes behind the reconnect backoff instead of being served by the fallback that exists
+for exactly this. `enableOfflineQueue: false` on that client fixes it — every consumer of it (the
+cache, the limiter) already has an answer for "Redis said no" and none has one for "Redis has not
+answered yet". BullMQ keeps the queue, because it issues blocking commands across reconnects.
+Re-measured afterwards: 3 ms, at the divided budget.
+
+**Failing open is a decision, so it is made per limiter.** Any store error used to call `next()`.
+For ordinary traffic that is correct. For credential endpoints it means unlimited password guesses
+for the duration of an incident, which is not a trade anyone would make deliberately, so those fail
+closed. The refusal is a 429 rather than a 503 on purpose: the client's correct behaviour is
+identical, the endpoint already publishes 429, and the distinction that actually matters — whether
+we refused because you were over budget or because we could not tell — belongs in a log line, not
+in a status code the client will treat the same way regardless.
+
+Two smaller things, from the same read-through. CORS reflected *any* origin with credentials
+whenever `NODE_ENV` was not literally `production`, which quietly included staging and preview
+deployments — the ones actually exposed to a network; it is now an explicit list everywhere except
+development. And the refresh cookie's `maxAge` was hardcoded to thirty days while the token's real
+lifetime comes from `REFRESH_TOKEN_TTL_DAYS`, so shortening the token left the browser presenting a
+credential the server had already stopped honouring.
+
+### "Sign out everywhere" now means everywhere, via one nullable column
+
+Revoking a session revoked its refresh token, which ends the session's ability to *renew* and does
+nothing about the access token already in the user's hands. That token is a self-contained JWT: no
+revocation reaches it, and it stays valid until it expires. So logging out every device, changing a
+password, and deleting an account all left a working credential in circulation for up to fifteen
+minutes — and the client's own password-change flow ends the session immediately, so the gap was
+purely a server-side one that no UI would ever reveal.
+
+The usual fixes are a per-request revocation-list lookup or a shared denylist cache, both of which
+give back much of what stateless tokens are for. This needs neither, because `requireAuth` already
+reads the user's row on every request to check the account is still active. `users.tokens_valid_from`
+(migration `009`) rides along on that query: `revokeAllUserTokens` moves it forward, and a token
+issued before it is refused. NULL means nothing has been revoked, which is what every existing row
+wants to say.
+
+**The token carries milliseconds, and that is not a detail.** A JWT's `iat` counts whole seconds,
+and the first version of this compared against it. Within the second a revocation lands, "issued
+just before" and "issued just after" are indistinguishable — so either a stale token survives the
+click that revoked it, or the replacement handed out by signing straight back in is rejected by the
+very next request. Truncating the cut-off to the second picks the first failure; not truncating
+picks the second. Neither is acceptable and the choice is a false one: the access token now carries
+its own millisecond `iatMs` claim, and the comparison is exact. Tokens minted before the claim
+existed fall back to `iat` and are gone within a quarter of an hour anyway. There is a test named
+after this, asserting that a user can sign back in *in the same second* they signed out of
+everything.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

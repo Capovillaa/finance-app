@@ -9,6 +9,7 @@ import {
 } from '@finance/schemas';
 import { Router, type Response } from 'express';
 import { z } from 'zod/v4';
+import { env } from '../../config/env.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { authRateLimit } from '../../middleware/rate-limit.js';
 import { clientIp } from '../../middleware/request-context.js';
@@ -66,10 +67,16 @@ export const authRouter: Router = Router();
 function setRefreshCookie(res: Response, token: string): void {
   res.cookie(REFRESH_COOKIE, token, {
     httpOnly: true,
+    // Blocks the cookie from riding a cross-site POST, which is what stands in
+    // for CSRF protection on this route: `/refresh` accepts the cookie alone.
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: env.isProduction,
     path: '/api/v1/auth',
-    maxAge: 30 * 86_400_000,
+    // Follows the token's real lifetime rather than assuming the default. A
+    // deployment that shortens `REFRESH_TOKEN_TTL_DAYS` was otherwise left with
+    // a cookie outliving the token inside it, so the client kept presenting a
+    // credential the server had already stopped honouring.
+    maxAge: env.REFRESH_TOKEN_TTL_DAYS * 86_400_000,
   });
 }
 

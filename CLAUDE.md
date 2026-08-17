@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-320; see section 4 for the current command. The compiled `dist/server.js`
+340; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -458,7 +458,7 @@ D:\finance_app
 │   │   │   ├── app.ts               # express app factory (used by tests too)
 │   │   │   ├── config/              # env parsing and typed config
 │   │   │   ├── db/
-│   │   │   │   ├── migrations/      # 001..008, plus index.ts registry
+│   │   │   │   ├── migrations/      # 001..009, plus index.ts registry
 │   │   │   │   ├── migrate.ts       # runner: up | down | status
 │   │   │   │   ├── seed.ts          # demo dataset
 │   │   │   │   ├── client.ts        # Kysely instance
@@ -470,7 +470,10 @@ D:\finance_app
 │   │   │   │                        # route-metadata (stampRoute + mount: what
 │   │   │   │                        #   the app records about its own shape)
 │   │   │   ├── middleware/          # auth, validate, error handling, locale,
-│   │   │   │                        # responds (declares + enforces a response shape)
+│   │   │   │                        # responds (declares + enforces a response shape),
+│   │   │   │                        # rate-limit (the buckets, Redis and Express)
+│   │   │   │                        #   + rate-limit-policy (the pure decisions:
+│   │   │   │                        #   keys, trust-proxy parse, fallback budget)
 │   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
 │   │   │   │                        # JSON Schema), document.ts (-> the spec),
 │   │   │   │                        # service-responses.ts (/health, /openapi.json)
@@ -495,7 +498,8 @@ D:\finance_app
 │   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
 │   │   └── tests/
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
-│   │       │                        # import-mapping, openapi, exchange-rates
+│   │       │                        # import-mapping, openapi, exchange-rates,
+│   │       │                        # rate-limit-policy
 │   │       └── integration/         # auth, workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
 │   │                                # currencies,
@@ -670,8 +674,8 @@ docker compose --profile app up -d --build
 ### Tests
 
 ```bash
-npm test                 # all 320 — needs Postgres, and only Postgres
-npm run test:unit        # 178 pure units, no infrastructure at all
+npm test                 # all 340 — needs Postgres, and only Postgres
+npm run test:unit        # 194 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -880,11 +884,8 @@ These are not preferences, they are workarounds for real failures observed here:
 
 ## 5. Next tasks, in priority order
 
-**Everything numbered 1–8 and 10 is built.** The one item left on this list is
-**9, the rate-limit and auth hardening review** — the limiter falls back to
-in-memory when Redis is absent and that fallback is per-process, which matters
-now that the app can actually be deployed as more than one container. The
-smaller gaps listed after it are features rather than operations work.
+**Everything numbered 1–10 is built.** The smaller gaps listed after the list
+are features rather than operations work.
 
 1. ~~**Web client scaffold.**~~ **Done.** Vite, Material-UI, Redux Toolkit and
    Recharts, with React Hook Form and Zod for forms. Auth, workspace switching,
@@ -931,9 +932,20 @@ smaller gaps listed after it are features rather than operations work.
    on the free plan). Verified against the real ECB feed, not only stubbed.
    No schema change was needed — the `exchange_rates` table's `source` column
    already distinguished a provider's rows from the static ones.
-9. **Rate-limit and auth hardening review** before any real deployment: the
-   limiter falls back to in-memory when Redis is absent, and that fallback is
-   per-process.
+9. ~~**Rate-limit and auth hardening review.**~~ **Done** (section 5i). Three
+   defects that shared one shape — the code said what it meant to do in a
+   comment and did something else, invisibly. `X-Forwarded-For` was trusted
+   with nothing in front of the process; the credential limiter's single
+   `ip:email` key made IP rotation *easier*, not harder; and the global
+   limiter had never once keyed per user. Plus the fallback this entry named:
+   it now carries a divided budget, says when it engages, and engages in
+   milliseconds rather than parking behind ioredis's offline queue.
+10. ~~**Deployment story**~~ **Done** (section 5g). One image, three
+    entrypoints — server, worker, migration runner — with `docker compose
+    --profile app up -d` bringing them up in an order where the schema is
+    current before anything serves traffic. CI now builds the image and boots
+    its module graph, because nothing ever building it is exactly how the old
+    Dockerfile came to be broken.
 
 Not started, deliberately: any real payment or bank integration, and hosting
 this anywhere — the image and the compose profile exist and run (section 5g),
@@ -1687,6 +1699,115 @@ reasoning is under "CI" in section 4.
 
 ---
 
+## 5i. Rate-limit and auth hardening
+
+Task 9, built in a later session. Full reasoning is in `docs/decisions.md` —
+"Rate limiting is two-dimensional, and a forwarded header is only trusted when
+something sends it" and "'Sign out everywhere' now means everywhere, via one
+nullable column". What you need in order not to undo it:
+
+**`TRUST_PROXY` defaults to `false`, and that is deliberate.** `req.ip` comes
+out of `X-Forwarded-For`, which the *client* sends. The old code set
+`trust proxy: 1` unconditionally under a comment claiming every deployment sits
+behind a reverse proxy; this repo's own compose profile publishes the API
+straight onto a host port. Measured before the fix: six credential attempts from
+six invented addresses, all allowed, against a limit of three. **A deployment
+that really is behind a proxy has to say so** — `TRUST_PROXY=1` for one hop, or
+`loopback`, or a list of subnets. Setting it when nothing is in front reopens
+the hole.
+
+**Every request is charged to two budgets, and both are load-bearing:**
+
+| Limiter | Buckets | Default |
+| --- | --- | --- |
+| `globalRateLimit` (all of `/api/v1`) | the address, and the user if the bearer token verifies | 1200/min, 300/min |
+| `authRateLimit` (register, login, change-password) | the address, and the account named in the body | 10/min, 20/15min |
+
+Four rules behind that table, in rough order of how expensive they'd be to
+rediscover:
+
+1. **`globalRateLimit` verifies the bearer token itself.** It is mounted on
+   `/api/v1`, above every `requireAuth` in the app, so `req.user` is *always*
+   `undefined` there — the old key expression `req.user?.id ?? req.ip` had been
+   a pure IP limiter for its whole life and nothing could have shown you. Do not
+   "simplify" it back to reading `req.user`. A token that fails verification is
+   charged to its address, because otherwise a stream of forged tokens would
+   mint a fresh budget per request.
+2. **The credential limiter's two buckets must stay separate.** A single
+   `ip:email` key is not two dimensions, it is *weaker* than either alone: a new
+   address is a new key, so rotating addresses hands back the whole budget
+   against the same account. The per-account bucket has its own, much longer
+   window for exactly that reason.
+3. **The fallback budget is divided by `RATE_LIMIT_INSTANCES`.** Falling back to
+   an in-process counter when Redis is down is right; falling back to the *full*
+   budget on every replica means N instances allowing N times the advertised
+   limit at the worst possible moment. It also logs, once a minute, that it is
+   running degraded.
+4. **`enableOfflineQueue: false` on the shared Redis client is not a style
+   choice.** With ioredis's offline queue on, a command issued during an outage
+   is parked until the connection returns — the first request after Redis
+   stopped hung for over two minutes behind the reconnect backoff instead of
+   being served by the fallback that exists for it. Everything using that client
+   (the cache, the limiter) has an answer for "Redis said no" and none has one
+   for "Redis has not answered yet". **BullMQ's connection keeps the queue** and
+   must, because it issues blocking commands across reconnects.
+
+**Credential endpoints fail closed; everything else fails open.** A store error
+used to call `next()` everywhere, which on `/auth/login` means unlimited password
+guesses for the length of an incident. The refusal is a 429 rather than a 503 on
+purpose — the client's correct behaviour is identical, the endpoint already
+publishes 429, and which of the two happened belongs in a log line.
+
+**`users.tokens_valid_from` (migration `009`) makes revocation reach the access
+token.** Revoking refresh tokens ends a session's ability to renew and does
+nothing to the JWT already issued, so "sign out everywhere" quietly meant "in
+about fifteen minutes". `requireAuth` already reads the user's row to check the
+account is active, so the check rides along on a query that was happening
+anyway — no revocation list, no shared denylist cache. NULL means nothing has
+been revoked.
+
+**The access token carries `iatMs`, and the comparison depends on it.** A JWT's
+`iat` counts whole seconds, which cannot distinguish "issued just before the
+revocation" from "issued just after" — so a second-granular cut-off either lets
+a stale token survive or rejects the replacement the user just signed in for.
+Both are wrong and the choice is false. `tests/integration/auth.test.ts` has a
+case asserting a user can sign back in **in the same second** they signed out of
+everything; if you touch this, that is the test that will tell you.
+
+**Two smaller fixes in the same pass.** CORS reflected any origin with
+credentials whenever `NODE_ENV` was not literally `production` — which included
+staging and preview deployments — and is now an explicit list (`CORS_ORIGINS`,
+defaulting to `WEB_BASE_URL`) everywhere except development. And the refresh
+cookie's `maxAge` was hardcoded to thirty days while the token's real lifetime
+comes from `REFRESH_TOKEN_TTL_DAYS`.
+
+`apps/api/src/middleware/rate-limit-policy.ts` holds the pure half — key
+derivation, the trust-proxy parse, the fallback division — and imports neither
+`config/env` nor Redis nor Express, which is what lets `tests/unit/
+rate-limit-policy.test.ts` run in the unit lane. Same rule as
+`modules/currencies/providers.ts`; **keep it that way.**
+
+### Verified by driving it, not by reading it
+
+None of this is visible to the test suite: under `NODE_ENV=test` the limiter is
+`RateLimiterMemory` with a thousand times the budget, precisely so unrelated
+cases do not trip each other. So the runtime behaviour was checked against real
+instances with small budgets and real Redis:
+
+- rate-limit headers present, and reporting the *tighter* of the two budgets —
+  `x-ratelimit-limit: 1200` anonymous, `300` with a bearer token, which is the
+  per-user bucket doing something for the first time;
+- eight attempts on one account from eight different addresses, cut off at the
+  fifth, with a second account from those same addresses untouched;
+- with `TRUST_PROXY=false`, five attempts from five *claimed* addresses cut off
+  at the third — and the same run against a trusted-proxy instance allowed all
+  six, which is what the old unconditional setting shipped;
+- Redis stopped mid-run: budget dropped to ⌊6/3⌋ = 2 as configured, requests
+  answered in ~3 ms, the degradation logged, `/health/ready` reporting
+  `{"redis":"down"}` in 4 ms.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -1757,7 +1878,25 @@ sentence, the API's field-validation errors are translated. See section 5c and
 
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See
-the bug in section 1 — the revocation must outlive the rejection.
+the bug in section 1 — the revocation must outlive the rejection. Revocation
+reaches the access token too, through `users.tokens_valid_from` (migration
+`009`) checked on the user row `requireAuth` already loads, so "sign out
+everywhere" is immediate rather than "within fifteen minutes". The token carries
+a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
+token issued just before a revocation from one issued just after — which would
+make either the stale token or the user's fresh sign-in wrong. See section 5i.
+
+**A rate limit is only as real as `req.ip`, and `req.ip` comes from a header the
+client sends.** `TRUST_PROXY` defaults to trusting nothing; a deployment behind
+a proxy says so. Every request is charged to two budgets rather than one — the
+address and the signed-in user, and on credential endpoints the address and the
+*account*, independently, because a single combined `ip:email` key made rotating
+addresses reset the account's budget instead of exhausting it. Losing Redis
+falls back to a per-process counter carrying `1/RATE_LIMIT_INSTANCES` of the
+budget, logs that it has, and answers immediately (the shared Redis client
+disables ioredis's offline queue, without which the fallback waits out the
+reconnect backoff). Credential endpoints fail closed, everything else fails
+open. See section 5i and `docs/decisions.md`.
 
 **RBAC is resolved once per request** by `withWorkspace` middleware into a
 workspace context, then checked by `requireViewer`/`requireEditor`/

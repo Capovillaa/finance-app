@@ -4,15 +4,9 @@ import { forbidden, unauthorized } from '../lib/errors.js';
 import { resolveLocale } from '../lib/i18n.js';
 import { stampRoute } from '../lib/route-metadata.js';
 import { verifyAccessToken } from '../modules/auth/tokens.js';
+import { bearerToken } from './rate-limit-policy.js';
 import type { MemberRole } from '../db/types.js';
 import type { WorkspaceContext } from '../types/context.js';
-
-function bearerToken(header: string | undefined): string | null {
-  if (!header) return null;
-  const [scheme, value] = header.split(' ');
-  if (!value || scheme?.toLowerCase() !== 'bearer') return null;
-  return value.trim();
-}
 
 /**
  * Verifies the access token and loads the current user. The database read is
@@ -28,12 +22,32 @@ export const requireAuth: RequestHandler = stampRoute((req, _res, next) => {
 
     const user = await db
       .selectFrom('users')
-      .select(['id', 'email', 'full_name', 'timezone', 'base_currency', 'locale', 'status', 'deleted_at'])
+      .select([
+        'id',
+        'email',
+        'full_name',
+        'timezone',
+        'base_currency',
+        'locale',
+        'status',
+        'deleted_at',
+        'tokens_valid_from',
+      ])
       .where('id', '=', payload.sub)
       .executeTakeFirst();
 
     if (!user || user.deleted_at || user.status !== 'active') {
       throw unauthorized('auth.accountInactive');
+    }
+
+    // "Sign out everywhere" has to mean everywhere. Revoking refresh tokens
+    // alone leaves the access token that was already issued working until it
+    // expires — up to a quarter of an hour during which a stolen session
+    // outlives the click that was supposed to end it. The row is already being
+    // read to check the account is active, so this costs nothing beyond a
+    // column, and no revocation list has to be consulted per request.
+    if (user.tokens_valid_from && payload.issuedAtMs < user.tokens_valid_from.getTime()) {
+      throw unauthorized('auth.sessionRevoked');
     }
 
     req.user = {

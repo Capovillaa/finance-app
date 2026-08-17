@@ -63,6 +63,7 @@
     "invalidRefreshToken": "Token de actualización inválido",
     "refreshTokenExpired": "El token de actualización ha expirado",
     "refreshTokenReused": "El token de actualización ya fue utilizado",
+    "sessionRevoked": "Esta sesión fue cerrada. Inicia sesión de nuevo.",
     "missingRefreshToken": "Falta el token de actualización",
     "emailTaken": "Ya existe una cuenta con este correo electrónico",
     "accountSuspended": "Esta cuenta está suspendida",

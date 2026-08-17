@@ -58,6 +58,11 @@ export interface UsersTable {
   status: Generated<'active' | 'suspended' | 'deleted'>;
   email_verified_at: Timestamp | null;
   last_login_at: Timestamp | null;
+  /**
+   * Access tokens issued before this instant are rejected. Set by
+   * `revokeAllUserTokens`; NULL means nothing has been revoked.
+   */
+  tokens_valid_from: Timestamp | null;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
   deleted_at: Timestamp | null;

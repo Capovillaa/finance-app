@@ -9,6 +9,20 @@ function build(options: { forBullmq?: boolean } = {}): Redis {
     enableReadyCheck: true,
     lazyConnect: true,
     retryStrategy: (times) => Math.min(times * 200, 5_000),
+    /**
+     * Fail a command outright while the connection is down, rather than parking
+     * it until the connection comes back.
+     *
+     * Everything that uses this client — the cache, the rate limiter — already
+     * has an answer for "Redis did not respond": fall through to the source, or
+     * fall back to the in-process counter. None of them has an answer for
+     * "Redis has not answered yet", and the offline queue turns a stopped Redis
+     * into exactly that. Measured, with the queue on: a request arriving during
+     * an outage hung for minutes behind the reconnect backoff instead of being
+     * served by the fallback that exists for this. BullMQ is the exception and
+     * keeps the queue, because it issues blocking commands across reconnects.
+     */
+    enableOfflineQueue: options.forBullmq ?? false,
   });
 
   client.on('error', (err) => logger.error({ err }, 'Redis connection error'));

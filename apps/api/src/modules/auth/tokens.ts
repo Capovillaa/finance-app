@@ -9,6 +9,18 @@ export interface AccessTokenPayload {
   sub: string;
   email: string;
   jti: string;
+  /**
+   * When this token was issued, in milliseconds — checked against the user's
+   * `tokens_valid_from` to decide whether a revocation has overtaken it.
+   *
+   * A JWT's own `iat` counts whole seconds, which is too coarse to be the
+   * answer here: within the second that a revocation lands, "issued before" and
+   * "issued after" are indistinguishable, so either a stale token survives or
+   * the replacement the user just signed in for is rejected on arrival. A
+   * millisecond claim removes the ambiguity instead of trading one failure for
+   * the other. Tokens minted before this claim existed fall back to `iat`.
+   */
+  issuedAtMs: number;
 }
 
 export interface TokenPair {
@@ -18,7 +30,7 @@ export interface TokenPair {
 }
 
 export function signAccessToken(userId: string, email: string): { token: string; expiresIn: number } {
-  const token = jwt.sign({ email, jti: randomUUID() }, env.JWT_ACCESS_SECRET, {
+  const token = jwt.sign({ email, jti: randomUUID(), iatMs: Date.now() }, env.JWT_ACCESS_SECRET, {
     subject: userId,
     expiresIn: env.ACCESS_TOKEN_TTL,
     issuer: 'finance-api',
@@ -38,7 +50,12 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
     }) as jwt.JwtPayload;
 
     if (!payload.sub) throw new Error('missing subject');
-    return { sub: payload.sub, email: String(payload.email ?? ''), jti: String(payload.jti ?? '') };
+    return {
+      sub: payload.sub,
+      email: String(payload.email ?? ''),
+      jti: String(payload.jti ?? ''),
+      issuedAtMs: Number(payload.iatMs ?? Number(payload.iat ?? 0) * 1000),
+    };
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
       throw unauthorized('auth.accessTokenExpired');
@@ -181,13 +198,28 @@ export async function revokeRefreshToken(presented: string): Promise<void> {
     .execute();
 }
 
-/** Signs the user out everywhere (password change, "log out other devices"). */
+/**
+ * Signs the user out everywhere (password change, "log out other devices",
+ * account deletion).
+ *
+ * Both halves are needed and neither is enough alone: revoking the refresh
+ * tokens ends the sessions' ability to renew, and moving `tokens_valid_from`
+ * forward ends the access tokens already in circulation — which are otherwise
+ * good for the rest of their lifetime, so that "sign out everywhere" quietly
+ * meant "in about fifteen minutes".
+ */
 export async function revokeAllUserTokens(userId: string, executor: Executor = db): Promise<void> {
   await executor
     .updateTable('refresh_tokens')
     .set({ revoked_at: new Date() })
     .where('user_id', '=', userId)
     .where('revoked_at', 'is', null)
+    .execute();
+
+  await executor
+    .updateTable('users')
+    .set({ tokens_valid_from: new Date() })
+    .where('id', '=', userId)
     .execute();
 }
 

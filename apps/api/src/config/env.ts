@@ -2,6 +2,10 @@ import { config as loadDotenv } from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod/v4';
+// Pure helpers only. This module is evaluated before almost everything else, so
+// what it imports must not reach Redis, Express or the database — which is
+// exactly the constraint `rate-limit-policy.ts` is written to satisfy.
+import { parseTrustProxy } from '../middleware/rate-limit-policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // src/config -> src -> apps/api -> apps -> repo root
@@ -24,6 +28,20 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   API_BASE_URL: z.string().url().default('http://localhost:4000'),
   WEB_BASE_URL: z.string().url().default('http://localhost:5173'),
+  /**
+   * Comma-separated browser origins allowed to call this API with credentials.
+   * Defaults to the web client's own origin; development additionally reflects
+   * whatever origin asks, which is convenient there and nowhere else.
+   */
+  CORS_ORIGINS: blankAsUndefined,
+  /**
+   * How much of `X-Forwarded-For` to believe. `false` (the default) trusts
+   * nothing, because the header is client-supplied and believing it without a
+   * proxy in front hands every caller a fresh rate-limit bucket per request.
+   * Set it to the number of proxy hops in front of this process — `1` behind a
+   * single load balancer — or to `loopback` / a list of trusted subnets.
+   */
+  TRUST_PROXY: z.string().default('false'),
 
   DATABASE_URL: z.string().min(1),
   TEST_DATABASE_URL: z.string().optional(),
@@ -48,8 +66,30 @@ const schema = z.object({
   MAIL_FROM: z.string().default('Finance App <no-reply@finance.local>'),
 
   RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  /** The everyday budget, charged to the signed-in user who spends it. */
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(300),
+  /**
+   * A per-address backstop, charged alongside the per-user budget. Deliberately
+   * looser than it, because a whole office behind one address is ordinary and a
+   * flood from one address is not — this bound exists to stop the flood, not to
+   * ration a shared connection.
+   */
+  RATE_LIMIT_IP_MAX_REQUESTS: z.coerce.number().int().positive().default(1200),
+  /**
+   * How many instances of this process are running behind the same Redis. Used
+   * only to divide the per-process fallback budget, so that losing Redis does
+   * not multiply the advertised limit by the size of the deployment.
+   */
+  RATE_LIMIT_INSTANCES: z.coerce.number().int().positive().default(1),
+  /** Credential attempts allowed from one address per window. */
   AUTH_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(10),
+  /**
+   * Credential attempts allowed against one account, from anywhere. This is the
+   * bound that survives an attacker rotating addresses, so it is counted over a
+   * much longer window than the per-address one.
+   */
+  AUTH_RATE_LIMIT_MAX_PER_ACCOUNT: z.coerce.number().int().positive().default(20),
+  AUTH_RATE_LIMIT_ACCOUNT_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
 
   BASE_CURRENCY: z
     .string()
@@ -96,6 +136,14 @@ export const env = {
    * truncates tables between cases, so an accidental shared URL destroys data.
    */
   DATABASE_URL: isTest ? (raw.TEST_DATABASE_URL ?? deriveTestUrl(raw.DATABASE_URL)) : raw.DATABASE_URL,
+  /** What `app.set('trust proxy', …)` is given. See `TRUST_PROXY` above. */
+  trustProxy: parseTrustProxy(raw.TRUST_PROXY),
+  /** Browser origins allowed to send credentialed requests. */
+  corsOrigins: raw.CORS_ORIGINS
+    ? raw.CORS_ORIGINS.split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : [raw.WEB_BASE_URL],
   isProduction: raw.NODE_ENV === 'production',
   isTest,
   isDevelopment: raw.NODE_ENV === 'development',

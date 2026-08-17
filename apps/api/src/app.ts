@@ -20,9 +20,13 @@ import { apiRouter } from './routes.js';
 export function createApp(): Express {
   const app = express();
 
-  // Behind one reverse proxy in every deployment target; needed for correct
-  // client IPs in rate limiting and audit records.
-  app.set('trust proxy', 1);
+  // `X-Forwarded-For` is a header the *client* sends. Trusting it is what makes
+  // `req.ip` correct behind a load balancer, and what makes it forgeable when
+  // there is nothing in front — at which point every caller can mint a fresh
+  // rate-limit bucket per request by changing a string. So it is configuration,
+  // not a constant, and it defaults to trusting nothing: this repo's own compose
+  // profile publishes the API directly, with no proxy anywhere.
+  app.set('trust proxy', env.trustProxy);
   app.disable('x-powered-by');
 
   app.use(requestId);
@@ -31,9 +35,22 @@ export function createApp(): Express {
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
-      origin: env.isProduction ? [env.WEB_BASE_URL] : true,
+      // Reflecting whatever origin asks, *with credentials*, is a development
+      // convenience and only that. It used to apply to everything that was not
+      // literally `NODE_ENV=production`, which quietly included any staging or
+      // preview deployment — precisely the ones exposed to a network.
+      origin: env.isDevelopment ? true : env.corsOrigins,
       credentials: true,
-      exposedHeaders: ['x-request-id', 'content-disposition'],
+      // A browser cannot read a response header it was not told about, so the
+      // rate-limit budget would be invisible to the client meant to respect it.
+      exposedHeaders: [
+        'x-request-id',
+        'content-disposition',
+        'retry-after',
+        'x-ratelimit-limit',
+        'x-ratelimit-remaining',
+        'x-ratelimit-reset',
+      ],
     }),
   );
   app.use(compression());
@@ -48,12 +65,40 @@ export function createApp(): Express {
   });
 
   // Readiness: this instance can actually serve traffic.
+  //
+  // Unauthenticated and outside the rate limiter, because an orchestrator has
+  // no credentials and a probe that can be throttled is not a probe. That makes
+  // it the one route where an anonymous caller can drive load onto Postgres and
+  // Redis for free, so the result is cached for a second and concurrent probes
+  // share one round of checks. A second is far below any sensible probe interval
+  // and far above the rate a prober could otherwise multiply.
+  const READINESS_TTL_MS = 1000;
+  let readinessCache: { at: number; value: { database: string; redis: string } } | null = null;
+  let readinessInFlight: Promise<{ database: string; redis: string }> | null = null;
+
+  const readiness = async (): Promise<{ database: string; redis: string }> => {
+    if (readinessCache && Date.now() - readinessCache.at < READINESS_TTL_MS) {
+      return readinessCache.value;
+    }
+    readinessInFlight ??= (async () => {
+      try {
+        const checks = await Promise.allSettled([pingDatabase(), pingRedis()]);
+        const [database, redis] = checks.map((check) => (check.status === 'fulfilled' ? 'ok' : 'down'));
+        const value = { database: database!, redis: redis! };
+        readinessCache = { at: Date.now(), value };
+        return value;
+      } finally {
+        readinessInFlight = null;
+      }
+    })();
+    return readinessInFlight;
+  };
+
   app.get(
     '/health/ready',
     responds({ 200: readinessResponse, 503: readinessResponse }),
     asyncHandler(async (_req, res) => {
-      const checks = await Promise.allSettled([pingDatabase(), pingRedis()]);
-      const [database, redis] = checks.map((check) => (check.status === 'fulfilled' ? 'ok' : 'down'));
+      const { database, redis } = await readiness();
       const ready = database === 'ok' && redis === 'ok';
 
       res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'degraded', database, redis });

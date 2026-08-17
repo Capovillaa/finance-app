@@ -63,6 +63,7 @@
     "invalidRefreshToken": "Invalid refresh token",
     "refreshTokenExpired": "Refresh token expired",
     "refreshTokenReused": "Refresh token has already been used",
+    "sessionRevoked": "This session was ended. Please sign in again.",
     "missingRefreshToken": "Refresh token missing",
     "emailTaken": "An account with this email already exists",
     "accountSuspended": "This account is suspended",
