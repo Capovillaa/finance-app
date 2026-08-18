@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-402; see section 4 for the current command. The compiled `dist/server.js`
+410; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -689,7 +689,15 @@ D:\finance_app
 │   ├── api/                         # @finance/api
 │   │   ├── src/
 │   │   │   ├── server.ts            # HTTP entrypoint
-│   │   │   ├── worker.ts            # background job entrypoint
+│   │   │   ├── worker.ts            # background job entrypoint; writes the
+│   │   │   │                        #   heartbeat file (P-6) once workerHealthy()
+│   │   │   │                        #   confirms the database is reachable
+│   │   │   ├── worker-healthcheck.ts # the worker container's HEALTHCHECK command;
+│   │   │   │                        #   reads the heartbeat, opens no connection
+│   │   │   │                        #   of its own
+│   │   │   ├── worker-healthcheck-shared.ts # the path, interval and staleness
+│   │   │   │                        #   constants + isHeartbeatStale(), shared by
+│   │   │   │                        #   both of the above
 │   │   │   ├── app.ts               # express app factory (used by tests too)
 │   │   │   ├── config/              # env.ts (parsing + typed config) and
 │   │   │   │                        # production-policy.ts: the pure rules
@@ -708,7 +716,8 @@ D:\finance_app
 │   │   │   │                        # csv (reader + writer, both directions),
 │   │   │   │                        # route-metadata (stampRoute + mount: what
 │   │   │   │                        #   the app records about its own shape),
-│   │   │   │                        # metrics (the prom-client registry, P-2)
+│   │   │   │                        # metrics (the prom-client registry, P-2),
+│   │   │   │                        # subkey (HKDF per-purpose derivation, M-11)
 │   │   │   ├── middleware/          # auth, validate, error handling, locale,
 │   │   │   │                        # responds (declares + enforces a response shape),
 │   │   │   │                        # rate-limit (the buckets, Redis and Express)
@@ -743,7 +752,9 @@ D:\finance_app
 │   │       │                        # import-mapping, openapi, exchange-rates,
 │   │       │                        # rate-limit-policy, production-policy,
 │   │       │                        # errors (what a failure tells a client),
-│   │       │                        # request-timeout, db-client (M-4's timeouts)
+│   │       │                        # request-timeout, db-client (M-4's timeouts),
+│   │       │                        # request-context, query-schemas (L-1/L-3/L-8),
+│   │       │                        # subkey (M-11), worker-healthcheck (P-6)
 │   │       └── integration/         # auth, auth-recovery (reset + verification),
 │   │                                # workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
@@ -831,6 +842,9 @@ D:\finance_app
 │   │                                # AND responses; the client's types come
 │   │                                # out of this file
 │   ├── decisions.md                 # decision log (see section 6)
+│   ├── runbook.md                   # release runbook (P-4): where migrate runs,
+│   │                                # the rolling-deploy backward-compatibility
+│   │                                # rule, and how to read/roll back a failure
 │   └── finance_management_project_prompt.md   # original brief
 ├── infra/
 │   ├── postgres/init/                # container init SQL
@@ -966,7 +980,7 @@ gitignored — a database dump must never reach a public repository.
 ### Tests
 
 ```bash
-npm test                 # all 402 — needs Postgres, and only Postgres
+npm test                 # all 410 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -3205,17 +3219,35 @@ audit checklist below outranks it.
       2 previews allowed then a 429 with the budget lowered to 2, and a 600 KB
       body against a nonexistent account answered 400 — not the 404
       `getAccount` would give — proving the size check runs first.
-- [ ] **[M-11] Derive per-purpose subkeys.** `JWT_REFRESH_SECRET` currently
-      signs both refresh tokens and invitation tokens.
+- [x] **[M-11] Derive per-purpose subkeys.** **Done.** `lib/subkey.ts`'s
+      `deriveSubkey(purpose)` runs `JWT_REFRESH_SECRET` through HKDF
+      (`node:crypto`'s `hkdfSync`) with a purpose label; `auth/tokens.ts`'s
+      `hashRefreshToken` and `workspaces/invitations.ts`'s `hashToken` each
+      get their own derived subkey instead of hashing with the raw secret.
+      Rotating the root secret still rotates both, but a leak of one derived
+      key no longer yields the other. **This is a breaking change for any
+      live deployment** — every existing refresh token and pending invitation
+      hashes differently after it ships, which is the same "everyone signs
+      back in once" consequence a secret rotation already carries, not a new
+      kind of incident.
 - [ ] **[L-6] Secret scanning and SAST in CI.** `npm audit` is there; gitleaks
       and CodeQL are not.
 - [ ] **[L-5] Require TLS to Postgres and Redis.**
-- [ ] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
-      worker. Its container no longer *reports* a false unhealthy — the deployed
-      composition disables the inherited HTTP healthcheck, since the worker opens
-      no port — but disabling a wrong probe is not adding a right one, and a
-      wedged worker is still invisible until alerts stop arriving.
-      `processors.ts` already exports `workerHealthy()` with nothing calling it.
+- [x] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
+      worker. **Both done.** `docs/runbook.md` covers the single-instance
+      release this repo's own compose file already does correctly, the
+      backward-compatibility rule a future rolling deploy would need (never
+      built here, but the schema discipline that makes it safe when it
+      exists), and how to read a failed migration and roll back one step.
+      `worker.js` now writes a heartbeat file every 15s, but only once
+      `workerHealthy()` (`jobs/processors.ts`) has confirmed the database is
+      actually reachable — a wedged event loop or a broken connection both
+      show up as a stale file either way.
+      `docker-compose.deploy.yml`'s worker `healthcheck` reads it via a new
+      `worker-healthcheck.js`, replacing the disabled HTTP one rather than
+      leaving it disabled. Verified in a real container: `healthy` while
+      running normally, `unhealthy` within the 45s staleness window after the
+      process was frozen with `docker pause`.
 
 ### Phase 4 — polish
 

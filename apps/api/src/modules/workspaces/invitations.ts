@@ -6,14 +6,23 @@ import { invitationEmail, sendEmail } from '../../lib/email.js';
 import { conflict, notFound, unprocessable } from '../../lib/errors.js';
 import type { Locale } from '../../lib/i18n.js';
 import { logger } from '../../lib/logger.js';
+import { deriveSubkey } from '../../lib/subkey.js';
 import { recordActivity } from '../activity/service.js';
 import { addMember } from './service.js';
 
 const INVITATION_TTL_DAYS = 14;
 
-/** Only the hash is stored, so a database leak cannot be used to join a workspace. */
+/**
+ * Only the hash is stored, so a database leak cannot be used to join a
+ * workspace. Keyed with a subkey derived from `JWT_REFRESH_SECRET`
+ * (`lib/subkey.ts`), not the raw secret — see M-11 in AUDIT_REPORT.md, and
+ * `modules/auth/tokens.ts`'s `hashRefreshToken` for the other purpose this
+ * root secret used to share a key with.
+ */
+const INVITATION_TOKEN_SUBKEY = deriveSubkey('invitation-token');
+
 function hashToken(token: string): string {
-  return createHmac('sha256', env.JWT_REFRESH_SECRET).update(token).digest('hex');
+  return createHmac('sha256', INVITATION_TOKEN_SUBKEY).update(token).digest('hex');
 }
 
 export interface InvitationRecord {

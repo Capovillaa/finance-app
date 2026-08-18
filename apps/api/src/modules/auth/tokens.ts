@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import { db, type Executor } from '../../db/client.js';
 import { unauthorized } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
+import { deriveSubkey } from '../../lib/subkey.js';
 
 export interface AccessTokenPayload {
   sub: string;
@@ -68,9 +69,16 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
  * Refresh tokens are opaque random strings, never JWTs: the server must be able
  * to revoke one instantly, which a self-contained token cannot offer. Only a
  * keyed hash is persisted, so a database leak does not yield usable tokens.
+ *
+ * Keyed with a subkey derived from `JWT_REFRESH_SECRET` (`lib/subkey.ts`)
+ * rather than the raw secret — see M-11 in AUDIT_REPORT.md, and
+ * `workspaces/invitations.ts`'s `hashToken` for the other purpose this same
+ * root secret used to share a key with.
  */
+const REFRESH_TOKEN_SUBKEY = deriveSubkey('refresh-token');
+
 function hashRefreshToken(token: string): string {
-  return createHmac('sha256', env.JWT_REFRESH_SECRET).update(token).digest('hex');
+  return createHmac('sha256', REFRESH_TOKEN_SUBKEY).update(token).digest('hex');
 }
 
 function refreshExpiry(): Date {

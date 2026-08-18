@@ -2275,3 +2275,97 @@ decision anyone wrote down, only a default nobody revisited.
 Nothing changed in the code for this finding — `/openapi.json` remains exactly as unauthenticated
 as `/health`. What changed is that the choice now has a name and a place a future session can find
 it, instead of looking like an oversight the next time an audit runs.
+
+---
+
+### One root secret, two purposes, and a subkey each (M-11)
+
+`JWT_REFRESH_SECRET` signed two unrelated things: opaque refresh tokens (`auth/tokens.ts`) and
+workspace invitation tokens (`workspaces/invitations.ts`), both by handing the raw secret straight
+to `createHmac`. Two consequences followed from sharing the bytes rather than only the source: a
+suspected leak in one context (a refresh token turning up somewhere it shouldn't) forced rotating
+the secret that also authenticated the other, invalidating every pending invitation as collateral
+damage nobody chose; and a cryptographic weakness discovered in one HMAC use — however unlikely for
+plain HMAC-SHA256 — would have applied to the other for free, since it was the identical key.
+
+**The fix is `lib/subkey.ts`: one function, `deriveSubkey(purpose)`, wrapping Node's own
+`crypto.hkdfSync`.** HKDF (RFC 5869) exists exactly for this — turning one root secret into several
+independent-looking subkeys, labelled by an `info` parameter that never needs to be secret itself.
+`hashRefreshToken` now keys its HMAC with `deriveSubkey('refresh-token')`, `hashToken` in
+`invitations.ts` with `deriveSubkey('invitation-token')`. Rotating `JWT_REFRESH_SECRET` still
+rotates both derived keys together — there is exactly one secret to manage in production, unchanged
+— but a leak of one derived key no longer yields the other, and each can be reasoned about (and, if
+it ever mattered, rotated) independently of the shared root.
+
+**Why this is HKDF derivation and not a second environment variable, unlike `EMAIL_TOKEN_SECRET`
+(section 5o).** Those two decisions look inconsistent side by side and are not: `EMAIL_TOKEN_SECRET`
+existed to avoid giving `JWT_REFRESH_SECRET` a *third* purpose it had never had, at a point where
+this exact M-11 problem was already known and unfixed — compounding an open finding would have been
+strictly worse than leaving it alone for a session that meant to fix it properly. This entry is that
+session: the two purposes that already existed on the root secret get subkeys, which is the fix
+M-11 always specified, rather than a third environment variable growing the secret-management
+surface for no reason a fourth purpose wouldn't also need solving. No salt is used beyond HKDF's
+convention of an empty one — salt exists to combine multiple *independent* entropy sources, and
+there is only one input here (the root secret); the separation this buys comes entirely from the
+`info` label, not from a salt.
+
+**This is a breaking change for any live deployment, and deliberately not migrated.** Every refresh
+token and every pending invitation in a real database hashes differently the moment this ships —
+existing rows still hold the *old* HMAC, computed with the raw secret, and a freshly presented token
+now hashes with the derived subkey instead, so no existing row matches. The consequence is that
+everyone with a live session is signed out and has to sign back in, and every pending invitation
+link stops working and has to be re-sent. That is not a bug to work around; it is the same
+consequence rotating `JWT_REFRESH_SECRET` itself already carries (`revokeAllUserTokens`,
+section 6), and this codebase has no demo or production deployment with real sessions to preserve
+across the change regardless. A real deployment adopting this fix should expect and communicate
+exactly that "sign in again" moment, the same as it would for any other secret rotation.
+
+Verified with `tests/unit/subkey.test.ts`: the same purpose always derives the same key
+(determinism matters — a random subkey per call would make every stored hash unverifiable), two
+different purposes derive different keys, and neither derived key ever equals the root secret it
+came from. What is deliberately *not* pinned is the specific bytes HKDF produces for a given
+input — that is Node's `crypto` module's contract to keep, not this codebase's.
+
+---
+
+### A release runbook, and a heartbeat the worker never had (P-4, P-6)
+
+**P-4.** `server.ts` skips auto-migration in production with a comment pointing at "a release
+step" that had never been written down anywhere — which is fine as *code*, since
+`docker-compose.deploy.yml` already gates the single-instance release correctly
+(`migrate` → `service_completed_successfully` → `api`/`worker`), but leaves a real question
+unanswered the day this ever runs as more than one instance: what rule keeps a migration safe while
+two image versions serve traffic at once. `docs/runbook.md` is that document — the release command
+this repository's compose file already gets right needs no runbook of its own; what needed writing
+down was the backward-compatibility discipline a rolling deploy would need (additive migrations
+first, never renaming or dropping a column the previous image still reads, run `migrate` once
+before rolling any instance forward) and the failure procedure (Kysely's `Migrator` runs each
+migration in its own transaction, so a failed one rolls back cleanly on its own; `db/migrate.js
+down` undoes exactly one step, not the whole chain).
+
+**P-6.** `jobs/processors.ts` already exported `workerHealthy()` — a query that confirms the
+database is reachable — with nothing calling it. The deployed worker's container had already
+stopped *reporting* a false unhealthy (the inherited HTTP `HEALTHCHECK` was disabled, since the
+worker opens no port), but disabling a wrong probe is not the same as having a right one: a
+genuinely wedged worker was invisible until whatever depends on its output — recurring bills,
+alerts, notification delivery — stopped arriving, which is a symptom several steps removed from the
+cause.
+
+The fix is a file-based heartbeat rather than opening a port for the worker to answer on, which
+would have reversed a deliberate earlier decision (section 5g/5k: the worker has no HTTP surface).
+`worker.ts` writes the current time to `/tmp/worker-heartbeat` every 15 seconds — but only once
+`workerHealthy()` has actually confirmed the database is up, so a broken database connection and a
+wedged event loop both show up identically to the healthcheck: a file that stops getting newer.
+`worker-healthcheck.js` (a new, tiny entrypoint compiled from the same image) is what
+`docker-compose.deploy.yml`'s `worker.healthcheck` now runs, replacing the disabled HTTP one — it
+reads the file's age and exits non-zero past three missed writes' worth of grace (45s), deliberately
+*not* querying the database itself, since a healthcheck that opens its own connection would compete
+with the worker for pool slots at exactly the moment — a saturated pool — that answer matters most.
+
+Verified in a real container, not only unit tests: `docker inspect` reported `healthy` continuously
+while the worker ran normally, then `unhealthy` after the process was frozen with `docker pause` and
+left past the staleness window — proof the check actually distinguishes a live worker from a stuck
+one, not just that a file exists. `tests/unit/worker-healthcheck.test.ts` pins the pure staleness
+arithmetic on its own (including that an unparsable heartbeat — `NaN` — fails closed rather than
+computing a nonsensical age), separated from the file I/O and `process.exit` calls that make the
+rest of `worker-healthcheck.ts` awkward to unit test directly.
