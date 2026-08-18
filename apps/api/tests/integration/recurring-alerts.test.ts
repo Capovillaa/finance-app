@@ -303,6 +303,30 @@ describe('alert evaluation', () => {
     expect(await notificationsFor(user.id, 'large_transaction')).toHaveLength(1);
   });
 
+  it('rejects a config value with no bound on it (M-3 in AUDIT_REPORT.md)', async () => {
+    const user = await registerUser();
+
+    const hugeLookback = await api()
+      .put(`/api/v1/workspaces/${user.workspaceId}/alerts`)
+      .set(user.auth)
+      .send({ type: 'large_transaction', config: { lookbackDays: 1_000_000 } });
+    expect(hugeLookback.status).toBe(422);
+
+    const unboundedMilestones = await api()
+      .put(`/api/v1/workspaces/${user.workspaceId}/alerts`)
+      .set(user.auth)
+      .send({ type: 'goal_milestone', config: { milestones: Array(500).fill(1) } });
+    expect(unboundedMilestones.status).toBe(422);
+
+    // A field that belongs to a different alert type's config is rejected
+    // too, not silently ignored.
+    const wrongTypeField = await api()
+      .put(`/api/v1/workspaces/${user.workspaceId}/alerts`)
+      .set(user.auth)
+      .send({ type: 'bill_due', config: { thresholdPercent: 80 } });
+    expect(wrongTypeField.status).toBe(422);
+  });
+
   it('notifies every member of a shared workspace', async () => {
     const owner = await registerUser();
     const member = await registerUser();

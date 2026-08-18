@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-412; see section 4 for the current command. The compiled `dist/server.js`
+422; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -740,7 +740,10 @@ D:\finance_app
 │   │   │                            # imports also has mapping.ts: pure
 │   │   │                            # column/date/sign inference; currencies
 │   │   │                            # also has providers.ts: the live rate
-│   │   │                            # feeds, with an injectable fetch
+│   │   │                            # feeds, with an injectable fetch; alerts
+│   │   │                            # also has schemas.ts: a bounded config
+│   │   │                            # object per alert type, since engine.ts's
+│   │   │                            # config drives the shared worker (M-3)
 │   │   ├── Dockerfile               # the production image: one artifact, three
 │   │   │                            # entrypoints (server, worker, migrate).
 │   │   │                            # Build from the REPO ROOT — see 5g
@@ -981,8 +984,8 @@ gitignored — a database dump must never reach a public repository.
 ### Tests
 
 ```bash
-npm test                 # all 412 — needs Postgres, and only Postgres
-npm run test:unit        # 215 pure units, no infrastructure at all
+npm test                 # all 422 — needs Postgres, and only Postgres
+npm run test:unit        # 251 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -3231,9 +3234,20 @@ audit checklist below outranks it.
       each one, and 5 of the highest-stakes are spot-checked by hand with a
       real body (create transaction, create account, invite a member, rename
       the workspace, transfer ownership). See `docs/decisions.md`.
-- [ ] **[M-3] Type the alert-rule `config`.** It is an open
-      `z.record(z.string(), z.unknown())` whose values drive lookback windows and
-      `Decimal` parsing on the **shared** worker, with no bounds.
+- [x] **[M-3] Type the alert-rule `config`.** **Done** —
+      `apps/api/src/modules/alerts/schemas.ts`: eight `.strict()` objects, one
+      per alert type, bounding exactly the fields that type's branch of
+      `engine.ts` reads (a `lookbackDays`/`lookbackMonths`/`windowDays`/
+      `daysBefore` ceiling, a `milestones` array capped in both length and
+      per-entry magnitude, a `sigma`/`multipleOfAverage` sane range). Wired
+      into the route with a `.superRefine` on `PUT …/alerts`, since `config`'s
+      shape depends on the sibling `type` field and a plain `z.object` cannot
+      key off that. The money-shaped fields (`minAmount`, `minBalance`) accept
+      either the plain number `AlertRuleFormDialog` sends or the decimal
+      string a direct API caller sends — found only because an existing
+      integration test already exercised the string form and a first,
+      number-only draft would have silently broken it. See
+      `docs/decisions.md`.
 - [x] **[M-6] Rate-limit `/imports/preview` on its own**, and reject an
       oversized body before any database work. **Done** — see
       `docs/decisions.md`, "Six small findings...". `importPreviewRateLimit`

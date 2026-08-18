@@ -2513,3 +2513,58 @@ one also reaches. A future session extending this coverage should add to the spo
 than trying to make `isCleanlyTestable` cleverer about synthesising an arbitrary valid body — Zod
 schemas are not uniform enough (unions, refinements, cross-field rules) for that to be reliable, and
 a hand-written case that is obviously correct is worth more than a generic one that might not be.
+
+---
+
+### Bounding the alert-rule `config`, keyed on a sibling field (M-3)
+
+`PUT /workspaces/{workspaceId}/alerts` accepted `config: z.record(z.string(), z.unknown())` —
+anything at all — even though every value in it drives real work on the shared BullMQ worker that
+evaluates every workspace's alert rules in the same process. `engine.ts`'s `num()`/`str()` helpers
+guard against the wrong *type* (a string where a number was expected falls back to a default) but
+enforce no bound on a value of the right type: a `lookbackDays` of a million reruns a transaction
+scan over a million days of history, a `goal_milestone.milestones` array of ten thousand entries is
+walked in full for every goal in the workspace, and both cost the one process every other
+workspace's scan shares while it runs.
+
+**The fix is `apps/api/src/modules/alerts/schemas.ts`: eight small, `.strict()` objects, one per
+alert type, each declaring only the fields that type's branch of `engine.ts` actually reads.**
+`.strict()` matters as much as the numeric bounds — without it, a `bill_due` config carrying
+`thresholdPercent` would be silently accepted and silently ignored, which is a worse failure mode
+than a 422 telling the caller their config does not belong to the type they sent. The bounds
+themselves come from what each field actually does once evaluated: `lookbackDays`/`lookbackMonths`/
+`windowDays`/`daysBefore` cap what date range gets queried or scanned; `milestones` is capped in
+both array length (20) and each entry's magnitude (1–1000); `sigma` and `multipleOfAverage` are
+bounded to the range a real statistical threshold could sensibly take. None of these are shared with
+`apps/web` through `@finance/schemas` — unlike a request field, an alert rule's config is not
+something the client independently re-validates against the same rule today, so duplicating the
+bounds into a second package would be a promise this session did not verify the client keeps.
+
+**A plain `z.object` cannot key its own shape off a sibling field, which is what `type` is here.**
+The route's body schema gained a `.superRefine` that reads the already-parsed `type`, looks up the
+matching per-type schema from `schemas.ts`, and re-parses `config` against it — re-pathing every
+issue it finds under `['config', ...]` so a caller sees `body.config.lookbackDays`, not a bare
+`body`. This is the same shape as the cross-field `.refine` `dateRangeSchema` already uses in
+`modules/shared/schemas.ts`, just needing a second schema lookup rather than a boolean predicate.
+
+**The money-shaped fields (`minAmount`, `minBalance`) had to accept two representations, not one,
+and the second was only found by checking what already worked rather than by design.** The web
+client's `AlertRuleFormDialog` sends every config field — including the money ones — as a plain JS
+`number`; a first draft of this schema assumed that was the only shape and shipped `z.number()`.
+`tests/integration/recurring-alerts.test.ts` already had a passing case sending
+`minAmount: '50.0000'` as a decimal *string*, matching what `engine.ts`'s own `str()` helper reads
+and what a direct API caller — anything that is not this one dialog — would reasonably send for a
+money value, the same as every other money field in this API. Running the existing suite before
+this shipped is what caught it: the new schema would have silently broken a passing integration
+test with no code change on that test's side. `moneyLike()` in `schemas.ts` now accepts a finite
+number within `LIMITS.money`'s bound or a string matching `MONEY_PATTERN`/`UNSIGNED_MONEY_PATTERN`
+from `@finance/schemas` — reusing the same patterns that govern every other money field in the API
+rather than inventing a third notion of "looks like money" for this one module.
+
+**The bound itself is `LIMITS.money`'s own ceiling, not a number picked for this file.**
+`10 ** LIMITS.money.integerDigits - 1` is the largest magnitude the `NUMERIC(19,4)` column this
+value is eventually compared against can hold; anything larger is already meaningless to the ledger
+it is meant to threshold against, so there was no need to invent a tighter number-specific limit —
+the shared one already implies a value nowhere near `Number#toString`'s exponential-notation
+threshold (1e21), which is what would have broken the `Decimal` parse `engine.ts`'s `str()` helper
+feeds into.

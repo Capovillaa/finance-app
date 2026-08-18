@@ -7,6 +7,7 @@ import { body, params, uuidSchema, validate } from '../../middleware/validate.js
 import { today } from '../../lib/dates.js';
 import { evaluateWorkspaceAlerts } from './engine.js';
 import { alertEvaluationResponse, alertRuleListResponse, alertRuleResponse } from './responses.js';
+import { checkAlertConfig } from './schemas.js';
 import * as alertService from './service.js';
 
 const alertTypeSchema = z.enum([
@@ -35,14 +36,25 @@ alertRouter.put(
   '/',
   requireAdmin,
   validate({
-    body: z.object({
-      type: alertTypeSchema,
-      isEnabled: z.boolean().optional(),
-      config: z.record(z.string(), z.unknown()).optional(),
-      channels: z.array(z.enum(['in_app', 'email', 'push'])).min(1).optional(),
-      scopeCategoryId: uuidSchema.nullish(),
-      scopeAccountId: uuidSchema.nullish(),
-    }),
+    body: z
+      .object({
+        type: alertTypeSchema,
+        isEnabled: z.boolean().optional(),
+        config: z.record(z.string(), z.unknown()).optional(),
+        channels: z.array(z.enum(['in_app', 'email', 'push'])).min(1).optional(),
+        scopeCategoryId: uuidSchema.nullish(),
+        scopeAccountId: uuidSchema.nullish(),
+      })
+      .superRefine((value, ctx) => {
+        // `config`'s real shape depends on `type`, a sibling field — a plain
+        // object schema cannot express that, so the per-type bounds in
+        // `schemas.ts` are checked here and their issues re-pathed under
+        // `config` (M-3 in AUDIT_REPORT.md).
+        if (value.config === undefined) return;
+        for (const issue of checkAlertConfig(value.type, value.config)) {
+          ctx.addIssue({ ...issue, path: ['config', ...issue.path] });
+        }
+      }),
   }),
   responds({ 200: alertRuleResponse }),
   asyncHandler(async (req, res) => {
