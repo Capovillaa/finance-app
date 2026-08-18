@@ -26,6 +26,14 @@ apps/web/.phosphor-names.txt
 .idea/
 # Per-machine tool permissions, not project configuration
 .claude/settings.local.json
+# Agent skills installed by the `skills` CLI: third-party tooling for whoever is
+# working on the repo, not part of the project. `.agents/` and `agent/` hold the
+# files, `.claude/skills/` symlinks into them, `skills-lock.json` pins versions.
+# Commit these instead if the team should all get the same skills.
+.agents/
+agent/
+.claude/skills/
+skills-lock.json
 .DS_Store
 Thumbs.db
 
