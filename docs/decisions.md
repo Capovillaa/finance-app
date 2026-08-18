@@ -1427,6 +1427,66 @@ possible layer — the correct-looking success path.**
 
 ---
 
+### The phone is a first-class target, and the pointer decides the target size
+
+Most of this app's use is expected to be on a phone, so the client was audited at an
+iPhone-class viewport (390×844, touch, iOS user agent) by driving the real backend in Chrome
+rather than by reading breakpoints. The structural verdict was that the responsive work already
+done holds up: **no page-level horizontal overflow on any of the nine screens or the login
+screen** (`document.scrollWidth === window.innerWidth === 390` throughout), the nav collapses to
+a temporary drawer below `md`, every multi-column grid already uses the `minmax(0, 1fr)` tracks
+that the redesign entry insists on, the charts are inside `ResponsiveContainer`, and the
+transaction detail drawer is already `width: 100%` on `xs`. Nothing needed rebuilding. Four
+things were nevertheless wrong, and only one of them was visible without a device-shaped
+measurement.
+
+**Every text field in the app zoomed iOS Safari in and never let it back out.** `theme.ts` set
+the input slot to `0.9375rem`, and Safari force-zooms the page whenever a *focused* field
+computes below 16px — then leaves the viewport there when the field blurs, so one tap on the
+login box leaves the user panning a 390px layout inside a viewport that no longer fits it. The
+desktop step is unchanged; a `max-width: 599.95px` query raises the field, and its label with
+it, to 16px. This typechecks, looks perfect on a desktop, and is invisible to every test in the
+suite.
+
+**Two tables in Settings were clipped rather than scrollable.** The Reports tables carry an
+`overflowX: 'auto'` wrapper; Members (four columns, measured 482px) and Invitations (six columns)
+never got one, and they sit inside a MUI `Card`, which clips its overflow. So on a 390px screen
+they were cut off at the viewport edge with no way to scroll to the remainder — which hid the
+whole Actions column and left an admin unable to remove a member, transfer ownership, or revoke
+an invitation *at all*. The page-level overflow check cannot see this: the document does not
+overflow, precisely because the `Card` is eating the excess. **A table that fits the page is not
+the same as a table you can read** — check the wrapper, not the document width.
+
+**Touch targets are scoped to `pointer: coarse`, not to a width breakpoint**, because the thing
+that decides whether a 30px glyph is big enough is the input device rather than the viewport. A
+touchscreen laptop gets the larger targets and a narrow desktop window does not, which is the
+correct way round. `COARSE_TARGET` in `theme.ts` is spread into `MuiButton`, `MuiIconButton` and
+`MuiToggleButton`; `MuiListItemButton` takes the height half only, since the nav items already
+run the drawer's full width. Verified: 8 of the 9 screens went from dozens of sub-44px controls
+to zero, and the desktop layout is byte-identical because the query never matches there.
+
+**Sizing the targets broke the thing the row exists to show, which is the more interesting
+half.** Three action glyphs at 44px run to ~110px, and on the folded `LedgerRow` that column sat
+between the description and the row's edge — so the descriptions collapsed to "Superm…" and
+"Posto d…". The row's subject was being clipped so that its verbs could fit, which is worse than
+the small buttons were. The fix is a change to the `xs` grid areas rather than a compromise on
+either: `body` now spans the actions column too, so the description gets the row's full width
+back; the controls drop onto the second line beside the category, which had dead space to spare;
+and the figure keeps a line of its own, still flush right so amounts stack into one column. The
+`md` template is untouched. **When a touch-target minimum and the content are fighting over the
+same 390px, the layout is what should give — not the target and not the content.**
+
+One unrelated defect surfaced while reading the Reports screen at phone size:
+`StatementBudgets.tsx` rendered `{meta.label}` — the raw catalogue key `budgets.status.warning` —
+where `{t(meta.label)}` belonged, alongside a hardcoded English `used`. `npm run check:i18n`
+structurally cannot catch this. It verifies that the key a `t()` call *names* resolves, and a key
+that is never passed to `t()` at all names nothing; the key itself is perfectly valid and is
+rendered correctly by three other components. The same sweep found eight hardcoded English
+strings in the two Settings tables. **A key held in an import-time table is only half the
+pattern — the render site owes it a `t()`, and nothing in CI will tell you when it forgets.**
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

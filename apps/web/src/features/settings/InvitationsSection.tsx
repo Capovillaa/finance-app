@@ -166,59 +166,65 @@ export default function InvitationsSection({ workspaceId }: InvitationsSectionPr
               {t('settings.noInvitations')}
             </Typography>
           ) : (
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Email</TableCell>
-                  <TableCell>{t('settings.role.label')}</TableCell>
-                  <TableCell>{t('common.status')}</TableCell>
-                  <TableCell>Invited by</TableCell>
-                  <TableCell>Expires</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {invitations.map((invitation) => (
-                  <TableRow key={invitation.id}>
-                    <TableCell>{invitation.email}</TableCell>
-                    <TableCell>{t(ROLE_LABEL_KEYS[invitation.role])}</TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={invitation.status}
-                        color={STATUS_COLOR[invitation.status] ?? 'default'}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {invitation.invitedByName ?? '—'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {formatDate(invitation.expiresAt.slice(0, 10))}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="right">
-                      {isRevocable(invitation) ? (
-                        <Tooltip title={t('settings.revokeInvitation')}>
-                          <IconButton
-                            size="small"
-                            color="error"
-                            disabled={revokeState.isLoading}
-                            onClick={() => void revokeInvitation({ workspaceId, invitationId: invitation.id })}
-                            aria-label={`Revoke the invitation for ${invitation.email}`}
-                          >
-                            <CloseIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      ) : null}
-                    </TableCell>
+            // Six columns in a `Card` that clips its overflow: on a phone this
+            // table was cut off at the viewport edge and unscrollable, so the
+            // Actions column — the only way to revoke an invitation — could not
+            // be reached at all. Same wrapper the Reports tables carry.
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 620 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>{t('common.email')}</TableCell>
+                    <TableCell>{t('settings.role.label')}</TableCell>
+                    <TableCell>{t('common.status')}</TableCell>
+                    <TableCell>{t('settings.invitedBy')}</TableCell>
+                    <TableCell>{t('settings.expires')}</TableCell>
+                    <TableCell align="right">{t('common.actions')}</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHead>
+                <TableBody>
+                  {invitations.map((invitation) => (
+                    <TableRow key={invitation.id}>
+                      <TableCell>{invitation.email}</TableCell>
+                      <TableCell>{t(ROLE_LABEL_KEYS[invitation.role])}</TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={invitation.status}
+                          color={STATUS_COLOR[invitation.status] ?? 'default'}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="text.secondary">
+                          {invitation.invitedByName ?? '—'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="text.secondary">
+                          {formatDate(invitation.expiresAt.slice(0, 10))}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        {isRevocable(invitation) ? (
+                          <Tooltip title={t('settings.revokeInvitation')}>
+                            <IconButton
+                              size="small"
+                              color="error"
+                              disabled={revokeState.isLoading}
+                              onClick={() => void revokeInvitation({ workspaceId, invitationId: invitation.id })}
+                              aria-label={`Revoke the invitation for ${invitation.email}`}
+                            >
+                              <CloseIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Box>
           )}
         </Stack>
       </CardContent>

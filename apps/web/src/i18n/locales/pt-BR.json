@@ -59,7 +59,8 @@
     "couldNotLoad": "Não foi possível carregar",
     "done": "Concluído",
     "customColour": "Cor personalizada",
-    "toggleSign": "Alternar sinal"
+    "toggleSign": "Alternar sinal",
+    "actions": "Ações"
   },
   "formSections": {
     "details": "Detalhes",
@@ -691,7 +692,12 @@
       "admin": "Gerenciar membros, convites, configurações do espaço e regras de alerta",
       "editor": "Criar e editar contas, transações, orçamentos e metas",
       "viewer": "Acesso somente leitura a tudo no espaço"
-    }
+    },
+    "member": "Membro",
+    "joined": "Entrou em",
+    "you": "você",
+    "invitedBy": "Convidado por",
+    "expires": "Expira em"
   },
   "imports": {
     "action": "Importar CSV",

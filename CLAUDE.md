@@ -612,6 +612,64 @@ silent.**
 
 ---
 
+## 2g. The phone is a first-class target
+
+Most use of this app is expected to be on a phone, so a later session audited the
+client at an iPhone-class viewport (390×844, touch, iOS UA) by driving the real
+backend in Chrome. Full reasoning is in `docs/decisions.md` ("The phone is a
+first-class target, and the pointer decides the target size").
+
+**The structure already held up and was not changed**: no page-level horizontal
+overflow on any of the nine screens or the login screen, the nav collapses to a
+temporary drawer below `md`, every multi-column grid already used
+`minmax(0, 1fr)`, charts are in `ResponsiveContainer`, and the transaction
+detail drawer is already `width: 100%` on `xs`. Four things were wrong:
+
+- **`theme.ts`'s input slot was 15px, which zooms iOS Safari in on focus and
+  never zooms back out.** A `max-width: 599.95px` query raises the field and its
+  label to 16px; the desktop step is unchanged. **Any new field that overrides
+  its own font size owes itself the same floor** — this typechecks, looks right
+  on a desktop, and no test in the suite can see it.
+- **Settings' Members and Invitations tables were clipped, not scrollable.**
+  They sit in a MUI `Card`, which clips overflow, and unlike the Reports tables
+  they had no `overflowX: 'auto'` wrapper — so the Actions column was
+  unreachable and an admin could not remove a member or revoke an invitation on
+  a phone. **A page that does not overflow is not proof a table is readable:**
+  the `Card` was absorbing the excess, so the document-width check passed.
+  Any new `<Table>` needs the wrapper *and* a `minWidth` so the columns do not
+  crush.
+- **Touch targets go through `COARSE_TARGET` in `theme.ts`, keyed on
+  `pointer: coarse` rather than on a width breakpoint** — the input device
+  decides whether 30px is enough, not the viewport, so a touchscreen laptop gets
+  the bigger targets and a narrow desktop window does not. It is spread into
+  `MuiButton`, `MuiIconButton` and `MuiToggleButton`; `MuiListItemButton` takes
+  the height half only. Eight of nine screens went from dozens of sub-44px
+  controls to zero, with the desktop layout unchanged.
+- **`LedgerRow`'s `xs` grid changed, because sizing the targets broke the
+  content.** Three 44px glyphs run to ~110px, and taking that out of the middle
+  of the folded row clipped descriptions to "Superm…". `body` now spans the
+  actions column, the controls drop onto the second line beside the category,
+  and the figure keeps its own line flush right. **The `md` template is
+  untouched** — check both widths if you touch that grid.
+
+**One i18n bug found the same way, unrelated to mobile.**
+`StatementBudgets.tsx` rendered `{meta.label}` instead of `{t(meta.label)}`, so
+Reports printed the literal key `budgets.status.warning` on screen. **`npm run
+check:i18n` structurally cannot catch this** — it checks that the key a `t()`
+call names resolves, and a key never passed to `t()` names nothing; the key is
+valid and three other components render it correctly. Eight hardcoded English
+strings in the two Settings tables went with it (`settings.member`,
+`settings.joined`, `settings.you`, `settings.invitedBy`, `settings.expires` and
+`common.actions` are new keys in all three catalogues).
+
+**Not done, deliberately:** dialogs are still never `fullScreen` on `xs`. The
+transaction dialog measures 326×780 in a 390×844 viewport and fits, but a real
+iPhone's URL bar takes ~120px, so a long form scrolls to reach its submit
+button. Making form dialogs full-screen below `sm` is the obvious next step and
+was left out of scope rather than overlooked.
+
+---
+
 ## 3. Project structure
 
 ```
@@ -2182,6 +2240,17 @@ every figure in a list or table is set in `IBM Plex Mono` with `tabular-nums`
 (use `variant="amount"` or `components/Amount.tsx`); a card gets a hairline, not
 a shadow, unless it genuinely floats; and a colour is only added after checking
 its contrast against the surface it actually renders on.
+
+**The phone is a first-class target, and the pointer decides the target size.**
+The client was audited at 390×844 against the real backend: the responsive
+structure held (no page overflow anywhere, drawer nav, `minmax(0, 1fr)` grids,
+responsive charts), but every field zoomed iOS Safari in at 15px, two Settings
+tables were clipped inside a `Card` rather than scrollable, and the row action
+glyphs were half the size a thumb needs. Touch minimums are scoped to
+`pointer: coarse`, never to a width breakpoint, because the input device is what
+decides — and when the 44px minimum collided with the description in a folded
+`LedgerRow`, the grid gave way rather than either the target or the content. See
+section 2g and `docs/decisions.md`.
 
 **Glass belongs only to what already floats.** A later pass gave dialogs,
 menus, popovers and the transaction detail drawer a translucent, blurred

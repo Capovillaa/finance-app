@@ -130,16 +130,27 @@ export default function LedgerRow({
         borderBottomColor: 'divider',
         '&:last-of-type': { borderBottom: 0 },
         '&:hover': { bgcolor: 'action.hover' },
+        // On the folded layout the trailing controls share the *classifying*
+        // line rather than standing in a column beside the description.
+        //
+        // Once those controls are sized for a fingertip they run to ~110px, and
+        // taking that out of the middle of a 390px row left the description
+        // reading "Superm…" — the row's subject clipped so that its verbs could
+        // fit. Here `body` spans the controls' column too, so the description
+        // gets the row's full width back; the controls drop onto the second
+        // line beside the category, which had dead space to spare; and the
+        // figure keeps a line of its own, still flush to the row's right edge
+        // so that amounts stack into one column exactly as they did before.
         gridTemplateColumns: selection
           ? { xs: 'auto auto minmax(0, 1fr) auto', md: 'auto auto minmax(0, 1fr) auto auto auto' }
           : { xs: 'auto minmax(0, 1fr) auto', md: 'auto minmax(0, 1fr) auto auto auto' },
         gridTemplateAreas: selection
           ? {
-              xs: `"select lead body actions" "select lead meta actions" "amount amount amount amount"`,
+              xs: `"select lead body body" "select lead meta actions" "amount amount amount amount"`,
               md: `"select lead body meta amount actions"`,
             }
           : {
-              xs: `"lead body actions" "lead meta actions" "amount amount amount"`,
+              xs: `"lead body body" "lead meta actions" "amount amount amount"`,
               md: `"lead body meta amount actions"`,
             },
       }}

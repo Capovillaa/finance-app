@@ -59,7 +59,8 @@
     "couldNotLoad": "No se pudo cargar",
     "done": "Hecho",
     "customColour": "Color personalizado",
-    "toggleSign": "Alternar signo"
+    "toggleSign": "Alternar signo",
+    "actions": "Acciones"
   },
   "formSections": {
     "details": "Detalles",
@@ -691,7 +692,12 @@
       "admin": "Gestionar miembros, invitaciones, ajustes del espacio y reglas de alerta",
       "editor": "Crear y editar cuentas, transacciones, presupuestos y metas",
       "viewer": "Acceso de solo lectura a todo lo del espacio"
-    }
+    },
+    "member": "Miembro",
+    "joined": "Se unió",
+    "you": "tú",
+    "invitedBy": "Invitado por",
+    "expires": "Expira"
   },
   "imports": {
     "action": "Importar CSV",

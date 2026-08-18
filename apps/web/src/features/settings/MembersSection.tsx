@@ -1,6 +1,7 @@
 import { PersonRemoveIcon, WorkspacePremiumIcon } from '../../icons';
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
+import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
@@ -103,108 +104,116 @@ export default function MembersSection({
               ))}
             </Stack>
           ) : (
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Member</TableCell>
-                  <TableCell>Role</TableCell>
-                  <TableCell>Joined</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {members.map((member) => {
-                  const isOwnerRow = member.role === 'owner';
-                  const isSelf = member.userId === currentUserId;
+            // Four columns do not fit a phone, and the enclosing `Card` clips
+            // its overflow — so without this wrapper the table was simply cut
+            // off at the viewport edge with no way to scroll to the rest of it,
+            // which on a 390px screen hid the whole Actions column and left an
+            // admin unable to remove a member or transfer ownership at all.
+            // Same treatment the Reports tables already carry.
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 460 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>{t('settings.member')}</TableCell>
+                    <TableCell>{t('settings.role.label')}</TableCell>
+                    <TableCell>{t('settings.joined')}</TableCell>
+                    <TableCell align="right">{t('common.actions')}</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {members.map((member) => {
+                    const isOwnerRow = member.role === 'owner';
+                    const isSelf = member.userId === currentUserId;
 
-                  return (
-                    <TableRow key={member.userId}>
-                      <TableCell>
-                        <Stack direction="row" spacing={1.5} alignItems="center">
-                          <Avatar src={member.avatarUrl ?? undefined} sx={{ width: 32, height: 32, fontSize: '0.8rem' }}>
-                            {member.fullName.charAt(0).toUpperCase()}
-                          </Avatar>
-                          <Stack spacing={0}>
-                            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                              {member.fullName}
-                              {isSelf ? ' (you)' : ''}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {member.email}
-                            </Typography>
+                    return (
+                      <TableRow key={member.userId}>
+                        <TableCell>
+                          <Stack direction="row" spacing={1.5} alignItems="center">
+                            <Avatar src={member.avatarUrl ?? undefined} sx={{ width: 32, height: 32, fontSize: '0.8rem' }}>
+                              {member.fullName.charAt(0).toUpperCase()}
+                            </Avatar>
+                            <Stack spacing={0}>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                {member.fullName}
+                                {isSelf ? ` (${t('settings.you')})` : ''}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {member.email}
+                              </Typography>
+                            </Stack>
                           </Stack>
-                        </Stack>
-                      </TableCell>
+                        </TableCell>
 
-                      <TableCell sx={{ minWidth: 150 }}>
-                        {isOwnerRow || !isAdmin ? (
-                          <Tooltip title={t(ROLE_DESCRIPTION_KEYS[member.role])}>
-                            <Chip size="small" label={t(ROLE_LABEL_KEYS[member.role])} variant="outlined" />
-                          </Tooltip>
-                        ) : (
-                          <TextField
-                            select
-                            size="small"
-                            fullWidth
-                            aria-label={`Role for ${member.fullName}`}
-                            value={member.role}
-                            disabled={roleState.isLoading}
-                            onChange={(event) =>
-                              void updateRole({
-                                workspaceId: workspace.id,
-                                userId: member.userId,
-                                role: event.target.value as GrantableRole,
-                              })
-                            }
-                          >
-                            {GRANTABLE_ROLES.map((role) => (
-                              <MenuItem key={role} value={role}>
-                                {t(ROLE_LABEL_KEYS[role])}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                        )}
-                      </TableCell>
-
-                      <TableCell>
-                        <Typography variant="body2" color="text.secondary">
-                          {formatDate(member.joinedAt.slice(0, 10))}
-                        </Typography>
-                      </TableCell>
-
-                      <TableCell align="right">
-                        <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                          {isOwner && !isOwnerRow ? (
-                            <Tooltip title={t('settings.makeOwner')}>
-                              <IconButton
-                                size="small"
-                                onClick={() => setPromoting(member)}
-                                aria-label={`Transfer ownership to ${member.fullName}`}
-                              >
-                                <WorkspacePremiumIcon fontSize="small" />
-                              </IconButton>
+                        <TableCell sx={{ minWidth: 150 }}>
+                          {isOwnerRow || !isAdmin ? (
+                            <Tooltip title={t(ROLE_DESCRIPTION_KEYS[member.role])}>
+                              <Chip size="small" label={t(ROLE_LABEL_KEYS[member.role])} variant="outlined" />
                             </Tooltip>
-                          ) : null}
+                          ) : (
+                            <TextField
+                              select
+                              size="small"
+                              fullWidth
+                              aria-label={`Role for ${member.fullName}`}
+                              value={member.role}
+                              disabled={roleState.isLoading}
+                              onChange={(event) =>
+                                void updateRole({
+                                  workspaceId: workspace.id,
+                                  userId: member.userId,
+                                  role: event.target.value as GrantableRole,
+                                })
+                              }
+                            >
+                              {GRANTABLE_ROLES.map((role) => (
+                                <MenuItem key={role} value={role}>
+                                  {t(ROLE_LABEL_KEYS[role])}
+                                </MenuItem>
+                              ))}
+                            </TextField>
+                          )}
+                        </TableCell>
 
-                          {isAdmin && !isOwnerRow ? (
-                            <Tooltip title={t('settings.removeFromWorkspace')}>
-                              <IconButton
-                                size="small"
-                                color="error"
-                                onClick={() => setRemoving(member)}
-                                aria-label={`Remove ${member.fullName}`}
-                              >
-                                <PersonRemoveIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          ) : null}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                        <TableCell>
+                          <Typography variant="body2" color="text.secondary">
+                            {formatDate(member.joinedAt.slice(0, 10))}
+                          </Typography>
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                            {isOwner && !isOwnerRow ? (
+                              <Tooltip title={t('settings.makeOwner')}>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => setPromoting(member)}
+                                  aria-label={`Transfer ownership to ${member.fullName}`}
+                                >
+                                  <WorkspacePremiumIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            ) : null}
+
+                            {isAdmin && !isOwnerRow ? (
+                              <Tooltip title={t('settings.removeFromWorkspace')}>
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  onClick={() => setRemoving(member)}
+                                  aria-label={`Remove ${member.fullName}`}
+                                >
+                                  <PersonRemoveIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            ) : null}
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </Box>
           )}
         </Stack>
       </CardContent>

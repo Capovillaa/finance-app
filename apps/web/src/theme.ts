@@ -155,6 +155,24 @@ const focusGlow = (percent: number): string =>
   `0 0 0 4px color-mix(in srgb, ${v('primary-main')} ${percent}%, transparent)`;
 
 /**
+ * The floor a tappable control has to clear once the pointer is a finger.
+ *
+ * Apple's HIG asks for 44pt and Material for 48dp; this app's controls are
+ * sized for a cursor — buttons at 38px and row action glyphs at 28–30px — which
+ * is fine with a mouse and genuinely error-prone with a thumb, particularly on
+ * a ledger row where the glyph next to the one you meant is Delete.
+ *
+ * It is applied through `pointer: coarse` rather than through a width
+ * breakpoint on purpose: the thing that decides whether 30px is enough is the
+ * input device, not the viewport. A touchscreen laptop gets the larger targets
+ * and a narrow desktop window does not, which is the correct way round. Spread
+ * this into a `styleOverrides` root rather than restating the query.
+ */
+const COARSE_TARGET = {
+  '@media (pointer: coarse)': { minWidth: 44, minHeight: 44 },
+} as const;
+
+/**
  * The one entrance curve for anything that floats — a dialog, a menu, a
  * toast. A pronounced decelerate ("expo out") rather than the gentler
  * `CONTROL_EASE` above: those are for a button or field settling after a
@@ -403,8 +421,14 @@ export const theme = createTheme({
           minHeight: 38,
           transition: controlTransition('background-color, box-shadow, transform'),
           '&:active': { transform: 'scale(0.97)' },
+          // A mouse pointer is one pixel; a fingertip is roughly 44. Both Apple's
+          // HIG and Material ask for a target no smaller than that, and the 38px
+          // step above — comfortable under a cursor — is not it. Rather than
+          // coarsening the desktop layout, the minimum only applies where the
+          // input device is actually a finger.
+          ...COARSE_TARGET,
         },
-        sizeSmall: { minHeight: 32, paddingInline: 13 },
+        sizeSmall: { minHeight: 32, paddingInline: 13, ...COARSE_TARGET },
         contained: { boxShadow: shadow(1, 3, 0.12), '&:hover': { boxShadow: shadow(2, 6, 0.14) } },
         outlined: { borderColor: v('divider'), '&:hover': { borderColor: v('primary-main') } },
         // A text button next to a filled one should still look like a button,
@@ -421,6 +445,10 @@ export const theme = createTheme({
         root: {
           transition: controlTransition('background-color, transform'),
           '&:active': { transform: 'scale(0.92)' },
+          // Row action glyphs render at 28–30px, which is a comfortable target
+          // for a cursor and a coin-toss for a thumb — and on a ledger row the
+          // neighbouring glyph is often Delete. See `COARSE_TARGET`.
+          ...COARSE_TARGET,
         },
       },
     },
@@ -487,6 +515,10 @@ export const theme = createTheme({
             backgroundColor: v('tone-accentSoft'),
             '&:hover': { backgroundColor: v('tone-accentSoft') },
           },
+          // The nav items are the first thing a thumb reaches for; at 40px they
+          // were the shortest links in the app. Height only — they already run
+          // the full width of the drawer.
+          '@media (pointer: coarse)': { minHeight: 44 },
         },
       },
     },
@@ -514,11 +546,29 @@ export const theme = createTheme({
             borderColor: v('primary-main'),
           },
         },
-        input: { fontSize: '0.9375rem' },
+        // iOS Safari zooms the whole page in whenever a *focused* field is set
+        // below 16px — and it does not zoom back out when the field blurs, so
+        // one tap on a login box leaves the user panning a 390px layout around
+        // a viewport that no longer fits it. The desktop step stays at 15px;
+        // a phone gets the 16px that buys its way out of the zoom. Measured at
+        // 390px before the fix: every field in the app reported 15px.
+        input: {
+          fontSize: '0.9375rem',
+          '@media (max-width: 599.95px)': { fontSize: '1rem' },
+        },
       },
     },
 
-    MuiInputLabel: { styleOverrides: { root: { fontSize: '0.9375rem' } } },
+    // Kept in step with the input above, so the resting label and the text it
+    // sits over are the same size on a phone as they are on a desktop.
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.9375rem',
+          '@media (max-width: 599.95px)': { fontSize: '1rem' },
+        },
+      },
+    },
 
     // The page behind a dialog blurs along with it, so the pane in front reads
     // as glass rather than as a flat card that happens to sit on a dark
@@ -636,6 +686,7 @@ export const theme = createTheme({
           fontWeight: 600,
           borderColor: v('divider'),
           transition: controlTransition('background-color, color'),
+          ...COARSE_TARGET,
           // MUI's default selected state is a grey wash, which reads as
           // "disabled" more than as "chosen". The accent tint is the same one
           // the selected nav item uses.

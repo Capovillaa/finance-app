@@ -87,7 +87,9 @@ export default function StatementBudgets({ budgets, currency, loading = false }:
                 <LinearProgress
                   variant="determinate"
                   value={Math.min(100, Math.max(0, budget.percentUsed))}
-                  aria-label={`${budget.name}: ${formatPercent(budget.percentUsed)} used, ${meta.label}`}
+                  aria-label={`${budget.name}: ${t('budgets.percentUsed', {
+                    percent: formatPercent(budget.percentUsed),
+                  })}, ${t(meta.label)}`}
                   sx={{
                     bgcolor: alpha(color, 0.16),
                     '& .MuiLinearProgress-bar': { bgcolor: color },
@@ -97,7 +99,8 @@ export default function StatementBudgets({ budgets, currency, loading = false }:
                 <Stack direction="row" spacing={0.75} alignItems="center">
                   <StatusIcon sx={{ fontSize: 15, color }} />
                   <Typography variant="caption" color="text.secondary">
-                    {meta.label} · {formatPercent(budget.percentUsed)} used
+                    {t(meta.label)} ·{' '}
+                    {t('budgets.percentUsed', { percent: formatPercent(budget.percentUsed) })}
                   </Typography>
                 </Stack>
               </Stack>

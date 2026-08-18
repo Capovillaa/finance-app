@@ -59,7 +59,8 @@
     "couldNotLoad": "Could not load this",
     "done": "Done",
     "customColour": "Custom colour",
-    "toggleSign": "Toggle sign"
+    "toggleSign": "Toggle sign",
+    "actions": "Actions"
   },
   "formSections": {
     "details": "Details",
@@ -691,7 +692,12 @@
       "admin": "Manage members, invitations, workspace settings and alert rules",
       "editor": "Create and edit accounts, transactions, budgets and goals",
       "viewer": "Read-only access to everything in the workspace"
-    }
+    },
+    "member": "Member",
+    "joined": "Joined",
+    "you": "you",
+    "invitedBy": "Invited by",
+    "expires": "Expires"
   },
   "imports": {
     "action": "Import CSV",
