@@ -18,6 +18,10 @@ import { useTranslation } from 'react-i18next';
 import { useListAccountsQuery } from '../../api/endpoints/accounts';
 import type { TransferInput } from '../../api/endpoints/transactions';
 import { useCreateTransferMutation } from '../../api/endpoints/transactions';
+import AmountHero from '../../components/AmountHero';
+import FormSection from '../../components/FormSection';
+import MoneyField from '../../components/MoneyField';
+import { useToast } from '../../components/Toast';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { todayIso } from '../../lib/format';
@@ -34,6 +38,12 @@ interface TransferFormDialogProps {
   defaultAccountId?: string;
   onClose: () => void;
 }
+
+/** Catalogue keys, not labels — resolved by the render site. */
+const TRANSFER_STATUS_LABEL_KEYS: Record<(typeof TRANSFER_STATUSES)[number], string> = {
+  cleared: 'transactions.status.cleared',
+  pending: 'transactions.status.pending',
+};
 
 /**
  * Moving money between two of your own accounts.
@@ -55,6 +65,7 @@ export default function TransferFormDialog({
   onClose,
 }: TransferFormDialogProps): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const [createTransfer, { isLoading, error }] = useCreateTransferMutation();
   const accounts = useListAccountsQuery(open ? { workspaceId } : skipToken);
 
@@ -62,6 +73,7 @@ export default function TransferFormDialog({
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     setError,
     formState: { errors },
@@ -86,6 +98,28 @@ export default function TransferFormDialog({
   const toAccount = list.find((account) => account.id === watch('toAccountId'));
   const crossCurrency = Boolean(fromAccount && toAccount && fromAccount.currency !== toAccount.currency);
 
+  const amount = watch('amount');
+  const destinationAmount = watch('destinationAmount') ?? '';
+
+  /**
+   * The rate the two figures imply, shown back so the entry can be sanity-checked
+   * against the statement it came from — a decimal point in the wrong place is
+   * obvious as a rate and invisible as a pair of amounts.
+   *
+   * `Number` is deliberate and confined to here: this is a *ratio* for display,
+   * not a monetary value. Nothing derived from it is stored, sent, or added to
+   * anything — both amounts continue to the API as the exact strings that were
+   * typed — so the rule against floating-point money is not in play. It is
+   * printed with a `≈` because four significant figures is all it is worth.
+   */
+  const impliedRate = ((): string | null => {
+    if (!crossCurrency || !amount || !destinationAmount.trim()) return null;
+    const sent = Number(amount);
+    const received = Number(destinationAmount);
+    if (!Number.isFinite(sent) || !Number.isFinite(received) || sent <= 0 || received <= 0) return null;
+    return (received / sent).toPrecision(4);
+  })();
+
   const onSubmit = handleSubmit(async (values) => {
     const body: TransferInput = {
       fromAccountId: values.fromAccountId,
@@ -104,6 +138,7 @@ export default function TransferFormDialog({
 
     const result = await createTransfer({ workspaceId, body }).unwrap().catch(() => null);
     if (!result) return;
+    showToast({ message: t('transactions.transferCreatedToast'), severity: 'success' });
     onClose();
   });
 
@@ -112,128 +147,149 @@ export default function TransferFormDialog({
       <DialogTitle>{t('transactions.newTransfer')}</DialogTitle>
       <form onSubmit={onSubmit} noValidate>
         <DialogContent>
-          <Stack spacing={2.5}>
+          <Stack spacing={3}>
             {error ? <Alert severity="error">{getApiErrorMessage(error, t('transactions.transferFailed'))}</Alert> : null}
 
             <Typography variant="body2" color="text.secondary">
               {t('transactions.transferExplainer')}
             </Typography>
 
-            <Grid container spacing={2} alignItems="center">
-              <Grid size={{ xs: 12, sm: 5 }}>
-                <TextField
-                  select
-                  label={t('common.from')}
-                  fullWidth
-                  error={Boolean(errors.fromAccountId)}
-                  helperText={fieldMessage(errors.fromAccountId?.message)}
-                  value={watch('fromAccountId')}
-                  {...register('fromAccountId')}
-                >
-                  {list.map((account) => (
-                    <MenuItem key={account.id} value={account.id}>
-                      {account.name} · {account.currency}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-              <Grid size={{ xs: 12, sm: 2 }} sx={{ display: 'grid', placeItems: 'center' }}>
-                <ArrowForwardIcon fontSize="small" color="disabled" />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 5 }}>
-                <TextField
-                  select
-                  label={t('common.to')}
-                  fullWidth
-                  SelectProps={{ displayEmpty: true }}
-                  InputLabelProps={{ shrink: true }}
-                  error={Boolean(errors.toAccountId)}
-                  helperText={fieldMessage(errors.toAccountId?.message)}
-                  value={watch('toAccountId')}
-                  {...register('toAccountId')}
-                >
-                  <MenuItem value="">Choose an account</MenuItem>
-                  {list.map((account) => (
-                    <MenuItem key={account.id} value={account.id}>
-                      {account.name} · {account.currency}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-            </Grid>
+            <FormSection label={t('formSections.details')}>
+              {/*
+                The amount leads here too, and across currencies it is explicitly
+                the amount *sent* — the figure that leaves the source account, in
+                that account's own currency.
+              */}
+              <AmountHero
+                label={crossCurrency ? t('transactions.amountSent') : t('common.amount')}
+                currency={fromAccount?.currency ?? 'USD'}
+                autoFocus
+                value={amount}
+                onChange={(next) => setValue('amount', next, { shouldDirty: true })}
+                error={Boolean(errors.amount)}
+                helperText={fieldMessage(errors.amount?.message)}
+              />
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: crossCurrency ? 4 : 6 }}>
-                <TextField
-                  label={crossCurrency ? `Amount sent${fromAccount ? ` (${fromAccount.currency})` : ''}` : t('common.amount')}
-                  placeholder="0.00"
-                  fullWidth
-                  error={Boolean(errors.amount)}
-                  helperText={fieldMessage(errors.amount?.message)}
-                  {...register('amount')}
-                />
-              </Grid>
-
-              {crossCurrency ? (
-                <Grid size={{ xs: 12, sm: 4 }}>
+              <Grid container spacing={2} alignItems="flex-start">
+                <Grid size={{ xs: 12, sm: 5 }}>
                   <TextField
-                    label={`Amount received (${toAccount!.currency})`}
-                    placeholder={t('common.optional')}
+                    select
+                    label={t('common.from')}
                     fullWidth
-                    error={Boolean(errors.destinationAmount)}
-                    helperText={fieldMessage(errors.destinationAmount?.message) ?? t('transactions.destinationAmountHint')}
-                    {...register('destinationAmount')}
-                  />
+                    error={Boolean(errors.fromAccountId)}
+                    helperText={fieldMessage(errors.fromAccountId?.message)}
+                    value={watch('fromAccountId')}
+                    {...register('fromAccountId')}
+                  >
+                    {list.map((account) => (
+                      <MenuItem key={account.id} value={account.id}>
+                        {account.name} · {account.currency}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                 </Grid>
+                <Grid size={{ xs: 12, sm: 2 }} sx={{ display: 'grid', placeItems: 'center', minHeight: 56 }}>
+                  <ArrowForwardIcon fontSize="small" color="disabled" />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 5 }}>
+                  <TextField
+                    select
+                    label={t('common.to')}
+                    fullWidth
+                    SelectProps={{ displayEmpty: true }}
+                    InputLabelProps={{ shrink: true }}
+                    error={Boolean(errors.toAccountId)}
+                    helperText={fieldMessage(errors.toAccountId?.message)}
+                    value={watch('toAccountId')}
+                    {...register('toAccountId')}
+                  >
+                    <MenuItem value="">{t('transactions.chooseAccount')}</MenuItem>
+                    {list.map((account) => (
+                      <MenuItem key={account.id} value={account.id}>
+                        {account.name} · {account.currency}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+              </Grid>
+
+              {/*
+                Secondary to the hero on purpose: what landed is optional, and one
+                display-size figure per dialog is the point of having one at all.
+              */}
+              {crossCurrency ? (
+                <MoneyField
+                  label={t('transactions.amountReceived')}
+                  fullWidth
+                  currency={toAccount!.currency}
+                  value={destinationAmount}
+                  onChange={(next) => setValue('destinationAmount', next, { shouldDirty: true })}
+                  error={Boolean(errors.destinationAmount)}
+                  helperText={
+                    fieldMessage(errors.destinationAmount?.message) ??
+                    (impliedRate
+                      ? t('transactions.impliedRate', {
+                          from: fromAccount!.currency,
+                          to: toAccount!.currency,
+                          rate: impliedRate,
+                        })
+                      : t('transactions.destinationAmountHint'))
+                  }
+                />
               ) : null}
 
-              <Grid size={{ xs: 12, sm: crossCurrency ? 4 : 6 }}>
-                <TextField
-                  label={t('common.date')}
-                  type="date"
-                  fullWidth
-                  InputLabelProps={{ shrink: true }}
-                  error={Boolean(errors.occurredOn)}
-                  helperText={fieldMessage(errors.occurredOn?.message)}
-                  {...register('occurredOn')}
-                />
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    label={t('common.date')}
+                    type="date"
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                    error={Boolean(errors.occurredOn)}
+                    helperText={fieldMessage(errors.occurredOn?.message)}
+                    {...register('occurredOn')}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.status')}
+                    fullWidth
+                    error={Boolean(errors.status)}
+                    helperText={fieldMessage(errors.status?.message) ?? t('transactions.transferStatusHint')}
+                    value={watch('status')}
+                    {...register('status')}
+                  >
+                    {TRANSFER_STATUSES.map((status) => (
+                      <MenuItem key={status} value={status}>
+                        {t(TRANSFER_STATUS_LABEL_KEYS[status])}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
               </Grid>
-            </Grid>
+            </FormSection>
 
-            <TextField
-              label={t('common.description')}
-              fullWidth
-              error={Boolean(errors.description)}
-              helperText={fieldMessage(errors.description?.message)}
-              {...register('description')}
-            />
+            <FormSection label={t('common.notes')}>
+              <TextField
+                label={t('common.description')}
+                fullWidth
+                error={Boolean(errors.description)}
+                helperText={fieldMessage(errors.description?.message)}
+                {...register('description')}
+              />
 
-            <TextField
-              select
-              label={t('common.status')}
-              fullWidth
-              error={Boolean(errors.status)}
-              helperText={fieldMessage(errors.status?.message) ?? t('transactions.transferStatusHint')}
-              value={watch('status')}
-              {...register('status')}
-            >
-              {TRANSFER_STATUSES.map((status) => (
-                <MenuItem key={status} value={status}>
-                  {status[0]!.toUpperCase() + status.slice(1)}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              label={t('common.notes')}
-              placeholder={t('common.optional')}
-              multiline
-              minRows={2}
-              fullWidth
-              error={Boolean(errors.notes)}
-              helperText={fieldMessage(errors.notes?.message)}
-              {...register('notes')}
-            />
+              <TextField
+                label={t('common.notes')}
+                placeholder={t('common.optional')}
+                multiline
+                minRows={2}
+                fullWidth
+                error={Boolean(errors.notes)}
+                helperText={fieldMessage(errors.notes?.message)}
+                {...register('notes')}
+              />
+            </FormSection>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

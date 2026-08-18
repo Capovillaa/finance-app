@@ -7,7 +7,7 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useState, type ReactElement } from 'react';
 import { useLogoutAllMutation } from '../../api/endpoints/auth';
-import { useDeleteAccountMutation, useExportMyDataMutation } from '../../api/endpoints/users';
+import { useEraseMyAccountMutation, useExportMyDataMutation } from '../../api/endpoints/users';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { getApiErrorMessage } from '../../lib/apiError';
 import { downloadText } from '../../lib/download';
@@ -27,7 +27,7 @@ export default function DataSection(): ReactElement {
   const endSession = useEndSession();
   const [exportData, exportState] = useExportMyDataMutation();
   const [logoutAll, logoutAllState] = useLogoutAllMutation();
-  const [deleteAccount, deleteState] = useDeleteAccountMutation();
+  const [eraseMyAccount, deleteState] = useEraseMyAccountMutation();
 
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -53,7 +53,7 @@ export default function DataSection(): ReactElement {
   };
 
   const handleDelete = async (): Promise<void> => {
-    const ok = await deleteAccount()
+    const ok = await eraseMyAccount()
       .unwrap()
       .then(() => true)
       .catch(() => false);

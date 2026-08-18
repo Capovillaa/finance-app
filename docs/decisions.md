@@ -1293,6 +1293,140 @@ everything.
 
 ---
 
+### Money is typed the way it is read, and the amount is the subject of the dialog
+
+A round of feedback from real use listed nine complaints about the interface, and opened by asking
+whether the client should move to **shadcn/ui**. It did not, and the reason is the more useful half
+of this entry.
+
+**The complaints were ours, not the component library's.** A colour input that seized under a drag
+was an `<input type="color">` wired to react-hook-form, re-rendering a fifteen-field dialog on every
+event the OS colour wheel emitted. Four strings in the tag dialog were hardcoded English and stayed
+English in Portuguese and Spanish. The "green square" around every text box was one global CSS rule
+whose `outline` could not follow a radius the element did not have. None of those is a thing MUI
+does to you, and none would have been prevented by a different set of primitives — a shadcn `Input`
+bound the same way stalls identically. Against that, migrating meant rewriting 77 files and roughly
+23,000 lines, re-expressing `theme.ts` as Tailwind variables, rebuilding `LedgerRow`, `Panel`,
+`PageHeader` and sixteen dialogs, re-theming Recharts, and re-verifying nine screens that currently
+work — with all nine defects still outstanding at the end of it. The stack decision from the first
+session stands. **A rough edge with a root cause is an argument for fixing the cause, not for
+replacing the layer underneath it.**
+
+**What was actually missing was an entry layer.** The visual language written down in the redesign
+governs every figure the app *displays* — mono, tabular, grouped, pointed by locale — and governed
+nothing it *accepts*. An amount was typed into a plain text box as `1500`, sat at the same size and
+weight as the optional "Merchant" field beside it, and only became a well-set figure after it was
+saved. Two things follow from closing that gap.
+
+**Keystrokes accumulate from the right, and the value is never a number.** `lib/moneyInput.ts`
+represents an in-progress amount as a *digit string* — the figure in the currency's minor unit with
+no separators, `150000` for one and a half thousand at two places. That choice pays for itself three
+times. The caret is always at the end, so no edit can strand it inside a group separator that is
+about to move, which is the failure mode every caret-preserving mask has around exactly the
+separators this app inserts. The displayed value is always fully formatted, so recovering the new
+state after any edit is *strip every non-digit* — one rule that covers typing, backspacing and
+pasting an already-formatted amount without distinguishing between them. And the canonical decimal
+is produced by splicing a `.` into the digits rather than by dividing, so nothing on this path is a
+`number` and a balance past 2^53 cannot round on its way to the screen. The number of decimal
+places is asked of `Intl` per currency, because JPY has none and KWD has three and a hardcoded 2
+invents centavos for a yen amount.
+
+**The amount is set as the subject.** `AmountHero` renders it in the display serif with the currency
+as a quiet eyebrow and a statement rule beneath — the same hairline `LedgerRow` draws under every
+line of money in the app, so the dialog reads as the first line of the statement it is about to
+become. The rule doubles as the focus indicator, thickening and taking the accent, because a
+control whose whole design is that it has no box cannot be given a box to say it has focus. On a
+cross-currency transfer the received amount stays an ordinary field, and the *implied rate* is
+printed under it: one display-size figure per dialog is the point of having one, and a decimal
+point in the wrong place is obvious as a rate and invisible as a pair of amounts.
+
+**The global focus ring is now scoped, and that is an accessibility change, so it was measured.** An
+`outline` follows the element's own `border-radius`; the native `<input>` inside a field has none,
+because the 14px radius belongs to the notched fieldset around it. The ring was therefore a hard
+rectangle sitting outside a rounded control, and browsers match `:focus-visible` on a text input for
+an ordinary mouse click, so it appeared on click and not only on tab. Fields now suppress it and
+state focus with a 2px accent notch plus a soft halo, both of which follow the shape. **Everything
+else keeps the ring**, checked by tabbing to a button and reading a computed `outline: solid 2px`
+rather than by assuming the selector was narrow enough.
+
+**One reversal.** The transactions filter bar used to hold all nine controls in a single grid, on
+the reasoning recorded earlier that a finance app's most-used filters should never be a click away.
+In use that was the wrong trade: nine controls of equal visual weight, most of them unlabelled
+selects carrying their own name inside their value, reflowing into ragged rows — and still a click
+into each one to see what it held. Search stays visible because it is typed into; the rest moved
+behind one counted button, and what is currently narrowing the list is spelled out beneath as chips
+that can be struck off individually. Nothing is further away than it was, and the row is legible
+without opening anything.
+
+**Two defects survived a clean typecheck and were caught by a browser.** `slotProps.input` on a MUI
+`TextField` is the `InputBase` *wrapper*, not the input — an `inputMode` set there lands on a `div`
+and no phone keypad ever sees it, and an `aria-label` there names a wrapper while leaving the field
+unnamed. And the swatch constants are written in upper-case hex while `<input type="color">` returns
+lower case, so comparing them with `===` left every swatch unselected and classified each one as a
+custom colour. Both look right in source, compile, and are plainly wrong on screen. The verification
+that found them drove the real backend in Chrome across thirty checks, in both English and
+Portuguese.
+
+**A note on what CI cannot see.** `npm run check:i18n` verifies that the keys a `t()` call names
+resolve; it is structurally blind to a string that never calls `t()`. Ten of those were found by
+reading the four dialogs in scope — a whole transfer-leg warning paragraph, a placeholder option, and
+every transaction status name, which were printed by upper-casing the enum member. There is no check
+that would have caught them, so touching a component means reading its JSX text.
+
+---
+
+### Glass on floating surfaces, not on the flat language
+
+The brief that opened this session asked for glassmorphism across the whole interface — blur,
+translucency, layered depth, on every input, card, modal and menu. Applying it everywhere would have
+reopened "Visual redesign" and "Money is typed the way it is read" without cause: the flat,
+hairline-driven statement language those two entries describe was a deliberate choice, checked
+against real contrast ratios, not an unfinished default waiting for a treatment. **The request was
+narrowed before any code was written**: glass on the surfaces the design language already singles out
+as different — "shadow is reserved for things that genuinely float" is a sentence that was already in
+`theme.ts` before this session touched it. Dialogs, menus, popovers and the transaction detail drawer
+got a translucent gradient, a blurred backdrop and a layered shadow; cards, `LedgerRow`, `Panel` and
+`StatTile` did not move.
+
+**The permanent nav `Drawer` and the floating detail `Drawer` share one theme key, and only one of
+them should be glass.** `MuiDrawer` in `theme.ts` styles every `Drawer` in the app, but the sidebar is
+core chrome — read constantly, never really "floating" over content the way a dialog does — while
+`TransactionDetailDrawer` is a transient reading surface that slides over the ledger. Theming the
+shared key would have glassed the sidebar too. The fix was to leave `MuiDrawer` flat and apply the
+glass treatment locally, via `PaperProps.sx` on the one `Drawer` instance that wanted it — the
+opposite of the usual "put it in the theme" instinct, and the right call precisely because the two
+uses are not actually the same kind of surface despite being the same MUI component.
+
+**A toast system did not exist, so "confirmações visuais" meant building one, not restyling one.**
+`components/Toast.tsx` is a small stack of glass `Alert`s (`variant="outlined"`, so the translucent
+container supplies the surface and severity only tints the border, icon and text) with a
+`useToast()` hook, wired into the create/edit/delete flows on Accounts, Transactions, Transfers,
+Budgets and Goals. A create or edit that fails already shows an inline error in the dialog that stays
+open, so only its success path toasts; a delete — which had no other feedback surface at all, success
+or failure — toasts both ways.
+
+**A dialog with more than about six fields reads as one undifferentiated column, and the fix was
+grouping, not decoration.** `components/FormSection.tsx` borrows the eyebrow label `StatTile` already
+uses for "TOTAL BALANCE" rather than adding a second bordered panel inside an already-glass dialog
+paper. Applied to every multi-field dialog — Recurring, Transaction, Transfer, Account, Budget, Goal
+— with section boundaries chosen per dialog (Details / Classification / Recurrence / Automation for
+Recurring; Details / Balance / Appearance for Account; and so on) rather than one rigid template
+forced onto every field list.
+
+**One bug found this way had nothing to do with any of the above, and mattered far more.**
+Wiring the toast into `AccountsPage`'s delete flow and watching the network tab showed the request
+actually going out as `DELETE /api/v1/users/me` — the GDPR erasure endpoint — instead of
+`DELETE /workspaces/:id/accounts/:id`. `apps/web/src/api/endpoints/accounts.ts` and
+`apps/web/src/api/endpoints/users.ts` had both named a mutation `deleteAccount` on the same shared
+RTK Query `api` object; `injectEndpoints` keeps whichever registers first and silently drops the
+other's `query` function, so which one actually ran depended on unrelated module import order. The
+UI reported success throughout, because the request genuinely did succeed — against the wrong
+resource. Fixed by renaming the `users.ts` side to `eraseMyAccount`. **Nothing enforces a unique
+endpoint name across files in this codebase, so a name collision fails silently and at the worst
+possible layer — the correct-looking success path.**
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

@@ -19,6 +19,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import PageHeader from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 import AddLineDialog from '../features/budgets/AddLineDialog';
 import BudgetCard from '../features/budgets/BudgetCard';
 import BudgetFormDialog from '../features/budgets/BudgetFormDialog';
@@ -35,6 +36,7 @@ interface LineTarget {
 
 export default function BudgetsPage(): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const { workspace, isLoading: workspaceLoading } = useActiveWorkspace();
   const [includeInactive, setIncludeInactive] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -61,7 +63,12 @@ export default function BudgetsPage(): ReactElement {
       .unwrap()
       .then(() => true)
       .catch(() => false);
-    if (ok) setDeleteBudget(undefined);
+    if (ok) {
+      setDeleteBudget(undefined);
+      showToast({ message: t('budgets.deletedToast'), severity: 'success' });
+    } else {
+      showToast({ message: t('budgets.deleteFailedToast'), severity: 'error' });
+    }
   };
 
   const handleDeleteLine = async (): Promise<void> => {
@@ -70,7 +77,12 @@ export default function BudgetsPage(): ReactElement {
       .unwrap()
       .then(() => true)
       .catch(() => false);
-    if (ok) setDeleteLineTarget(undefined);
+    if (ok) {
+      setDeleteLineTarget(undefined);
+      showToast({ message: t('budgets.lineDeletedToast'), severity: 'success' });
+    } else {
+      showToast({ message: t('budgets.lineDeleteFailedToast'), severity: 'error' });
+    }
   };
 
   if (!workspaceLoading && !workspace) {

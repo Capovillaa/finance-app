@@ -21,6 +21,22 @@ export const MotionBox = motion.create(Box);
 /** Short, decelerating, no overshoot. */
 export const EASE_OUT: Transition = { duration: 0.28, ease: [0.22, 1, 0.36, 1] };
 
+/**
+ * The same "expo out" curve `theme.ts` gives MUI's dialogs, menus and
+ * popovers (`GLASS_EASE`, as a CSS `cubic-bezier`), here as the four numbers
+ * Framer wants. Use it for anything that floats but isn't a MUI `Modal`
+ * derivative — a toast is the current example — so a hand-built entrance
+ * still lands with the same weight as the themed ones.
+ */
+export const EASE_GLASS: Transition = { duration: 0.3, ease: [0.16, 1, 0.3, 1] };
+
+/** A toast arriving from below and settling; a shorter, quicker exit. */
+export const toastSurface: Variants = {
+  hidden: { opacity: 0, y: 16, scale: 0.96 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: EASE_GLASS },
+  exit: { opacity: 0, scale: 0.98, transition: { duration: 0.15 } },
+};
+
 /** Applied to a list container; the rows carry `ledgerRow`. */
 export const ledgerList: Variants = {
   hidden: {},

@@ -13,6 +13,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import PageHeader from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 import ContributionsDialog from '../features/goals/ContributionsDialog';
 import GoalCard from '../features/goals/GoalCard';
 import GoalFormDialog from '../features/goals/GoalFormDialog';
@@ -31,6 +32,7 @@ const STATUS_FILTERS: { value: GoalStatus | 'all'; labelKey: string }[] = [
 
 export default function GoalsPage(): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const { workspace, isLoading: workspaceLoading } = useActiveWorkspace();
   const [statusFilter, setStatusFilter] = useState<GoalStatus | 'all'>('active');
   const [formOpen, setFormOpen] = useState(false);
@@ -54,7 +56,12 @@ export default function GoalsPage(): ReactElement {
       .unwrap()
       .then(() => true)
       .catch(() => false);
-    if (ok) setDeleting(undefined);
+    if (ok) {
+      setDeleting(undefined);
+      showToast({ message: t('goals.deletedToast'), severity: 'success' });
+    } else {
+      showToast({ message: t('goals.deleteFailedToast'), severity: 'error' });
+    }
   };
 
   if (!workspaceLoading && !workspace) {

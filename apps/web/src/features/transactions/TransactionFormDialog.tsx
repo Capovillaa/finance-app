@@ -30,6 +30,9 @@ import { useListTagsQuery } from '../../api/endpoints/tags';
 import type { TransactionInput } from '../../api/endpoints/transactions';
 import { useCreateTransactionMutation, useUpdateTransactionMutation } from '../../api/endpoints/transactions';
 import type { Transaction } from '../../api/types';
+import AmountHero from '../../components/AmountHero';
+import FormSection from '../../components/FormSection';
+import { useToast } from '../../components/Toast';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { todayIso } from '../../lib/format';
@@ -40,6 +43,18 @@ import {
   transactionFormSchema,
   type TransactionFormValues,
 } from './transactionSchemas';
+
+/**
+ * Catalogue keys, not labels: this table is built once when the bundle loads,
+ * before any language is settled, so the render site is what calls `t()`. The
+ * status names used to be printed by upper-casing the enum member, which is
+ * English wearing a capital letter.
+ */
+const STATUS_LABEL_KEYS: Record<(typeof TRANSACTION_STATUSES)[number], string> = {
+  cleared: 'transactions.status.cleared',
+  pending: 'transactions.status.pending',
+  scheduled: 'transactions.status.scheduled',
+};
 
 interface TransactionFormDialogProps {
   open: boolean;
@@ -86,6 +101,7 @@ export default function TransactionFormDialog({
   onClose,
 }: TransactionFormDialogProps): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const isEdit = Boolean(transaction);
   const isTransfer = transaction?.type === 'transfer';
   const [createTransaction, createState] = useCreateTransactionMutation();
@@ -147,6 +163,18 @@ export default function TransactionFormDialog({
   const selectedTagIds = watch('tagIds');
   const categories = useListCategoriesQuery(open && !isTransfer ? { workspaceId, kind: type } : skipToken);
 
+  /**
+   * A row is denominated in its account's currency, so that is what the amount
+   * formats against — down to the number of decimal places, which is not two
+   * everywhere. Falls back to the first account while the list is still in
+   * flight, and to USD only when there is nothing to go on at all.
+   */
+  const accountList = accounts.data?.accounts ?? [];
+  const currency =
+    accountList.find((account) => account.id === watch('accountId'))?.currency ??
+    accountList[0]?.currency ??
+    'USD';
+
   const onSubmit = handleSubmit(async (values) => {
     // A transfer accepts only the fields the server does not guard.
     const body: Partial<TransactionInput> = isTransfer
@@ -180,6 +208,7 @@ export default function TransactionFormDialog({
           .catch(() => null);
 
     if (!result) return;
+    showToast({ message: t(isEdit ? 'transactions.updatedToast' : 'transactions.createdToast'), severity: 'success' });
     onClose();
   });
 
@@ -190,203 +219,214 @@ export default function TransactionFormDialog({
       <DialogTitle>{title}</DialogTitle>
       <form onSubmit={onSubmit} noValidate>
         <DialogContent>
-          <Stack spacing={2.5}>
+          <Stack spacing={3}>
             {error ? (
               <Alert severity="error">{getApiErrorMessage(error, t('transactions.saveFailed'))}</Alert>
             ) : null}
 
-            {isTransfer ? (
-              <Alert severity="info">
-                This is one leg of a transfer{transaction?.accountName ? ` on ${transaction.accountName}` : ''}. Its
-                accounts, amount and category are fixed — delete the transfer and create it again to change those.
-              </Alert>
-            ) : (
-              <ToggleButtonGroup
-                exclusive
-                fullWidth
-                value={type}
-                disabled={isEdit}
-                onChange={(_e, value: 'income' | 'expense' | null) => value && setValue('type', value)}
-              >
-                {TRANSACTION_TYPES.map((option) => (
-                  <ToggleButton key={option} value={option}>
-                    {option === 'income' ? t('common.income') : t('common.expense')}
-                  </ToggleButton>
-                ))}
-              </ToggleButtonGroup>
-            )}
+            <FormSection label={t('formSections.details')}>
+              {isTransfer ? (
+                <Alert severity="info">
+                  {transaction?.accountName
+                    ? t('transactions.transferLegNoticeOn', { account: transaction.accountName })
+                    : t('transactions.transferLegNotice')}
+                </Alert>
+              ) : (
+                <ToggleButtonGroup
+                  exclusive
+                  fullWidth
+                  value={type}
+                  disabled={isEdit}
+                  onChange={(_e, value: 'income' | 'expense' | null) => value && setValue('type', value)}
+                >
+                  {TRANSACTION_TYPES.map((option) => (
+                    <ToggleButton key={option} value={option}>
+                      {option === 'income' ? t('common.income') : t('common.expense')}
+                    </ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
+              )}
 
-            <Grid container spacing={2}>
+              {/*
+                The amount leads, because it is what the dialog is about. It was a
+                half-width field set at the same size as "Merchant", which put the
+                one figure the row exists to record on a level with its optional
+                notes. The direction control above tints it and the account below
+                denominates it.
+              */}
               {isTransfer ? null : (
-                <Grid size={{ xs: 12, sm: 6 }}>
+                <AmountHero
+                  label={t('common.amount')}
+                  currency={currency}
+                  tone={type === 'income' ? 'positive' : 'negative'}
+                  autoFocus={!isEdit}
+                  value={watch('amount')}
+                  onChange={(next) => setValue('amount', next, { shouldDirty: true })}
+                  error={Boolean(errors.amount)}
+                  helperText={fieldMessage(errors.amount?.message)}
+                />
+              )}
+
+              <Grid container spacing={2}>
+                {isTransfer ? null : (
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField
+                      select
+                      label={t('common.account')}
+                      fullWidth
+                      error={Boolean(errors.accountId)}
+                      helperText={fieldMessage(errors.accountId?.message)}
+                      value={watch('accountId')}
+                      {...register('accountId')}
+                    >
+                      {(accounts.data?.accounts ?? []).map((account) => (
+                        <MenuItem key={account.id} value={account.id}>
+                          {account.name} · {account.currency}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  </Grid>
+                )}
+                <Grid size={{ xs: 12, sm: isTransfer ? 12 : 6 }}>
                   <TextField
-                    label={t('common.amount')}
-                    placeholder="0.00"
+                    label={t('common.date')}
+                    type="date"
                     fullWidth
-                    error={Boolean(errors.amount)}
-                    helperText={fieldMessage(errors.amount?.message)}
-                    {...register('amount')}
+                    InputLabelProps={{ shrink: true }}
+                    error={Boolean(errors.occurredOn)}
+                    helperText={fieldMessage(errors.occurredOn?.message)}
+                    {...register('occurredOn')}
                   />
                 </Grid>
-              )}
-              <Grid size={{ xs: 12, sm: isTransfer ? 12 : 6 }}>
-                <TextField
-                  label={t('common.date')}
-                  type="date"
-                  fullWidth
-                  InputLabelProps={{ shrink: true }}
-                  error={Boolean(errors.occurredOn)}
-                  helperText={fieldMessage(errors.occurredOn?.message)}
-                  {...register('occurredOn')}
-                />
               </Grid>
-            </Grid>
+            </FormSection>
 
-            <TextField
-              label={t('common.description')}
-              autoFocus
-              fullWidth
-              error={Boolean(errors.description)}
-              helperText={fieldMessage(errors.description?.message)}
-              {...register('description')}
-            />
+            <FormSection label={t('formSections.classification')}>
+              <TextField
+                label={t('common.description')}
+                autoFocus={isEdit || isTransfer}
+                fullWidth
+                error={Boolean(errors.description)}
+                helperText={fieldMessage(errors.description?.message)}
+                {...register('description')}
+              />
 
-            {isTransfer ? null : (
-              <Grid container spacing={2}>
-                <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField
-                    select
-                    label={t('common.account')}
-                    fullWidth
-                    error={Boolean(errors.accountId)}
-                    helperText={fieldMessage(errors.accountId?.message)}
-                    value={watch('accountId')}
-                    {...register('accountId')}
-                  >
-                    {(accounts.data?.accounts ?? []).map((account) => (
-                      <MenuItem key={account.id} value={account.id}>
-                        {account.name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6 }}>
-                  <TextField
-                    select
-                    label={t('common.category')}
-                    fullWidth
-                    SelectProps={{ displayEmpty: true }}
-                    InputLabelProps={{ shrink: true }}
-                    error={Boolean(errors.categoryId)}
-                    helperText={fieldMessage(errors.categoryId?.message)}
-                    value={watch('categoryId')}
-                    {...register('categoryId')}
-                  >
-                    <MenuItem value="">Uncategorised</MenuItem>
-                    {(categories.data?.categories ?? []).map((category) => (
-                      <MenuItem key={category.id} value={category.id}>
-                        {' '.repeat(category.depth * 2)}
-                        {category.name}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                </Grid>
-              </Grid>
-            )}
-
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  label={t('common.merchant')}
-                  placeholder={t('common.optional')}
-                  fullWidth
-                  error={Boolean(errors.merchant)}
-                  helperText={fieldMessage(errors.merchant?.message)}
-                  {...register('merchant')}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
+              {isTransfer ? null : (
                 <TextField
                   select
-                  label={t('common.status')}
+                  label={t('common.category')}
                   fullWidth
-                  error={Boolean(errors.status)}
-                  helperText={fieldMessage(errors.status?.message)}
-                  value={watch('status')}
-                  {...register('status')}
+                  SelectProps={{ displayEmpty: true }}
+                  InputLabelProps={{ shrink: true }}
+                  error={Boolean(errors.categoryId)}
+                  helperText={fieldMessage(errors.categoryId?.message)}
+                  value={watch('categoryId')}
+                  {...register('categoryId')}
                 >
-                  {TRANSACTION_STATUSES.map((status) => (
-                    <MenuItem key={status} value={status}>
-                      {status[0]!.toUpperCase() + status.slice(1)}
+                  <MenuItem value="">{t('common.uncategorised')}</MenuItem>
+                  {(categories.data?.categories ?? []).map((category) => (
+                    <MenuItem key={category.id} value={category.id}>
+                      {' '.repeat(category.depth * 2)}
+                      {category.name}
                     </MenuItem>
                   ))}
                 </TextField>
+              )}
+
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    label={t('common.merchant')}
+                    placeholder={t('common.optional')}
+                    fullWidth
+                    error={Boolean(errors.merchant)}
+                    helperText={fieldMessage(errors.merchant?.message)}
+                    {...register('merchant')}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.status')}
+                    fullWidth
+                    error={Boolean(errors.status)}
+                    helperText={fieldMessage(errors.status?.message)}
+                    value={watch('status')}
+                    {...register('status')}
+                  >
+                    {TRANSACTION_STATUSES.map((status) => (
+                      <MenuItem key={status} value={status}>
+                        {t(STATUS_LABEL_KEYS[status])}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
               </Grid>
-            </Grid>
 
-            {/*
-              Tags are an array, so this is controlled entirely through
-              `watch`/`setValue` and never touches `register()` — the ref
-              binding that trips MUI's `Select` on scalar fields cannot express
-              a multiple selection at all.
-            */}
-            <FormControl fullWidth error={Boolean(errors.tagIds)}>
-              <InputLabel id="transaction-tags-label" shrink>
-                {t('transactions.tags')}
-              </InputLabel>
-              <Select
-                multiple
-                displayEmpty
-                labelId="transaction-tags-label"
-                label={t('transactions.tags')}
-                value={selectedTagIds}
-                onChange={(event: SelectChangeEvent<string[]>) =>
-                  setValue(
-                    'tagIds',
-                    typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value,
-                    { shouldDirty: true },
-                  )
-                }
-                renderValue={(selected) =>
-                  selected.length === 0 ? (
-                    <Box component="span" sx={{ color: 'text.secondary' }}>
-                      {t('common.none')}
-                    </Box>
-                  ) : (
-                    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                      {selected.map((id) => {
-                        const tag = tagList.find((t) => t.id === id);
-                        return <Chip key={id} size="small" label={tag?.name ?? id} />;
-                      })}
-                    </Stack>
-                  )
-                }
-              >
-                {tagList.length === 0 ? (
-                  <MenuItem disabled value="">
-                    {t('transactions.noTagsYet')}
-                  </MenuItem>
-                ) : null}
-                {tagList.map((tag) => (
-                  <MenuItem key={tag.id} value={tag.id}>
-                    <Checkbox size="small" checked={selectedTagIds.includes(tag.id)} />
-                    <ListItemText primary={tag.name} />
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.tagIds ? <FormHelperText>{errors.tagIds.message}</FormHelperText> : null}
-            </FormControl>
+              {/*
+                Tags are an array, so this is controlled entirely through
+                `watch`/`setValue` and never touches `register()` — the ref
+                binding that trips MUI's `Select` on scalar fields cannot express
+                a multiple selection at all.
+              */}
+              <FormControl fullWidth error={Boolean(errors.tagIds)}>
+                <InputLabel id="transaction-tags-label" shrink>
+                  {t('transactions.tags')}
+                </InputLabel>
+                <Select
+                  multiple
+                  displayEmpty
+                  labelId="transaction-tags-label"
+                  label={t('transactions.tags')}
+                  value={selectedTagIds}
+                  onChange={(event: SelectChangeEvent<string[]>) =>
+                    setValue(
+                      'tagIds',
+                      typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value,
+                      { shouldDirty: true },
+                    )
+                  }
+                  renderValue={(selected) =>
+                    selected.length === 0 ? (
+                      <Box component="span" sx={{ color: 'text.secondary' }}>
+                        {t('common.none')}
+                      </Box>
+                    ) : (
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        {selected.map((id) => {
+                          const tag = tagList.find((t) => t.id === id);
+                          return <Chip key={id} size="small" label={tag?.name ?? id} />;
+                        })}
+                      </Stack>
+                    )
+                  }
+                >
+                  {tagList.length === 0 ? (
+                    <MenuItem disabled value="">
+                      {t('transactions.noTagsYet')}
+                    </MenuItem>
+                  ) : null}
+                  {tagList.map((tag) => (
+                    <MenuItem key={tag.id} value={tag.id}>
+                      <Checkbox size="small" checked={selectedTagIds.includes(tag.id)} />
+                      <ListItemText primary={tag.name} />
+                    </MenuItem>
+                  ))}
+                </Select>
+                {errors.tagIds ? <FormHelperText>{errors.tagIds.message}</FormHelperText> : null}
+              </FormControl>
 
-            <TextField
-              label={t('common.notes')}
-              placeholder={t('common.optional')}
-              multiline
-              minRows={2}
-              fullWidth
-              error={Boolean(errors.notes)}
-              helperText={fieldMessage(errors.notes?.message)}
-              {...register('notes')}
-            />
+              <TextField
+                label={t('common.notes')}
+                placeholder={t('common.optional')}
+                multiline
+                minRows={2}
+                fullWidth
+                error={Boolean(errors.notes)}
+                helperText={fieldMessage(errors.notes?.message)}
+                {...register('notes')}
+              />
+            </FormSection>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

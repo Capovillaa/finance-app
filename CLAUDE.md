@@ -195,6 +195,19 @@ else is chrome. Typography carries hierarchy, not elevation.
    present and valid in the stylesheet. Chrome additionally never matches
    `:focus-visible` on the inner `<input>` of a date field — those are covered by
    the focused `OutlinedInput`'s 2px accent border instead, which is fine.
+
+   **Amended later: that rule is now scoped to exclude fields**, because on a
+   text box it was drawing a hard green *square* around a 14px-rounded control.
+   An `outline` follows the element's own `border-radius`, and the native
+   `<input>` inside a field has none — the radius belongs to the notched
+   fieldset around it — so the ring could not follow the shape it was drawn
+   against. Browsers also match `:focus-visible` on a text input for an ordinary
+   mouse click, so it appeared on click and not only on tab. `theme.ts` now
+   carries `.MuiOutlinedInput-input:focus-visible { outline: none !important }`
+   and the focused field states itself with a 2px accent notch plus a soft halo,
+   both of which do follow the radius. **Every other control keeps the ring** —
+   verified by tabbing to a button and reading `outline: solid 2px`. If you add
+   a control that suppresses the ring, it owes the user a replacement indicator.
 2. **A `1fr` grid track still has `min-width: auto`.** A wide table inside one
    pushes the whole page sideways no matter how many `overflow-x: auto` wrappers
    sit beneath it. Every multi-column grid in `apps/web` uses `minmax(0, 1fr)`;
@@ -446,6 +459,159 @@ Two things worth knowing before extending it:
 
 ---
 
+## 2e. The entry layer: typing money, and the amount as the subject
+
+A later session worked through a list of UI complaints from real use. Full
+reasoning is in `docs/decisions.md` ("Money is typed the way it is read, and the
+amount is the subject of the dialog"). The question it opened with was whether
+to move the client to **shadcn/ui**; the answer was no, and the reasoning is
+worth keeping because it will be asked again. Every complaint on the list traced to this repo's own code rather than to
+a limit of MUI — a stalling colour input was a react-hook-form binding, four
+English strings in a dialog were English in any component library, and the
+focus square was one line of CSS. Swapping the primitive layer would have meant
+rewriting 77 files and ~23,000 lines, re-deriving `theme.ts` as Tailwind
+variables, and re-verifying nine working screens, and the nine defects would
+still have been there afterwards. **The stack decision from session one stands;
+do not reopen it on the strength of a rough edge that has a root cause.**
+
+What the work actually added is an *entry* layer, because the design language of
+section 2b applied to every figure the app **displays** and nothing it
+**accepts**:
+
+- **`lib/moneyInput.ts`** — pure string functions over a "digit string": the
+  amount in the currency's minor unit, no separators. Keystrokes accumulate from
+  the right the way a card terminal takes an amount, which is what makes the
+  caret a non-problem (it is always at the end) and what lets one rule —
+  *strip every non-digit from whatever the browser hands back* — cover typing,
+  deleting and pasting a formatted amount alike. Nothing here is ever a
+  `number`; the canonical form is built by splicing a `.` into the digits.
+- **`components/MoneyField.tsx`** — a field that formats live, `1.500,00` in
+  pt-BR and `1,500.00` in English, against the **currency in force at that call
+  site**. It holds no state: the digit string is recovered from the canonical
+  value each render, so reset, server errors and seeding an edit all just work.
+  `allowNegative` adds a sign toggle for the two genuinely signed figures — an
+  opening balance and a reconciled statement balance, whose schemas use
+  `isMoneyText` rather than `isPositiveMoneyText`.
+- **`components/AmountHero.tsx`** — the amount set in Fraunces at display size
+  with the currency as an eyebrow above and a statement rule beneath, used by
+  the transaction and transfer dialogs. The rule is also the focus indicator: it
+  thickens and takes the accent, because boxing a deliberately borderless
+  control would undo the point of it.
+- **`components/ColorSwatchPicker.tsx`** — ten identity swatches on real
+  `<input type="radio">` elements, replacing an `<input type="color">`.
+
+**Decimal places come from the currency, never from a constant.** JPY has none
+and KWD has three, so a hardcoded `2` invents centavos for a yen amount.
+`currencyFractionDigits` asks `Intl` rather than keeping a table that would go
+stale in silence.
+
+**The Transactions filter bar reversed an earlier decision.** It used to hold all
+nine controls in one grid, on the reasoning that a finance app's filters should
+never be a click away; in use that read as spilled rather than arranged. It is
+now search out in the open, everything else behind one counted button, and the
+active filters spelled out beneath as removable chips — which is the half the old
+bar could not do at all.
+
+### Four traps, three of them found only by looking
+
+1. **`slotProps.input` is not the `<input>`.** On a MUI `TextField` that slot is
+   the `InputBase` *wrapper*, so `inputMode` set there lands on a `div` and a
+   phone keyboard never hears about it; `aria-label` there names a wrapper and
+   leaves the field unnamed. **HTML attributes go in `slotProps.htmlInput`**;
+   `slotProps.input` is for `startAdornment` and friends. This shipped invisibly
+   — it typechecks, and it looks right on a desktop.
+2. **`#B23A2E` and `#b23a2e` are the same colour and different strings.** The
+   swatch constants are upper case for legibility while `<input type="color">`
+   and stored values come back lower case, so comparing them raw left **every**
+   swatch unselected and classified each one as "custom". Compare colours with
+   `sameColour`, never with `===`.
+3. **A native colour input re-renders whatever owns its value.** Dragging in the
+   OS wheel emits a continuous stream of `input` events; bound to a form field
+   that meant re-rendering a fifteen-field dialog per event, which is the
+   "freezing" that prompted the complaint. Any high-frequency control must
+   absorb its own churn locally and tell the form once.
+4. **`npm run check:i18n` cannot see a hardcoded English string.** It verifies
+   that the keys a `t()` call names resolve — and a string that never calls
+   `t()` names nothing. This sweep found ten of them across four dialogs,
+   including a whole transfer-leg warning paragraph and every transaction status
+   name, printed by upper-casing the enum member. **Grep for JSX text and
+   string-literal props when touching a component**, because nothing in CI will
+   tell you.
+
+Verified by driving the real backend in Chrome, not by typechecking: 30 checks
+across two passes covering the focus ring on fields *and* on buttons, live
+formatting in both en-US and pt-BR against BRL, the sign toggle, the swatch
+picker under rapid clicking, the archived fallback, the hero's tint and type
+size, the filter panel and its chips, tag creation and deletion, and a saved
+cross-currency transfer showing its implied rate. Traps 1 and 2 were both caught
+that way after a clean `tsc`.
+
+---
+
+## 2f. A glass register for floating surfaces, a toast system, and sectioned dialogs
+
+A later session was asked for a general "glassmorphism" pass. The request was
+narrowed before any code was written: section 2b's flat, hairline statement
+language is a deliberate choice, not a gap, so glass (blur, translucency,
+layered shadow) went only onto surfaces that already float — dialogs,
+menus, popovers, the transaction detail drawer — and cards, `LedgerRow`,
+`Panel` and `StatTile` stayed exactly as documented. Full reasoning is in
+`docs/decisions.md`, "Glass on floating surfaces, not on the flat language".
+
+**What changed:**
+
+- **`theme.ts`** gained a `palette.glass` token (`surface`, `border`, `shadow`,
+  `backdropDim`, one set per colour scheme, same `color-mix()`-safe pattern as
+  `focusGlow()`) and a shared `GLASS_EASE` decelerate curve wired into
+  `theme.transitions`. `MuiBackdrop` now blurs the page behind a modal;
+  `MuiDialog` (plus a `Grow` entrance), `MuiMenu` and `MuiPopover` all use the
+  glass surface; `MuiTooltip` keeps a solid background on purpose — it is small
+  and often sits over a coloured figure, where legibility beats consistency —
+  but picked up the same layered shadow. **`MuiDrawer` was deliberately left
+  flat**, because the permanent nav sidebar shares that override with the
+  transaction detail drawer; the drawer gets its glass locally, via
+  `PaperProps.sx` in `TransactionDetailDrawer.tsx`, not through the shared
+  theme key.
+- **`components/Toast.tsx`** (new) is a glass toast stack + `useToast()` hook,
+  mounted once in `main.tsx`. It is now wired into the create/edit/delete flows
+  on Accounts, Transactions, Transfers, Budgets and Goals — a success toast
+  after each, an error toast on a delete that fails silently elsewhere (a
+  create/edit failure already shows inline, so it does not also toast).
+- **`components/FormSection.tsx`** (new) groups a dialog's fields under a small
+  caps eyebrow label — the same treatment `StatTile` uses for "TOTAL BALANCE" —
+  rather than a bordered sub-panel, because a second frame inside an already
+  glass dialog paper would be one frame too many. Applied to every multi-field
+  form dialog: `RecurringFormDialog` (Details / Classification / Recurrence /
+  Automation), `TransactionFormDialog` (Details / Classification),
+  `TransferFormDialog` (Details / Notes), `AccountFormDialog` (Details /
+  Balance / Appearance), `GoalFormDialog` (Details / Target / Appearance), and
+  `BudgetFormDialog` (Details / Category limits — the latter also picked up a
+  translation key it had never had; the heading was a bare hardcoded string).
+  Alongside the regrouping, `MuiOutlinedInput`'s radius dropped from 14 to 10 to
+  read closer to a card's 12, and Recurring's day-of-month field now sits
+  inline with "Repeats" only when the frequency is monthly, instead of
+  standing alone at full width.
+
+**One correctness bug found while testing the toast wiring, unrelated to any
+of the above and far more serious:** `apps/web/src/api/endpoints/accounts.ts`
+and `apps/web/src/api/endpoints/users.ts` both named an RTK Query mutation
+`deleteAccount` on the same `injectEndpoints` — the same shared `api`
+singleton. `injectEndpoints` silently keeps whichever of two identically-named
+endpoints registers first and drops the other's `query` function, so which one
+actually ran depended on unrelated module-load order. In practice, clicking
+"Delete" on a financial account in `AccountsPage` fired
+`DELETE /api/v1/users/me` — the GDPR erasure endpoint behind Settings → Data
+→ "Delete my account" — while the UI reported success, because the request
+genuinely *had* succeeded, just against the wrong resource. Caught only by
+inspecting the network request the click produced; nothing about it was
+visible in the DOM or the toast. Fixed by renaming the `users.ts` side to
+`eraseMyAccount` / `useEraseMyAccountMutation`. **Never reuse an
+`injectEndpoints` key across modules, even when the two are unrelated in every
+other way — nothing enforces uniqueness across files, and the failure is
+silent.**
+
+---
+
 ## 3. Project structure
 
 ```
@@ -530,12 +696,13 @@ D:\finance_app
 │           │                        # imports.ts, notifications.ts, recurring.ts,
 │           │                        # reports.ts, tags.ts, transactions.ts,
 │           │                        # users.ts, workspaces.ts
-│           ├── components/          # Amount, AppLayout, Brandmark,
-│           │                        # ChartTooltip, ConfirmDialog, EmptyState,
+│           ├── components/          # Amount, AmountHero, AppLayout, Brandmark,
+│           │                        # ChartTooltip, ColorSwatchPicker,
+│           │                        # ConfirmDialog, EmptyState,
 │           │                        # ErrorState, LanguageMenu, LedgerList,
-│           │                        # LedgerRow, NotificationsMenu, PageHeader,
-│           │                        # Panel, SeriesLegend, StatTile, UserMenu,
-│           │                        # navItems.ts
+│           │                        # LedgerRow, MoneyField, NotificationsMenu,
+│           │                        # PageHeader, Panel, SeriesLegend, StatTile,
+│           │                        # UserMenu, navItems.ts
 │           ├── i18n/               # index.ts (init + detection), languages.ts,
 │           │                        # useLanguage.ts, locales/{en,pt-BR,es}.json
 │           ├── features/            # one folder per domain: accounts, alerts,
@@ -552,6 +719,8 @@ D:\finance_app
 │                                     # download.ts (authenticated file saves),
 │                                     # format.ts (money/date formatting),
 │                                     # money.ts (exact add/compare, display only)
+│                                     # moneyInput.ts (typing an amount: the
+│                                     #   digit-string model behind MoneyField)
 │                                     # motion.ts (shared Framer Motion variants)
 │                                     # permissions.ts (client-side role checks)
 │                                     # tone.ts (domain status -> ledger spine)
@@ -1991,6 +2160,20 @@ slot 2 the expense brick — which is the pair red-green colour blindness
 collapses, so they are separated by a full lightness step rather than by hue
 alone, on top of the legend and direct labelling that were already there.
 
+**Money is typed the way it is read, and an amount is entered as the subject of
+its dialog.** Every figure the app displays is grouped, pointed and set in
+tabular mono; until section 2e that stopped at the boundary of a text box, where
+an amount was typed as `1500` into a field the same size as "Merchant".
+`lib/moneyInput.ts` models an in-progress amount as a digit string in the
+currency's minor unit, so keystrokes accumulate from the right, the caret is
+never a problem, and no value on the path is a `number`; the decimal places come
+from `Intl` per currency rather than from a constant. `components/MoneyField.tsx`
+and `components/AmountHero.tsx` are the two ways to accept one, and **no form
+should bind a raw `TextField` to a money field any more.** The stack question
+this work opened with — a move to shadcn/ui — was answered no: every defect on
+the list had a root cause in this repo, and none would have survived the
+migration that was meant to fix them. See section 2e and `docs/decisions.md`.
+
 **The interface is flat; typography and a hairline carry the hierarchy.** The
 whole visual language, its palette, and the statement-line motif that
 `components/LedgerRow.tsx` implements are described in section 2b and in
@@ -1999,3 +2182,12 @@ every figure in a list or table is set in `IBM Plex Mono` with `tabular-nums`
 (use `variant="amount"` or `components/Amount.tsx`); a card gets a hairline, not
 a shadow, unless it genuinely floats; and a colour is only added after checking
 its contrast against the surface it actually renders on.
+
+**Glass belongs only to what already floats.** A later pass gave dialogs,
+menus, popovers and the transaction detail drawer a translucent, blurred
+`palette.glass` surface (`theme.ts`) — never cards, `LedgerRow` or `Panel`,
+which stay exactly as flat as the paragraph above says. The permanent nav
+`Drawer` is themed flat too, on purpose, since it shares its theme key with the
+floating one; the floating drawer's glass is applied locally instead. See
+section 2f and `docs/decisions.md` ("Glass on floating surfaces, not on the
+flat language").

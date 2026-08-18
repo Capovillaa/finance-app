@@ -17,6 +17,9 @@ import { useListAccountsQuery } from '../../api/endpoints/accounts';
 import type { GoalInput, UpdateGoalInput } from '../../api/endpoints/goals';
 import { useCreateGoalMutation, useUpdateGoalMutation } from '../../api/endpoints/goals';
 import type { Goal } from '../../api/types';
+import ColorSwatchPicker from '../../components/ColorSwatchPicker';
+import FormSection from '../../components/FormSection';
+import { useToast } from '../../components/Toast';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { COMMON_CURRENCIES } from '../../lib/currencies';
@@ -54,6 +57,7 @@ function toFormValues(goal: Goal | undefined, currency: string): GoalFormValues 
 /** Category and currency are fixed at creation — the update schema omits both. */
 export default function GoalFormDialog({ open, workspaceId, currency, goal, onClose }: GoalFormDialogProps): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const isEdit = Boolean(goal);
   const [createGoal, createState] = useCreateGoalMutation();
   const [updateGoal, updateState] = useUpdateGoalMutation();
@@ -65,6 +69,7 @@ export default function GoalFormDialog({ open, workspaceId, currency, goal, onCl
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     setError,
     formState: { errors },
@@ -106,6 +111,7 @@ export default function GoalFormDialog({ open, workspaceId, currency, goal, onCl
           .catch(() => null);
 
     if (!result) return;
+    showToast({ message: t(isEdit ? 'goals.updatedToast' : 'goals.createdToast'), severity: 'success' });
     onClose();
   });
 
@@ -114,138 +120,142 @@ export default function GoalFormDialog({ open, workspaceId, currency, goal, onCl
       <DialogTitle>{isEdit ? t('goals.editTitle') : t('goals.newTitle')}</DialogTitle>
       <form onSubmit={onSubmit} noValidate>
         <DialogContent>
-          <Stack spacing={2.5}>
+          <Stack spacing={3}>
             {error ? <Alert severity="error">{getApiErrorMessage(error, t('goals.saveFailed'))}</Alert> : null}
 
-            <TextField
-              label={t('common.name')}
-              autoFocus
-              fullWidth
-              error={Boolean(errors.name)}
-              helperText={fieldMessage(errors.name?.message)}
-              {...register('name')}
-            />
+            <FormSection label={t('formSections.details')}>
+              <TextField
+                label={t('common.name')}
+                autoFocus
+                fullWidth
+                error={Boolean(errors.name)}
+                helperText={fieldMessage(errors.name?.message)}
+                {...register('name')}
+              />
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('common.category')}
-                  fullWidth
-                  disabled={isEdit}
-                  helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.category?.message)}
-                  value={watch('category')}
-                  {...register('category')}
-                >
-                  {GOAL_CATEGORIES.map((c) => (
-                    <MenuItem key={c} value={c}>
-                      {t(GOAL_CATEGORY_LABEL_KEYS[c])}
-                    </MenuItem>
-                  ))}
-                </TextField>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.category')}
+                    fullWidth
+                    disabled={isEdit}
+                    helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.category?.message)}
+                    value={watch('category')}
+                    {...register('category')}
+                  >
+                    {GOAL_CATEGORIES.map((c) => (
+                      <MenuItem key={c} value={c}>
+                        {t(GOAL_CATEGORY_LABEL_KEYS[c])}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.currency')}
+                    fullWidth
+                    disabled={isEdit}
+                    helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.currency?.message)}
+                    value={watch('currency')}
+                    {...register('currency')}
+                  >
+                    {COMMON_CURRENCIES.map((code) => (
+                      <MenuItem key={code} value={code}>
+                        {code}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('common.currency')}
-                  fullWidth
-                  disabled={isEdit}
-                  helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.currency?.message)}
-                  value={watch('currency')}
-                  {...register('currency')}
-                >
-                  {COMMON_CURRENCIES.map((code) => (
-                    <MenuItem key={code} value={code}>
-                      {code}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-            </Grid>
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  label={t('goals.targetAmount')}
-                  fullWidth
-                  error={Boolean(errors.targetAmount)}
-                  helperText={fieldMessage(errors.targetAmount?.message)}
-                  {...register('targetAmount')}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  label={t('goals.targetDate')}
-                  type="date"
-                  placeholder={t('common.optional')}
-                  fullWidth
-                  InputLabelProps={{ shrink: true }}
-                  error={Boolean(errors.targetDate)}
-                  helperText={fieldMessage(errors.targetDate?.message)}
-                  {...register('targetDate')}
-                />
-              </Grid>
-            </Grid>
+              <TextField
+                label={t('common.description')}
+                placeholder={t('common.optional')}
+                multiline
+                minRows={2}
+                fullWidth
+                error={Boolean(errors.description)}
+                helperText={fieldMessage(errors.description?.message)}
+                {...register('description')}
+              />
+            </FormSection>
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('goals.linkedAccount')}
-                  fullWidth
-                  SelectProps={{ displayEmpty: true }}
-                  InputLabelProps={{ shrink: true }}
-                  helperText={t('goals.linkedAccountHint')}
-                  value={watch('accountId')}
-                  {...register('accountId')}
-                >
-                  <MenuItem value="">None</MenuItem>
-                  {(accounts.data?.accounts ?? []).map((account) => (
-                    <MenuItem key={account.id} value={account.id}>
-                      {account.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
+            <FormSection label={t('formSections.target')}>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    label={t('goals.targetAmount')}
+                    fullWidth
+                    error={Boolean(errors.targetAmount)}
+                    helperText={fieldMessage(errors.targetAmount?.message)}
+                    {...register('targetAmount')}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    label={t('goals.targetDate')}
+                    type="date"
+                    placeholder={t('common.optional')}
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                    error={Boolean(errors.targetDate)}
+                    helperText={fieldMessage(errors.targetDate?.message)}
+                    {...register('targetDate')}
+                  />
+                </Grid>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('goals.priority')}
-                  fullWidth
-                  error={Boolean(errors.priority)}
-                  helperText={fieldMessage(errors.priority?.message) ?? '1 = highest'}
-                  value={watch('priority')}
-                  {...register('priority')}
-                >
-                  {[1, 2, 3, 4, 5].map((p) => (
-                    <MenuItem key={p} value={String(p)}>
-                      {p}
-                    </MenuItem>
-                  ))}
-                </TextField>
+
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('goals.linkedAccount')}
+                    fullWidth
+                    SelectProps={{ displayEmpty: true }}
+                    InputLabelProps={{ shrink: true }}
+                    helperText={t('goals.linkedAccountHint')}
+                    value={watch('accountId')}
+                    {...register('accountId')}
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    {(accounts.data?.accounts ?? []).map((account) => (
+                      <MenuItem key={account.id} value={account.id}>
+                        {account.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('goals.priority')}
+                    fullWidth
+                    error={Boolean(errors.priority)}
+                    helperText={fieldMessage(errors.priority?.message) ?? '1 = highest'}
+                    value={watch('priority')}
+                    {...register('priority')}
+                  >
+                    {[1, 2, 3, 4, 5].map((p) => (
+                      <MenuItem key={p} value={String(p)}>
+                        {p}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
               </Grid>
-            </Grid>
+            </FormSection>
 
-            <TextField
-              label={t('common.description')}
-              placeholder={t('common.optional')}
-              multiline
-              minRows={2}
-              fullWidth
-              error={Boolean(errors.description)}
-              helperText={fieldMessage(errors.description?.message)}
-              {...register('description')}
-            />
-
-            <TextField
-              label={t('common.colour')}
-              type="color"
-              sx={{ width: 96 }}
-              value={watch('color') || '#1f6feb'}
-              error={Boolean(errors.color)}
-              helperText={fieldMessage(errors.color?.message)}
-              {...register('color')}
-            />
+            <FormSection label={t('formSections.appearance')}>
+              <ColorSwatchPicker
+                label={t('common.colour')}
+                value={watch('color') ?? ''}
+                onChange={(next) => setValue('color', next, { shouldDirty: true })}
+                error={Boolean(errors.color)}
+                helperText={fieldMessage(errors.color?.message)}
+              />
+            </FormSection>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

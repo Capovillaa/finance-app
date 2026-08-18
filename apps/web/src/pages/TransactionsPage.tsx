@@ -25,6 +25,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import PageHeader from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 import BulkActionsBar from '../features/transactions/BulkActionsBar';
 import ImportDialog from '../features/transactions/ImportDialog';
 import SplitsDialog from '../features/transactions/SplitsDialog';
@@ -75,6 +76,7 @@ function toApiFilters(filters: TransactionFilterState, page: number): Transactio
 
 export default function TransactionsPage(): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const { workspace, isLoading: workspaceLoading } = useActiveWorkspace();
   const currentUserId = useAppSelector((state) => state.auth.user?.id);
 
@@ -191,6 +193,9 @@ export default function TransactionsPage(): ReactElement {
       setDeleting(undefined);
       // The row that was open in the drawer may be one of the legs just removed.
       setViewing(undefined);
+      showToast({ message: t('transactions.deletedToast'), severity: 'success' });
+    } else {
+      showToast({ message: t('transactions.deleteFailedToast'), severity: 'error' });
     }
   };
 
@@ -242,6 +247,9 @@ export default function TransactionsPage(): ReactElement {
         accounts={accounts.data?.accounts ?? []}
         categories={categories.data?.categories ?? []}
         tags={tags.data?.tags ?? []}
+        // The amount range spans every account, so it is denominated in the
+        // workspace's base currency — the same one the server compares against.
+        currency={workspace?.baseCurrency ?? 'USD'}
         onChange={setFilters}
       />
 

@@ -15,6 +15,10 @@ import { useForm } from 'react-hook-form';
 import type { AccountInput } from '../../api/endpoints/accounts';
 import { useCreateAccountMutation, useUpdateAccountMutation } from '../../api/endpoints/accounts';
 import type { Account } from '../../api/types';
+import ColorSwatchPicker from '../../components/ColorSwatchPicker';
+import FormSection from '../../components/FormSection';
+import MoneyField from '../../components/MoneyField';
+import { useToast } from '../../components/Toast';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { COMMON_CURRENCIES } from '../../lib/currencies';
@@ -78,6 +82,7 @@ export default function AccountFormDialog({
   onClose,
 }: AccountFormDialogProps): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const isEdit = Boolean(account);
   const [createAccount, createState] = useCreateAccountMutation();
   const [updateAccount, updateState] = useUpdateAccountMutation();
@@ -88,6 +93,7 @@ export default function AccountFormDialog({
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     setError,
     formState: { errors },
@@ -107,6 +113,13 @@ export default function AccountFormDialog({
   }, [error, setError]);
 
   const isCreditCard = CREDIT_FIELDS.has(watch('type'));
+  /**
+   * Money in this dialog is formatted against the currency chosen a few fields
+   * above it, not against the workspace's: picking BRL and then typing an
+   * opening balance should group it as `1.500,00`, and picking JPY should stop
+   * offering decimal places that the currency does not have.
+   */
+  const currency = watch('currency');
 
   const onSubmit = handleSubmit(async (values) => {
     const body = toInput(values);
@@ -115,6 +128,7 @@ export default function AccountFormDialog({
       : await createAccount({ workspaceId, body }).unwrap().catch(() => null);
 
     if (!result) return;
+    showToast({ message: t(isEdit ? 'accounts.updatedToast' : 'accounts.createdToast'), severity: 'success' });
     onClose();
   });
 
@@ -123,126 +137,133 @@ export default function AccountFormDialog({
       <DialogTitle>{isEdit ? t('accounts.editTitle') : t('accounts.newTitle')}</DialogTitle>
       <form onSubmit={onSubmit} noValidate>
         <DialogContent>
-          <Stack spacing={2.5}>
+          <Stack spacing={3}>
             {error ? (
               <Alert severity="error">{getApiErrorMessage(error, t('accounts.saveFailed'))}</Alert>
             ) : null}
 
-            <TextField
-              label={t('common.name')}
-              autoFocus
-              fullWidth
-              error={Boolean(errors.name)}
-              helperText={fieldMessage(errors.name?.message)}
-              {...register('name')}
-            />
+            <FormSection label={t('formSections.details')}>
+              <TextField
+                label={t('common.name')}
+                autoFocus
+                fullWidth
+                error={Boolean(errors.name)}
+                helperText={fieldMessage(errors.name?.message)}
+                {...register('name')}
+              />
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('accounts.type.label')}
-                  fullWidth
-                  disabled={isEdit}
-                  helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.type?.message)}
-                  error={Boolean(errors.type)}
-                  value={watch('type')}
-                  {...register('type')}
-                >
-                  {ACCOUNT_TYPES.map((type) => (
-                    <MenuItem key={type} value={type}>
-                      {t(ACCOUNT_TYPE_LABEL_KEYS[type])}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('common.currency')}
-                  fullWidth
-                  disabled={isEdit}
-                  helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.currency?.message)}
-                  error={Boolean(errors.currency)}
-                  value={watch('currency')}
-                  {...register('currency')}
-                >
-                  {COMMON_CURRENCIES.map((code) => (
-                    <MenuItem key={code} value={code}>
-                      {code}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-            </Grid>
-
-            <TextField
-              label={t('accounts.institution')}
-              placeholder={t('common.optional')}
-              fullWidth
-              error={Boolean(errors.institution)}
-              helperText={fieldMessage(errors.institution?.message)}
-              {...register('institution')}
-            />
-
-            <TextField
-              label={isEdit ? t('accounts.openingBalance') : t('accounts.initialBalance')}
-              placeholder="0.00"
-              fullWidth
-              disabled={isEdit}
-              error={Boolean(errors.initialBalance)}
-              helperText={
-                isEdit
-                  ? t('accounts.balanceFixed')
-                  : (fieldMessage(errors.initialBalance?.message) ?? t('accounts.defaultsToZero'))
-              }
-              {...register('initialBalance')}
-            />
-
-            {isCreditCard ? (
               <Grid container spacing={2}>
-                <Grid size={{ xs: 12, sm: 4 }}>
+                <Grid size={{ xs: 12, sm: 6 }}>
                   <TextField
-                    label={t('accounts.creditLimit')}
-                    placeholder={t('common.optional')}
+                    select
+                    label={t('accounts.type.label')}
                     fullWidth
-                    error={Boolean(errors.creditLimit)}
-                    helperText={fieldMessage(errors.creditLimit?.message)}
-                    {...register('creditLimit')}
-                  />
+                    disabled={isEdit}
+                    helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.type?.message)}
+                    error={Boolean(errors.type)}
+                    value={watch('type')}
+                    {...register('type')}
+                  >
+                    {ACCOUNT_TYPES.map((type) => (
+                      <MenuItem key={type} value={type}>
+                        {t(ACCOUNT_TYPE_LABEL_KEYS[type])}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                 </Grid>
-                <Grid size={{ xs: 6, sm: 4 }}>
+                <Grid size={{ xs: 12, sm: 6 }}>
                   <TextField
-                    label={t('accounts.statementDay')}
-                    placeholder="1–31"
+                    select
+                    label={t('common.currency')}
                     fullWidth
-                    error={Boolean(errors.statementDay)}
-                    helperText={fieldMessage(errors.statementDay?.message)}
-                    {...register('statementDay')}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6, sm: 4 }}>
-                  <TextField
-                    label={t('accounts.dueDay')}
-                    placeholder="1–31"
-                    fullWidth
-                    error={Boolean(errors.dueDay)}
-                    helperText={fieldMessage(errors.dueDay?.message)}
-                    {...register('dueDay')}
-                  />
+                    disabled={isEdit}
+                    helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.currency?.message)}
+                    error={Boolean(errors.currency)}
+                    value={watch('currency')}
+                    {...register('currency')}
+                  >
+                    {COMMON_CURRENCIES.map((code) => (
+                      <MenuItem key={code} value={code}>
+                        {code}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                 </Grid>
               </Grid>
-            ) : null}
 
-            <TextField
-              label={t('common.colour')}
-              type="color"
-              sx={{ width: 96 }}
-              value={watch('color') || '#1f6feb'}
-              error={Boolean(errors.color)}
-              helperText={fieldMessage(errors.color?.message)}
-              {...register('color')}
-            />
+              <TextField
+                label={t('accounts.institution')}
+                placeholder={t('common.optional')}
+                fullWidth
+                error={Boolean(errors.institution)}
+                helperText={fieldMessage(errors.institution?.message)}
+                {...register('institution')}
+              />
+            </FormSection>
+
+            <FormSection label={t('formSections.balance')}>
+              <MoneyField
+                label={isEdit ? t('accounts.openingBalance') : t('accounts.initialBalance')}
+                fullWidth
+                disabled={isEdit}
+                currency={currency}
+                allowNegative
+                value={watch('initialBalance')}
+                onChange={(next) => setValue('initialBalance', next, { shouldDirty: true })}
+                error={Boolean(errors.initialBalance)}
+                helperText={
+                  isEdit
+                    ? t('accounts.balanceFixed')
+                    : (fieldMessage(errors.initialBalance?.message) ?? t('accounts.defaultsToZero'))
+                }
+              />
+
+              {isCreditCard ? (
+                <Grid container spacing={2}>
+                  <Grid size={{ xs: 12, sm: 4 }}>
+                    <MoneyField
+                      label={t('accounts.creditLimit')}
+                      fullWidth
+                      currency={currency}
+                      value={watch('creditLimit')}
+                      onChange={(next) => setValue('creditLimit', next, { shouldDirty: true })}
+                      error={Boolean(errors.creditLimit)}
+                      helperText={fieldMessage(errors.creditLimit?.message)}
+                    />
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 4 }}>
+                    <TextField
+                      label={t('accounts.statementDay')}
+                      placeholder="1–31"
+                      fullWidth
+                      error={Boolean(errors.statementDay)}
+                      helperText={fieldMessage(errors.statementDay?.message)}
+                      {...register('statementDay')}
+                    />
+                  </Grid>
+                  <Grid size={{ xs: 6, sm: 4 }}>
+                    <TextField
+                      label={t('accounts.dueDay')}
+                      placeholder="1–31"
+                      fullWidth
+                      error={Boolean(errors.dueDay)}
+                      helperText={fieldMessage(errors.dueDay?.message)}
+                      {...register('dueDay')}
+                    />
+                  </Grid>
+                </Grid>
+              ) : null}
+            </FormSection>
+
+            <FormSection label={t('formSections.appearance')}>
+              <ColorSwatchPicker
+                label={t('common.colour')}
+                value={watch('color') ?? ''}
+                onChange={(next) => setValue('color', next, { shouldDirty: true })}
+                error={Boolean(errors.color)}
+                helperText={fieldMessage(errors.color?.message) ?? t('accounts.colourHint')}
+              />
+            </FormSection>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

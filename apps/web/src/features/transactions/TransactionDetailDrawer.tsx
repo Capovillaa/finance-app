@@ -89,7 +89,25 @@ export default function TransactionDetailDrawer({
       anchor="right"
       open={open}
       onClose={onClose}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 460 }, p: 3 } }}
+      PaperProps={{
+        // Unlike the permanent nav drawer (themed flat, in `theme.ts`), this
+        // one is a temporary reading surface that floats over the ledger —
+        // it gets the same glass treatment as a dialog or menu, not the
+        // sidebar's opaque background. `backgroundColor` is reset to
+        // transparent because the theme's `MuiDrawer` override otherwise
+        // paints a solid one underneath the translucent gradient, which
+        // would defeat the blur.
+        sx: (theme) => ({
+          width: { xs: '100%', sm: 460 },
+          p: 3,
+          backgroundColor: 'transparent',
+          backgroundImage: theme.palette.glass.surface,
+          borderLeft: `1px solid ${theme.palette.glass.border}`,
+          backdropFilter: 'blur(24px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+          boxShadow: theme.palette.glass.shadow,
+        }),
+      }}
     >
       <Stack spacing={2.5}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start">

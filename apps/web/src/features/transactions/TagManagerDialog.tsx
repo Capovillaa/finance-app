@@ -1,6 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { DeleteIcon } from '../../icons';
 import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
@@ -8,9 +9,6 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
 import Skeleton from '@mui/material/Skeleton';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
@@ -21,6 +19,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { useForm } from 'react-hook-form';
 import { useCreateTagMutation, useDeleteTagMutation, useListTagsQuery } from '../../api/endpoints/tags';
 import type { Tag, WorkspaceRole } from '../../api/types';
+import ColorSwatchPicker from '../../components/ColorSwatchPicker';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
@@ -45,6 +44,24 @@ const EMPTY: TagFormValues = { name: '', color: '' };
  * create a near-duplicate ("Groceries" beside "groceries") while filling in
  * something else. Tag names are unique per workspace case-insensitively, so the
  * server rejects that anyway — better to make the existing list visible first.
+ *
+ * Four things were wrong with this dialog and they are worth naming, because
+ * three of them are patterns rather than one-offs:
+ *
+ *  - The confirmation dialog was rendered **inside** the open `Dialog`. Both
+ *    portal to the body, so it appeared, but MUI's parent modal keeps a focus
+ *    trap and pulls focus back out of the child — so the confirmation opened
+ *    without the keyboard following it. It is a sibling now.
+ *  - Four strings were hardcoded English and stayed English in the other two
+ *    languages: the "Done" button, the usage count, and both branches of the
+ *    delete confirmation. `check:i18n` cannot see this class of bug — it
+ *    verifies that the keys a `t()` call names exist, and a string that never
+ *    calls `t()` names nothing.
+ *  - The colour input was an `<input type="color">` wired to react-hook-form,
+ *    which stalls under a drag for the reason `ColorSwatchPicker` documents.
+ *  - The Add button was nudged with a hardcoded `mt` that only lined up while
+ *    the field beneath it had no helper text, so the row broke apart the moment
+ *    a validation message appeared. It is pinned to the field's own height.
  */
 export default function TagManagerDialog({
   open,
@@ -64,6 +81,7 @@ export default function TagManagerDialog({
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     setError,
     formState: { errors },
@@ -105,99 +123,111 @@ export default function TagManagerDialog({
   const error = createState.error ?? deleteState.error ?? listError;
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>{t('transactions.manageTags')}</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2.5}>
-          {error ? <Alert severity="error">{getApiErrorMessage(error, t('transactions.tagsFailed'))}</Alert> : null}
+    <>
+      <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+        <DialogTitle>{t('transactions.manageTags')}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2.5}>
+            {error ? (
+              <Alert severity="error">{getApiErrorMessage(error, t('transactions.tagsFailed'))}</Alert>
+            ) : null}
 
-          {editable ? (
-            <form onSubmit={onSubmit} noValidate>
-              <Stack direction="row" spacing={1} alignItems="flex-start">
-                <TextField
-                  label={t('transactions.newTag')}
-                  size="small"
-                  fullWidth
-                  error={Boolean(errors.name)}
-                  helperText={fieldMessage(errors.name?.message)}
-                  {...register('name')}
-                />
-                <TextField
+            {editable ? (
+              <Stack component="form" onSubmit={onSubmit} noValidate spacing={2}>
+                <Stack direction="row" spacing={1} alignItems="flex-start">
+                  <TextField
+                    label={t('transactions.newTag')}
+                    size="small"
+                    fullWidth
+                    error={Boolean(errors.name)}
+                    helperText={fieldMessage(errors.name?.message)}
+                    {...register('name')}
+                  />
+                  {/*
+                    Pinned to the field's own height rather than nudged with a
+                    margin: helper text grows the field downward, and a margin
+                    tuned to the no-error case drifts the moment there is one.
+                  */}
+                  <Button type="submit" variant="contained" disabled={createState.isLoading} sx={{ height: 40, flexShrink: 0 }}>
+                    {t('common.add')}
+                  </Button>
+                </Stack>
+
+                <ColorSwatchPicker
                   label={t('common.colour')}
-                  type="color"
-                  size="small"
-                  sx={{ width: 84 }}
-                  value={watch('color') || '#1f6feb'}
-                  {...register('color')}
+                  value={watch('color') ?? ''}
+                  onChange={(next) => setValue('color', next, { shouldDirty: true })}
+                  error={Boolean(errors.color)}
+                  helperText={fieldMessage(errors.color?.message)}
                 />
-                <Button type="submit" variant="contained" disabled={createState.isLoading} sx={{ mt: 0.25 }}>
-                  {t('common.add')}
-                </Button>
               </Stack>
-            </form>
-          ) : null}
+            ) : null}
 
-          {isLoading ? (
-            <Stack spacing={1}>
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} variant="rounded" height={40} />
-              ))}
-            </Stack>
-          ) : tags.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              {t('transactions.noTagsExplainer')}
-            </Typography>
-          ) : (
-            <List dense disablePadding>
-              {tags.map((tag) => (
-                <ListItem
-                  key={tag.id}
-                  disableGutters
-                  secondaryAction={
-                    editable ? (
+            {isLoading ? (
+              <Stack spacing={1}>
+                {[0, 1, 2].map((i) => (
+                  <Skeleton key={i} variant="rounded" height={40} />
+                ))}
+              </Stack>
+            ) : tags.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                {t('transactions.noTagsExplainer')}
+              </Typography>
+            ) : (
+              <Box>
+                {tags.map((tag) => (
+                  <Stack
+                    key={tag.id}
+                    direction="row"
+                    spacing={1.5}
+                    alignItems="center"
+                    sx={{
+                      py: 1,
+                      borderBottom: '1px solid',
+                      borderColor: 'divider',
+                      '&:last-of-type': { borderBottom: 0 },
+                    }}
+                  >
+                    <Chip
+                      size="small"
+                      label={tag.name}
+                      sx={tag.color ? { bgcolor: tag.color, color: 'common.white' } : undefined}
+                    />
+                    <Box sx={{ flexGrow: 1 }} />
+                    {tag.usageCount === undefined ? null : (
+                      <Typography variant="amount" color="text.secondary">
+                        {t('transactions.count', { count: tag.usageCount })}
+                      </Typography>
+                    )}
+                    {editable ? (
                       <Tooltip title={t('transactions.deleteTag')}>
-                        <IconButton edge="end" size="small" color="error" onClick={() => setDeleting(tag)}>
+                        <IconButton size="small" color="error" onClick={() => setDeleting(tag)}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                    ) : undefined
-                  }
-                >
-                  <Chip
-                    size="small"
-                    label={tag.name}
-                    sx={{
-                      mr: 1.5,
-                      ...(tag.color ? { bgcolor: tag.color, color: 'common.white' } : {}),
-                    }}
-                  />
-                  <ListItemText
-                    primaryTypographyProps={{ variant: 'body2', color: 'text.secondary' }}
-                    primary={
-                      tag.usageCount === undefined
-                        ? ''
-                        : `${tag.usageCount} transaction${tag.usageCount === 1 ? '' : 's'}`
-                    }
-                  />
-                </ListItem>
-              ))}
-            </List>
-          )}
-        </Stack>
-      </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={onClose}>Done</Button>
-      </DialogActions>
+                    ) : null}
+                  </Stack>
+                ))}
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={onClose}>{t('common.done')}</Button>
+        </DialogActions>
+      </Dialog>
 
+      {/*
+        A sibling of the dialog above, not a child of it — see the note on the
+        component. Rendering it inside left the parent's focus trap fighting it.
+      */}
       <ConfirmDialog
         open={Boolean(deleting)}
         title={t('transactions.deleteTag')}
         description={
           deleting?.usageCount
-            ? `Delete "${deleting.name}"? It will be removed from ${deleting.usageCount} transaction${
-                deleting.usageCount === 1 ? '' : 's'
-              }. The transactions themselves are not affected.`
-            : `Delete "${deleting?.name}"?`
+            ? t('transactions.deleteTagUsed', { name: deleting.name, count: deleting.usageCount })
+            : t('transactions.deleteTagUnused', { name: deleting?.name ?? '' })
         }
         confirmLabel={t('common.delete')}
         destructive
@@ -205,6 +235,6 @@ export default function TagManagerDialog({
         onConfirm={() => void handleDelete()}
         onCancel={() => setDeleting(undefined)}
       />
-    </Dialog>
+    </>
   );
 }

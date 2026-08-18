@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
@@ -25,6 +26,7 @@ import { useListCategoriesQuery } from '../../api/endpoints/categories';
 import type { RecurringInput, UpdateRecurringInput } from '../../api/endpoints/recurring';
 import { useCreateRecurringMutation, useUpdateRecurringMutation } from '../../api/endpoints/recurring';
 import type { RecurringTransaction } from '../../api/types';
+import FormSection from '../../components/FormSection';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { appLocale, todayIso } from '../../lib/format';
@@ -172,139 +174,158 @@ export default function RecurringFormDialog({
       <DialogTitle>{isEdit ? t('recurring.editTitle') : t('recurring.newTitle')}</DialogTitle>
       <form onSubmit={onSubmit} noValidate>
         <DialogContent>
-          <Stack spacing={2.5}>
+          <Stack spacing={3}>
             {error ? <Alert severity="error">{getApiErrorMessage(error, t('recurring.saveFailed'))}</Alert> : null}
 
-            <TextField
-              label={t('common.name')}
-              autoFocus
-              fullWidth
-              error={Boolean(errors.name)}
-              helperText={fieldMessage(errors.name?.message)}
-              {...register('name')}
-            />
+            <FormSection label={t('formSections.details')}>
+              <TextField
+                label={t('common.name')}
+                autoFocus
+                fullWidth
+                error={Boolean(errors.name)}
+                helperText={fieldMessage(errors.name?.message)}
+                {...register('name')}
+              />
 
-            <ToggleButtonGroup
-              exclusive
-              fullWidth
-              value={type}
-              disabled={isEdit}
-              onChange={(_e, value: 'income' | 'expense' | null) => value && setValue('type', value)}
-            >
-              <ToggleButton value="income">Income</ToggleButton>
-              <ToggleButton value="expense">Expense</ToggleButton>
-            </ToggleButtonGroup>
+              <ToggleButtonGroup
+                exclusive
+                fullWidth
+                value={type}
+                disabled={isEdit}
+                onChange={(_e, value: 'income' | 'expense' | null) => value && setValue('type', value)}
+              >
+                <ToggleButton value="income">Income</ToggleButton>
+                <ToggleButton value="expense">Expense</ToggleButton>
+              </ToggleButtonGroup>
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  label={t('common.amount')}
-                  fullWidth
-                  error={Boolean(errors.amount)}
-                  helperText={fieldMessage(errors.amount?.message)}
-                  {...register('amount')}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('common.account')}
-                  fullWidth
-                  disabled={isEdit}
-                  error={Boolean(errors.accountId)}
-                  helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.accountId?.message)}
-                  value={watch('accountId')}
-                  {...register('accountId')}
-                >
-                  {(accounts.data?.accounts ?? []).map((account) => (
-                    <MenuItem key={account.id} value={account.id}>
-                      {account.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-            </Grid>
-
-            <TextField
-              label={t('common.description')}
-              fullWidth
-              error={Boolean(errors.description)}
-              helperText={fieldMessage(errors.description?.message)}
-              {...register('description')}
-            />
-
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  select
-                  label={t('common.category')}
-                  fullWidth
-                  SelectProps={{ displayEmpty: true }}
-                  InputLabelProps={{ shrink: true }}
-                  value={watch('categoryId')}
-                  {...register('categoryId')}
-                >
-                  <MenuItem value="">Uncategorised</MenuItem>
-                  {(categories.data?.categories ?? []).map((category) => (
-                    <MenuItem key={category.id} value={category.id}>
-                      {' '.repeat(category.depth * 2)}
-                      {category.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField label={t('common.merchant')} placeholder={t('common.optional')} fullWidth {...register('merchant')} />
-              </Grid>
-            </Grid>
-
-            {!isEdit ? (
-              <>
-                <TextField select label={t('recurring.repeats')} fullWidth value={frequency} {...register('frequency')}>
-                  {RECURRING_FREQUENCIES.map((f) => (
-                    <MenuItem key={f} value={f}>
-                      {t(FREQUENCY_LABEL_KEYS[f])}
-                    </MenuItem>
-                  ))}
-                </TextField>
-
-                {frequency === 'custom' ? (
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
                   <TextField
-                    label={t('recurring.everyNDays')}
+                    label={t('common.amount')}
                     fullWidth
-                    error={Boolean(errors.intervalCount)}
-                    helperText={fieldMessage(errors.intervalCount?.message)}
-                    {...register('intervalCount')}
+                    error={Boolean(errors.amount)}
+                    helperText={fieldMessage(errors.amount?.message)}
+                    {...register('amount')}
                   />
-                ) : null}
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.account')}
+                    fullWidth
+                    disabled={isEdit}
+                    error={Boolean(errors.accountId)}
+                    helperText={isEdit ? t('accounts.fixedAfterCreate') : fieldMessage(errors.accountId?.message)}
+                    value={watch('accountId')}
+                    {...register('accountId')}
+                  >
+                    {(accounts.data?.accounts ?? []).map((account) => (
+                      <MenuItem key={account.id} value={account.id}>
+                        {account.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+              </Grid>
+            </FormSection>
 
-                {frequency === 'weekly' ? (
-                  <Stack spacing={0.75}>
-                    <Typography variant="body2">On these days</Typography>
-                    <FormGroup row>
-                      {weekdayLabels(appLocale()).map((label: string, day: number) => (
-                        <Chip
-                          key={day}
-                          label={label}
-                          size="small"
-                          onClick={() => toggleWeekday(day)}
-                          color={byWeekday.includes(day) ? 'primary' : 'default'}
-                          variant={byWeekday.includes(day) ? 'filled' : 'outlined'}
-                          sx={{ mr: 0.75, mb: 0.75 }}
-                        />
-                      ))}
-                    </FormGroup>
-                    {errors.byWeekday?.message ? (
-                      <Typography variant="caption" color="error">
-                        {fieldMessage(errors.byWeekday.message)}
-                      </Typography>
-                    ) : null}
-                  </Stack>
-                ) : null}
+            <FormSection label={t('formSections.classification')}>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    select
+                    label={t('common.category')}
+                    fullWidth
+                    SelectProps={{ displayEmpty: true }}
+                    InputLabelProps={{ shrink: true }}
+                    value={watch('categoryId')}
+                    {...register('categoryId')}
+                  >
+                    <MenuItem value="">Uncategorised</MenuItem>
+                    {(categories.data?.categories ?? []).map((category) => (
+                      <MenuItem key={category.id} value={category.id}>
+                        {' '.repeat(category.depth * 2)}
+                        {category.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField label={t('common.merchant')} placeholder={t('common.optional')} fullWidth {...register('merchant')} />
+                </Grid>
+              </Grid>
 
-                {frequency === 'monthly' || frequency === 'yearly' ? (
+              <TextField
+                label={t('common.description')}
+                fullWidth
+                error={Boolean(errors.description)}
+                helperText={fieldMessage(errors.description?.message)}
+                {...register('description')}
+              />
+            </FormSection>
+
+            <FormSection label={t('formSections.recurrence')}>
+              {!isEdit ? (
+                <>
                   <Grid container spacing={2}>
-                    {frequency === 'yearly' ? (
+                    <Grid size={{ xs: 12, sm: frequency === 'monthly' ? 6 : 12 }}>
+                      <TextField select label={t('recurring.repeats')} fullWidth value={frequency} {...register('frequency')}>
+                        {RECURRING_FREQUENCIES.map((f) => (
+                          <MenuItem key={f} value={f}>
+                            {t(FREQUENCY_LABEL_KEYS[f])}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                    </Grid>
+                    {frequency === 'monthly' ? (
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField
+                          label={t('recurring.dayOfMonth')}
+                          fullWidth
+                          error={Boolean(errors.dayOfMonth)}
+                          helperText={fieldMessage(errors.dayOfMonth?.message)}
+                          {...register('dayOfMonth')}
+                        />
+                      </Grid>
+                    ) : null}
+                  </Grid>
+
+                  {frequency === 'custom' ? (
+                    <TextField
+                      label={t('recurring.everyNDays')}
+                      fullWidth
+                      error={Boolean(errors.intervalCount)}
+                      helperText={fieldMessage(errors.intervalCount?.message)}
+                      {...register('intervalCount')}
+                    />
+                  ) : null}
+
+                  {frequency === 'weekly' ? (
+                    <Stack spacing={0.75}>
+                      <Typography variant="body2">On these days</Typography>
+                      <FormGroup row>
+                        {weekdayLabels(appLocale()).map((label: string, day: number) => (
+                          <Chip
+                            key={day}
+                            label={label}
+                            size="small"
+                            onClick={() => toggleWeekday(day)}
+                            color={byWeekday.includes(day) ? 'primary' : 'default'}
+                            variant={byWeekday.includes(day) ? 'filled' : 'outlined'}
+                            sx={{ mr: 0.75, mb: 0.75 }}
+                          />
+                        ))}
+                      </FormGroup>
+                      {errors.byWeekday?.message ? (
+                        <Typography variant="caption" color="error">
+                          {fieldMessage(errors.byWeekday.message)}
+                        </Typography>
+                      ) : null}
+                    </Stack>
+                  ) : null}
+
+                  {frequency === 'yearly' ? (
+                    <Grid container spacing={2}>
                       <Grid size={6}>
                         <TextField
                           select
@@ -322,68 +343,81 @@ export default function RecurringFormDialog({
                           ))}
                         </TextField>
                       </Grid>
-                    ) : null}
-                    <Grid size={frequency === 'yearly' ? 6 : 12}>
+                      <Grid size={6}>
+                        <TextField
+                          label={t('recurring.dayOfMonth')}
+                          fullWidth
+                          error={Boolean(errors.dayOfMonth)}
+                          helperText={fieldMessage(errors.dayOfMonth?.message)}
+                          {...register('dayOfMonth')}
+                        />
+                      </Grid>
+                    </Grid>
+                  ) : null}
+
+                  <Grid container spacing={2}>
+                    <Grid size={{ xs: 12, sm: 6 }}>
                       <TextField
-                        label={t('recurring.dayOfMonth')}
+                        label={t('recurring.startDate')}
+                        type="date"
                         fullWidth
-                        error={Boolean(errors.dayOfMonth)}
-                        helperText={fieldMessage(errors.dayOfMonth?.message)}
-                        {...register('dayOfMonth')}
+                        InputLabelProps={{ shrink: true }}
+                        error={Boolean(errors.startDate)}
+                        helperText={fieldMessage(errors.startDate?.message)}
+                        {...register('startDate')}
+                      />
+                    </Grid>
+                    <Grid size={{ xs: 12, sm: 6 }}>
+                      <TextField
+                        label={t('recurring.stopAfter')}
+                        placeholder={t('common.optional')}
+                        fullWidth
+                        error={Boolean(errors.occurrenceLimit)}
+                        helperText={fieldMessage(errors.occurrenceLimit?.message)}
+                        {...register('occurrenceLimit')}
                       />
                     </Grid>
                   </Grid>
-                ) : null}
+                </>
+              ) : null}
 
-                <Grid container spacing={2}>
-                  <Grid size={{ xs: 12, sm: 6 }}>
-                    <TextField
-                      label={t('recurring.startDate')}
-                      type="date"
-                      fullWidth
-                      InputLabelProps={{ shrink: true }}
-                      error={Boolean(errors.startDate)}
-                      helperText={fieldMessage(errors.startDate?.message)}
-                      {...register('startDate')}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 12, sm: 6 }}>
-                    <TextField
-                      label={t('recurring.stopAfter')}
-                      placeholder={t('common.optional')}
-                      fullWidth
-                      error={Boolean(errors.occurrenceLimit)}
-                      helperText={fieldMessage(errors.occurrenceLimit?.message)}
-                      {...register('occurrenceLimit')}
-                    />
-                  </Grid>
+              <TextField
+                label={t('recurring.endDate')}
+                type="date"
+                placeholder={t('common.optional')}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+                {...register('endDate')}
+              />
+            </FormSection>
+
+            <FormSection label={t('formSections.automation')}>
+              <Grid container spacing={2} alignItems="flex-start">
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  {/*
+                    The field beside this has a shrunk label sitting above its
+                    box, which the checkbox has no equivalent of — centring the
+                    row against the field's full height (label + box + helper
+                    text) left the checkbox floating above the box rather than
+                    beside it. This nudge puts the checkbox's own box at the
+                    same height as the field's, matching the label's reserved
+                    space instead of guessing at a shared centre.
+                  */}
+                  <Box sx={{ mt: '23px', display: 'flex', alignItems: 'center', minHeight: 40 }}>
+                    <FormControlLabel control={<Checkbox {...register('autoPost')} />} label={t('recurring.postAutomatically')} />
+                  </Box>
                 </Grid>
-              </>
-            ) : null}
-
-            <TextField
-              label={t('recurring.endDate')}
-              type="date"
-              placeholder={t('common.optional')}
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-              {...register('endDate')}
-            />
-
-            <Grid container spacing={2} alignItems="center">
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <FormControlLabel control={<Checkbox {...register('autoPost')} />} label={t('recurring.postAutomatically')} />
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    label={t('recurring.leadTime')}
+                    fullWidth
+                    helperText={fieldMessage(errors.leadTimeDays?.message) ?? t('recurring.leadTimeHint')}
+                    error={Boolean(errors.leadTimeDays)}
+                    {...register('leadTimeDays')}
+                  />
+                </Grid>
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField
-                  label={t('recurring.leadTime')}
-                  fullWidth
-                  helperText={fieldMessage(errors.leadTimeDays?.message) ?? t('recurring.leadTimeHint')}
-                  error={Boolean(errors.leadTimeDays)}
-                  {...register('leadTimeDays')}
-                />
-              </Grid>
-            </Grid>
+            </FormSection>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>

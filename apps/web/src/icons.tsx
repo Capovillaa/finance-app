@@ -30,6 +30,7 @@ import {
   Download,
   DotsThreeVertical,
   Flag,
+  FunnelSimple,
   Gear,
   GraduationCap,
   House,
@@ -177,6 +178,7 @@ export const DirectionsCarIcon = makeIcon(Car);
 export const DoneAllIcon = makeIcon(Checks);
 export const DownloadIcon = makeIcon(Download);
 export const EditIcon = makeIcon(PencilSimple);
+export const FilterIcon = makeIcon(FunnelSimple);
 export const ElderlyIcon = makeIcon(Armchair);
 export const ErrorOutlineIcon = makeIcon(XCircle);
 export const FlagIcon = makeIcon(Flag);

@@ -1,5 +1,6 @@
 import Alert from '@mui/material/Alert';
 import Avatar from '@mui/material/Avatar';
+import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
 import Dialog from '@mui/material/Dialog';
@@ -16,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import type { SplitInput } from '../../api/endpoints/transactions';
 import { useSetSplitsMutation } from '../../api/endpoints/transactions';
 import type { Transaction, TransactionSplit, WorkspaceMember } from '../../api/types';
+import MoneyField from '../../components/MoneyField';
 import { getApiErrorMessage } from '../../lib/apiError';
 import { absMoney, formatMoney } from '../../lib/format';
 import { equalMoney, sumMoney } from '../../lib/money';
@@ -43,7 +45,13 @@ interface SplitsDialogProps {
  *
  * Even and weighted splits are left entirely to the server: both involve
  * division and remainder allocation, and a second implementation here would be
- * a second thing to keep in step.
+ * a second thing to keep in step. That is why no per-person figure is shown in
+ * even mode — a number rendered here would be this file's guess at the server's
+ * arithmetic, and the two would eventually disagree about a remainder cent.
+ *
+ * The layout follows the app's statement language: one hairline-separated row
+ * per person, the figure right-aligned in the mono face, and the column named
+ * once at the top rather than as a repeated label on every input.
  */
 export default function SplitsDialog({
   open,
@@ -60,6 +68,7 @@ export default function SplitsDialog({
   const [values, setValues] = useState<Record<string, string>>({});
 
   const total = transaction ? absMoney(transaction.amount) : '0';
+  const currency = transaction?.currency ?? 'USD';
 
   /**
    * Which transaction the form below has already been seeded for.
@@ -139,14 +148,15 @@ export default function SplitsDialog({
         <Stack spacing={2.5}>
           {error ? <Alert severity="error">{getApiErrorMessage(error, t('transactions.splitFailed'))}</Alert> : null}
 
-          <Stack spacing={0.5}>
-            <Typography variant="body2" color="text.secondary">
+          {/* What is being split, stated once, so no row has to repeat it. */}
+          <Box sx={{ textAlign: 'center', pb: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="body2" color="text.secondary" noWrap>
               {transaction?.description}
             </Typography>
-            <Typography variant="h3">
-              {transaction ? formatMoney(total, transaction.currency) : '—'}
+            <Typography variant="h2" component="p" sx={{ mt: 0.5 }}>
+              {transaction ? formatMoney(total, currency) : '—'}
             </Typography>
-          </Stack>
+          </Box>
 
           <ToggleButtonGroup
             exclusive
@@ -162,48 +172,84 @@ export default function SplitsDialog({
             ))}
           </ToggleButtonGroup>
 
-          {members.length <= 1 ? (
-            <Alert severity="info">
-              {t('transactions.splitNeedsMembers')}
-            </Alert>
-          ) : null}
+          {members.length <= 1 ? <Alert severity="info">{t('transactions.splitNeedsMembers')}</Alert> : null}
 
-          <Stack spacing={1}>
+          <Box>
+            {/*
+              The column is named once here rather than as a `label` on each of
+              N identical inputs, which is what made the old rows read as a
+              stack of unrelated fields rather than as a table of shares.
+            */}
+            {mode === 'even' ? null : (
+              <Typography
+                variant="eyebrow"
+                component="div"
+                sx={{ color: 'text.secondary', textAlign: 'right', pb: 0.5 }}
+              >
+                {mode === 'exact' ? t('transactions.share') : t('transactions.weight')}
+              </Typography>
+            )}
+
             {members.map((member) => {
               const included = selected.includes(member.userId);
 
               return (
-                <Stack key={member.userId} direction="row" spacing={1.5} alignItems="center">
+                <Stack
+                  key={member.userId}
+                  direction="row"
+                  spacing={1.5}
+                  alignItems="center"
+                  sx={{
+                    py: 1,
+                    borderBottom: '1px solid',
+                    borderColor: 'divider',
+                    '&:last-of-type': { borderBottom: 0 },
+                    opacity: included ? 1 : 0.55,
+                    transition: 'opacity 160ms',
+                  }}
+                >
                   <Checkbox
                     size="small"
                     checked={included}
                     onChange={() => toggle(member.userId)}
-                    inputProps={{ 'aria-label': `Include ${member.fullName}` }}
+                    inputProps={{ 'aria-label': t('transactions.includeMember', { name: member.fullName }) }}
                   />
                   <Avatar src={member.avatarUrl ?? undefined} sx={{ width: 28, height: 28, fontSize: '0.75rem' }}>
                     {member.fullName.charAt(0).toUpperCase()}
                   </Avatar>
-                  <Typography variant="body2" sx={{ flexGrow: 1 }}>
+                  <Typography variant="body2" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
                     {member.fullName}
                   </Typography>
 
-                  {mode === 'even' ? null : (
+                  {mode === 'even' ? null : mode === 'exact' ? (
+                    <MoneyField
+                      size="small"
+                      hideSymbol
+                      currency={currency}
+                      disabled={!included}
+                      value={values[member.userId] ?? ''}
+                      onChange={(next) => setValues((current) => ({ ...current, [member.userId]: next }))}
+                      aria-label={t('transactions.shareFor', { name: member.fullName })}
+                      sx={{ width: 128, flexShrink: 0 }}
+                    />
+                  ) : (
                     <TextField
                       size="small"
-                      sx={{ width: 130 }}
-                      label={mode === 'exact' ? t('common.amount') : t('transactions.weight')}
-                      placeholder={mode === 'exact' ? '0.00' : '1'}
+                      inputMode="numeric"
+                      placeholder="1"
                       disabled={!included}
                       value={values[member.userId] ?? ''}
                       onChange={(event) =>
                         setValues((current) => ({ ...current, [member.userId]: event.target.value }))
                       }
+                      aria-label={t('transactions.weightFor', { name: member.fullName })}
+                      sx={{ width: 96, flexShrink: 0 }}
                     />
                   )}
                 </Stack>
               );
             })}
-          </Stack>
+          </Box>
 
           {mode === 'even' ? (
             <Typography variant="body2" color="text.secondary">
@@ -218,30 +264,38 @@ export default function SplitsDialog({
               {exactTotal === null
                 ? t('transactions.splitAmountRequired')
                 : exactMatches
-                  ? t('transactions.allocatedMatches', {
-                      allocated: formatMoney(exactTotal, transaction?.currency ?? 'USD'),
-                    })
+                  ? t('transactions.allocatedMatches', { allocated: formatMoney(exactTotal, currency) })
                   : t('transactions.allocatedShort', {
-                      allocated: formatMoney(exactTotal, transaction?.currency ?? 'USD'),
-                      total: formatMoney(total, transaction?.currency ?? 'USD'),
+                      allocated: formatMoney(exactTotal, currency),
+                      total: formatMoney(total, currency),
                     })}
             </Alert>
           )}
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        {existing.length > 0 ? (
-          <Button color="error" onClick={() => void handleClear()} disabled={isLoading}>
-            {t('transactions.removeSplit')}
+
+      {/*
+        Destructive action on the left, the pair that closes the dialog on the
+        right, with the gap between them owned by `space-between` rather than by
+        an empty flex-grow element standing in as a spacer — which is what left
+        the three buttons reading as one undifferentiated row.
+      */}
+      <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'space-between' }}>
+        <Box>
+          {existing.length > 0 ? (
+            <Button color="error" onClick={() => void handleClear()} disabled={isLoading}>
+              {t('transactions.removeSplit')}
+            </Button>
+          ) : null}
+        </Box>
+        <Stack direction="row" spacing={1}>
+          <Button onClick={onClose} disabled={isLoading}>
+            {t('common.cancel')}
           </Button>
-        ) : null}
-        <Stack sx={{ flexGrow: 1 }} />
-        <Button onClick={onClose} disabled={isLoading}>
-          {t('common.cancel')}
-        </Button>
-        <Button variant="contained" onClick={() => void handleSave()} disabled={isLoading || !canSave}>
-          {isLoading ? t('common.saving') : t('transactions.saveSplit')}
-        </Button>
+          <Button variant="contained" onClick={() => void handleSave()} disabled={isLoading || !canSave}>
+            {isLoading ? t('common.saving') : t('transactions.saveSplit')}
+          </Button>
+        </Stack>
       </DialogActions>
     </Dialog>
   );

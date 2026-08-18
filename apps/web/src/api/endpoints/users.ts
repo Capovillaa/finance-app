@@ -32,11 +32,21 @@ export const usersApi = api.injectEndpoints({
      * Erasure. The server anonymises rather than hard-deletes so shared history
      * stays coherent for other members, and revokes every session, so the caller
      * must tear down local state too.
+     *
+     * Named `eraseMyAccount` rather than `deleteAccount` — that name collided
+     * with `accounts.ts`'s financial-account delete mutation on the shared RTK
+     * Query `api` singleton (`injectEndpoints` keys endpoints by name, and
+     * silently keeps whichever of two same-named endpoints registers first).
+     * Whichever module happened to load second had its real `query` function
+     * discarded, so calling either hook could run the other's request — in
+     * practice, clicking "Delete" on a financial account could erase the
+     * user's entire profile instead. Never reuse an endpoint key across
+     * modules, even when the two are unrelated in every other way.
      */
-    deleteAccount: build.mutation<void, void>({
+    eraseMyAccount: build.mutation<void, void>({
       query: () => ({ url: '/users/me', method: 'DELETE', body: { confirm: true } }),
     }),
   }),
 });
 
-export const { useUpdateProfileMutation, useExportMyDataMutation, useDeleteAccountMutation } = usersApi;
+export const { useUpdateProfileMutation, useExportMyDataMutation, useEraseMyAccountMutation } = usersApi;

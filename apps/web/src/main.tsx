@@ -18,6 +18,7 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '@fontsource/ibm-plex-mono/600.css';
 import App from './App';
 import { store } from './app/store';
+import { ToastProvider } from './components/Toast';
 import { restoreSession } from './features/auth/sessionBootstrap';
 // Imported for its side effect: i18next has to be initialised before the first
 // component calls `useTranslation`, and before `lib/format.ts` asks it which
@@ -37,9 +38,11 @@ createRoot(container).render(
     <Provider store={store}>
       <ThemeProvider theme={theme} defaultMode="system">
         <CssBaseline enableColorScheme />
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <ToastProvider>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </ToastProvider>
       </ThemeProvider>
     </Provider>
   </StrictMode>,

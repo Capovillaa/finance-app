@@ -1,4 +1,5 @@
 import { createTheme } from '@mui/material/styles';
+import Grow from '@mui/material/Grow';
 import type { CSSProperties } from 'react';
 
 /**
@@ -45,6 +46,18 @@ declare module '@mui/material/styles' {
       /** Low-alpha accent for selected rows and meter tracks. */
       accentSoft: string;
     };
+    /**
+     * The glass treatment for surfaces that genuinely float above the page —
+     * dialogs, menus, popovers, the notification drawer. Never used on a card
+     * or a ledger row: those stay flat with a hairline, per the file doc
+     * comment above. `surface` is a `background-image` gradient (translucent,
+     * so it wants `backdropFilter` blur behind it to read as glass rather than
+     * as a faint smear), `border` is a brighter-than-divider rim standing in
+     * for the "leve brilho" a real edge-lit pane would catch, `shadow` is a
+     * layered ambient + rim-light box-shadow, and `backdropDim` is what sits
+     * behind the pane, over the rest of the page.
+     */
+    glass: { surface: string; border: string; shadow: string; backdropDim: string };
   }
   interface PaletteOptions {
     money?: { positive: string; negative: string; neutral: string };
@@ -56,6 +69,7 @@ declare module '@mui/material/styles' {
       neutral: string;
       accentSoft: string;
     };
+    glass?: { surface: string; border: string; shadow: string; backdropDim: string };
   }
 
   interface TypographyVariants {
@@ -140,6 +154,27 @@ const controlTransition = (props: string): string =>
 const focusGlow = (percent: number): string =>
   `0 0 0 4px color-mix(in srgb, ${v('primary-main')} ${percent}%, transparent)`;
 
+/**
+ * The one entrance curve for anything that floats — a dialog, a menu, a
+ * toast. A pronounced decelerate ("expo out") rather than the gentler
+ * `CONTROL_EASE` above: those are for a button or field settling after a
+ * touch, this is for a whole pane arriving on screen, and the two want
+ * visibly different weight. Kept as both a CSS string (for MUI's
+ * `transitions.easing`) and, in `lib/motion.ts`, the same four numbers as a
+ * Framer `ease` array — one curve, two syntaxes.
+ */
+const GLASS_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+
+/**
+ * `backdropFilter` amounts for the two sizes of floating surface. A dialog is
+ * large and sits over real content, so it wants a stronger blur to keep the
+ * page behind it from competing; a menu or popover is small and closer to its
+ * anchor, so a lighter blur reads as glass without smearing whatever text is
+ * nearby into illegibility.
+ */
+const GLASS_BLUR = 'blur(24px) saturate(180%)';
+const GLASS_BLUR_SOFT = 'blur(14px) saturate(160%)';
+
 export const theme = createTheme({
   // Emits CSS variables, which is what lets the light and dark schemes below
   // switch without a re-render and without a flash on first paint.
@@ -167,6 +202,13 @@ export const theme = createTheme({
           neutral: '#6E757D',
           accentSoft: 'rgba(15, 110, 78, 0.10)',
         },
+        glass: {
+          surface: 'linear-gradient(165deg, rgba(255, 255, 255, 0.86) 0%, rgba(247, 248, 244, 0.66) 100%)',
+          border: 'rgba(255, 255, 255, 0.65)',
+          shadow:
+            '0 24px 60px -16px rgba(15, 20, 28, 0.22), 0 10px 28px -10px rgba(15, 20, 28, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.55)',
+          backdropDim: 'rgba(20, 23, 28, 0.32)',
+        },
       },
     },
     dark: {
@@ -189,12 +231,28 @@ export const theme = createTheme({
           neutral: '#767D86',
           accentSoft: 'rgba(57, 185, 129, 0.14)',
         },
+        glass: {
+          surface: 'linear-gradient(165deg, rgba(41, 47, 56, 0.82) 0%, rgba(20, 23, 28, 0.66) 100%)',
+          border: 'rgba(255, 255, 255, 0.10)',
+          shadow:
+            '0 24px 60px -16px rgba(0, 0, 0, 0.55), 0 10px 28px -10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06)',
+          backdropDim: 'rgba(6, 8, 10, 0.55)',
+        },
       },
     },
   },
 
   shape: { borderRadius: 8 },
   shadows: SHADOWS,
+
+  // MUI's Dialog/Menu/Popover/Tooltip all animate through `easeInOut` and
+  // these two durations by default — overriding them here is what gives every
+  // floating surface in the app the same `GLASS_EASE` arrival without a
+  // per-component `transitionDuration` prop anywhere.
+  transitions: {
+    easing: { easeInOut: GLASS_EASE },
+    duration: { enteringScreen: 260, leavingScreen: 180 },
+  },
 
   typography: {
     fontFamily: FONT_UI,
@@ -282,6 +340,19 @@ export const theme = createTheme({
           outline: `2px solid ${v('primary-main')} !important`,
           outlineOffset: '2px !important',
         },
+        // ...with one exception, and it is the reason the rule above is scoped
+        // at all. An `outline` follows the *element's own* `border-radius`, and
+        // the native `<input>` inside a field has none — the 14px radius belongs
+        // to the notched fieldset around it. So the global ring rendered as a
+        // hard square sitting outside a rounded field, on every text box in the
+        // app. Browsers also match `:focus-visible` on a text input for a plain
+        // mouse click, so it appeared on click and not only on tab.
+        //
+        // Suppressing it here costs nothing, because a field is the one control
+        // that already states its own focus: `MuiOutlinedInput` below turns the
+        // notch accent-coloured and lays a soft halo around the whole shape,
+        // both of which follow the radius. Every other control keeps the ring.
+        '.MuiOutlinedInput-input:focus-visible': { outline: 'none !important' },
         '::selection': { backgroundColor: v('tone-accentSoft') },
         // Motion in this app only ever says "this updated". Anyone who has asked
         // the OS for less of it loses nothing by having none of it.
@@ -423,7 +494,7 @@ export const theme = createTheme({
     MuiOutlinedInput: {
       styleOverrides: {
         root: {
-          borderRadius: 14,
+          borderRadius: 10,
           backgroundColor: v('background-paper'),
           transition: controlTransition('box-shadow, border-color'),
           '& .MuiOutlinedInput-notchedOutline': { borderColor: v('divider') },
@@ -431,9 +502,15 @@ export const theme = createTheme({
           // A soft halo around the whole field reads as "this is now active" the
           // way a hard 2px border reads as "this is now boxed in" — the same
           // information, without the field visibly jumping in size at line-up.
-          '&.Mui-focused': { boxShadow: focusGlow(14) },
+          //
+          // This pair is now the *only* focus indicator a field has, since the
+          // global ring is suppressed on the inner input above, so both are a
+          // step stronger than they were when they merely accompanied it. The
+          // notch is an absolutely-positioned fieldset, so widening its border
+          // moves nothing on the page.
+          '&.Mui-focused': { boxShadow: focusGlow(18) },
           '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-            borderWidth: 1.5,
+            borderWidth: 2,
             borderColor: v('primary-main'),
           },
         },
@@ -443,14 +520,38 @@ export const theme = createTheme({
 
     MuiInputLabel: { styleOverrides: { root: { fontSize: '0.9375rem' } } },
 
-    MuiDialog: {
+    // The page behind a dialog blurs along with it, so the pane in front reads
+    // as glass rather than as a flat card that happens to sit on a dark
+    // scrim. This is themed globally rather than per-`Modal` because every
+    // `Dialog` and `Drawer` in the app shares the same `Backdrop`.
+    MuiBackdrop: {
       styleOverrides: {
-        // Dialogs float, so unlike a card they keep a real shadow — that is the
-        // whole distinction elevation is left to carry in this design.
+        root: {
+          backgroundColor: v('glass-backdropDim'),
+          backdropFilter: 'blur(3px)',
+          WebkitBackdropFilter: 'blur(3px)',
+        },
+      },
+    },
+
+    MuiDialog: {
+      defaultProps: {
+        TransitionComponent: Grow,
+      },
+      styleOverrides: {
+        // Dialogs float, so unlike a card they keep a real shadow — that is
+        // the whole distinction elevation is left to carry in this design.
+        // Unlike a card's flat hairline, this pane is genuinely translucent:
+        // a gradient surface over a blurred view of whatever is behind it, a
+        // brighter-than-divider rim standing in for a caught edge of light,
+        // and a layered shadow that reads as depth rather than a grey smear.
         paper: {
           borderRadius: 14,
-          border: `1px solid ${v('divider')}`,
-          backgroundImage: 'none',
+          border: `1px solid ${v('glass-border')}`,
+          backgroundImage: v('glass-surface'),
+          backdropFilter: GLASS_BLUR,
+          WebkitBackdropFilter: GLASS_BLUR,
+          boxShadow: v('glass-shadow'),
         },
       },
     },
@@ -461,20 +562,51 @@ export const theme = createTheme({
       },
     },
 
+    // Menu and Popover share one glass paper — a lighter blur than a dialog's,
+    // since both sit close to their anchor and over text that must stay
+    // legible through them.
     MuiMenu: {
       styleOverrides: {
-        paper: { border: `1px solid ${v('divider')}`, borderRadius: 14, backgroundImage: 'none' },
+        paper: {
+          border: `1px solid ${v('glass-border')}`,
+          borderRadius: 14,
+          backgroundImage: v('glass-surface'),
+          backdropFilter: GLASS_BLUR_SOFT,
+          WebkitBackdropFilter: GLASS_BLUR_SOFT,
+          boxShadow: v('glass-shadow'),
+        },
       },
     },
 
-    MuiMenuItem: { styleOverrides: { root: { borderRadius: 8, marginInline: 6, marginBlock: 1 } } },
+    MuiMenuItem: {
+      styleOverrides: {
+        root: {
+          borderRadius: 8,
+          marginInline: 6,
+          marginBlock: 1,
+          transition: controlTransition('background-color'),
+        },
+      },
+    },
 
     MuiPopover: {
       styleOverrides: {
-        paper: { border: `1px solid ${v('divider')}`, borderRadius: 14, backgroundImage: 'none' },
+        paper: {
+          border: `1px solid ${v('glass-border')}`,
+          borderRadius: 14,
+          backgroundImage: v('glass-surface'),
+          backdropFilter: GLASS_BLUR_SOFT,
+          WebkitBackdropFilter: GLASS_BLUR_SOFT,
+          boxShadow: v('glass-shadow'),
+        },
       },
     },
 
+    // A tooltip stays a solid, inverted bubble rather than glass — it is
+    // small and often sits over a coloured figure or a status spine, and
+    // legibility there matters more than consistency with the larger
+    // surfaces. It still gets the layered shadow the other floating panes
+    // do, so it doesn't read as flatter than the control it's labelling.
     MuiTooltip: {
       styleOverrides: {
         tooltip: {
@@ -484,6 +616,7 @@ export const theme = createTheme({
           fontWeight: 500,
           borderRadius: 6,
           paddingInline: 8,
+          boxShadow: shadow(3, 10, 0.16),
         },
         arrow: { color: v('text-primary') },
       },
