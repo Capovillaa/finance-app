@@ -2410,3 +2410,28 @@ shared-package convention, `CLAUDE.md` section 3) — so the workflow's own buil
 order explicitly instead of hoping autobuild infers it. Runs on push, on pull request, and weekly,
 since a dependency-aware query can surface a new finding in unchanged code as CodeQL's own query
 packs are updated, not only when this repository's code changes.
+
+**CodeQL's first real run found ten alerts, and all ten were triaged and dismissed, not
+ignored.** Every one traces to the same root cause: CodeQL's standard JavaScript/TypeScript query
+pack models well-known packages (`express-rate-limit`, `csurf`/`lusca`, `express-validator`) and
+does not know this codebase's bespoke equivalents — a Redis-backed rate limiter
+(`middleware/rate-limit.ts`), a `SameSite=Lax` cookie standing in for a CSRF token
+(`docs/decisions.md`, "One origin, because the cookie says so"), and Zod-based request validation
+(`middleware/validate.ts`) — count as the same protection. Each alert was read against the actual
+code before dismissal, not dismissed on the pattern alone:
+
+| Rule | Where | Why it's a false positive here |
+| --- | --- | --- |
+| `js/cors-permissive-configuration` | `app.ts` CORS config | Permissive only when `NODE_ENV=development`; production is an explicit allowlist (section 5i) |
+| `js/clear-text-storage-of-sensitive-data` | `setRefreshCookie` | The refresh cookie must carry the real token to the client by design (HttpOnly/Lax/Secure); only its HMAC is ever persisted (M-11) |
+| `js/missing-token-validation` (×1, many instances folded into it) | `cookieParser()` | `SameSite=Lax` on the refresh cookie is the CSRF mitigation (H-4, section 5n) |
+| `js/insecure-helmet-configuration` | `helmet({ contentSecurityPolicy: false })` | This API returns JSON; the real CSP lives in nginx serving the document (section 5n) |
+| `js/type-confusion-through-parameter-tampering` (×4) | `dates.ts`'s `parseDate`, an analytics CSV filename | Every caller's input is Zod-validated (`dateField`/`dateSchema`) before reaching these lines — never reachable with an array |
+| `js/missing-rate-limiting` (×2) | `/login`, `/verify-email` | `authRateLimit` is mounted directly on both routes, one line above where CodeQL flagged them |
+
+All ten are dismissed with `false positive` and a comment on the alert itself citing the specific
+file and the decision that makes it one, so a human re-reading the Security tab later does not
+have to re-derive this table from scratch. **A CodeQL query that starts flagging a genuinely new
+pattern — not one of the six above — is a real finding and should be treated as one**; this table
+describes what was true the day L-6 shipped, not a blanket license to dismiss anything this rule
+ever reports again.

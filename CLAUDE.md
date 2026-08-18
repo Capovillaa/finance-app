@@ -3256,6 +3256,16 @@ audit checklist below outranks it.
       3 false positives, all hardcoded test passwords in
       `tests/integration/auth.test.ts`; `.gitleaks.toml`'s path allowlist for
       `apps/api/tests/` brings that to zero without touching real source.
+      **CodeQL's first run found 10 alerts; all 10 were read against the real
+      code and dismissed as false positives**, each with a comment on the
+      alert citing why — see the table in `docs/decisions.md`. Every one
+      traces to the same cause: CodeQL's query pack models well-known
+      packages (`express-rate-limit`, `csurf`) and does not recognise this
+      codebase's bespoke equivalents (the Redis rate limiter, the
+      `SameSite=Lax` cookie standing in for CSRF, Zod request validation) as
+      the same protection. **A new CodeQL alert that is not one of the six
+      patterns in that table is a real finding, not something to dismiss on
+      reflex.**
 - [ ] **[L-5] Require TLS to Postgres and Redis.**
 - [x] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
       worker. **Both done.** `docs/runbook.md` covers the single-instance
