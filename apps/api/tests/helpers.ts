@@ -27,7 +27,9 @@ export interface TestUser {
 
 let userCounter = 0;
 
-export async function registerUser(overrides: Partial<{ email: string; fullName: string; password: string }> = {}): Promise<TestUser> {
+export async function registerUser(
+  overrides: Partial<{ email: string; fullName: string; password: string; skipEmailVerification: boolean }> = {},
+): Promise<TestUser> {
   userCounter += 1;
   const email = overrides.email ?? `user${userCounter}.${Date.now()}@example.com`;
   const password = overrides.password ?? 'Sup3rSecret123';
@@ -37,6 +39,18 @@ export async function registerUser(overrides: Partial<{ email: string; fullName:
 
   if (response.status !== 201) {
     throw new Error(`registerUser failed: ${response.status} ${JSON.stringify(response.body)}`);
+  }
+
+  // Most tests have nothing to do with email verification and just want a
+  // working account — e.g. one that can accept a workspace invitation, which
+  // is gated on a verified address. Tests that specifically exercise the
+  // unverified state opt out with `skipEmailVerification`.
+  if (!overrides.skipEmailVerification) {
+    await db
+      .updateTable('users')
+      .set({ email_verified_at: new Date() })
+      .where('id', '=', response.body.user.id)
+      .execute();
   }
 
   return {

@@ -43,6 +43,7 @@ export type ValidationKey =
   | 'validation.emailRequired'
   | 'validation.emailInvalid'
   | 'validation.urlInvalid'
+  | 'validation.urlProtocol'
   | 'validation.uuidInvalid'
   | 'validation.uuidList'
   | 'validation.passwordRequired'

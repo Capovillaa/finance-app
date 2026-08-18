@@ -6,6 +6,7 @@ import {
   hasLettersAndDigits,
   isDateOnlyText,
   isMoneyText,
+  isSafeUrl,
 } from './patterns.js';
 
 /**
@@ -117,7 +118,19 @@ export const reasonField = z.string().max(LIMITS.reason.max);
 export const reconciliationNotesField = z.string().max(LIMITS.reconciliationNotes.max);
 export const timezoneField = z.string().max(LIMITS.timezone.max);
 export const localeField = z.string().max(LIMITS.locale.max);
-export const urlField = z.string().url('validation.urlInvalid').max(LIMITS.url.max);
+/**
+ * `https:` only, unconditionally — including in development. Every viewer's
+ * browser fetches whatever this stores (today via `<img src>`, as an avatar),
+ * and `javascript:`, `data:` and `file:` all parse as a syntactically valid
+ * URL, so the format check on its own lets an attacker-chosen scheme through.
+ * See `isSafeUrl` in `patterns.ts` for the finding this closes (M-2).
+ */
+export const urlField = z
+  .string()
+  .url('validation.urlInvalid')
+  .max(LIMITS.url.max)
+  .refine(isSafeUrl, 'validation.urlProtocol')
+  .meta({ pattern: '^https://', description: 'An https:// URL. No other scheme is accepted.' });
 
 export const tagNameField = z
   .string()

@@ -137,6 +137,7 @@ jobs:
             -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e EMAIL_TOKEN_SECRET="$(openssl rand -hex 32)" \
             -e SMTP_HOST=smtp.invalid \
             -e API_BASE_URL=https://finance.invalid \
             -e WEB_BASE_URL=https://finance.invalid \
@@ -170,6 +171,19 @@ jobs:
           refuses "a published JWT secret" \
             -e JWT_ACCESS_SECRET=dev-only-insecure-access-secret-change-me \
             -e JWT_REFRESH_SECRET=dev-only-insecure-refresh-secret-change-me \
+            -e EMAIL_TOKEN_SECRET="$(openssl rand -hex 32)" \
+            -e SMTP_HOST=smtp.invalid \
+            -e API_BASE_URL=https://finance.invalid \
+            -e WEB_BASE_URL=https://finance.invalid
+
+          # A new refusal in production-policy.ts owes this step a matching case:
+          # EMAIL_TOKEN_SECRET is held to the same bar as the two JWT secrets, so
+          # a published or placeholder-shaped value here must fail on its own,
+          # with valid JWT secrets supplied so the failure is attributable.
+          refuses "a published email-token secret" \
+            -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
+            -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e EMAIL_TOKEN_SECRET=dev-only-insecure-email-token-secret-change-me \
             -e SMTP_HOST=smtp.invalid \
             -e API_BASE_URL=https://finance.invalid \
             -e WEB_BASE_URL=https://finance.invalid
@@ -177,6 +191,7 @@ jobs:
           refuses "a development mail sink" \
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e EMAIL_TOKEN_SECRET="$(openssl rand -hex 32)" \
             -e SMTP_HOST=mailhog \
             -e API_BASE_URL=https://finance.invalid \
             -e WEB_BASE_URL=https://finance.invalid
@@ -187,6 +202,7 @@ jobs:
           refuses "the API and client on different origins" \
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e EMAIL_TOKEN_SECRET="$(openssl rand -hex 32)" \
             -e SMTP_HOST=smtp.invalid \
             -e API_BASE_URL=https://api.example.com \
             -e WEB_BASE_URL=https://app.example.com
@@ -205,6 +221,7 @@ jobs:
           fi
           JWT_ACCESS_SECRET=$(openssl rand -hex 32) \
           JWT_REFRESH_SECRET=$(openssl rand -hex 32) \
+          EMAIL_TOKEN_SECRET=$(openssl rand -hex 32) \
           POSTGRES_PASSWORD=$(openssl rand -hex 16) \
           REDIS_PASSWORD=$(openssl rand -hex 16) \
           SMTP_HOST=smtp.invalid \
@@ -247,6 +264,7 @@ jobs:
       # requires at least 16 characters.
       JWT_ACCESS_SECRET: ci-access-secret-not-a-real-key-000000
       JWT_REFRESH_SECRET: ci-refresh-secret-not-a-real-key-00000
+      EMAIL_TOKEN_SECRET: ci-email-token-secret-not-a-real-key-0
       LOG_LEVEL: warn
 
     steps:

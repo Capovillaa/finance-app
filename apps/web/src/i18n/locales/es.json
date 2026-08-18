@@ -141,7 +141,40 @@
     "passwordHintShort": "Al menos 10 caracteres, con letras y números",
     "baseCurrencyHint": "Moneda de referencia de este espacio.",
     "workspaceName": "Nombre del espacio",
-    "workspaceNameHint": "Por defecto, tu nombre."
+    "workspaceNameHint": "Por defecto, tu nombre.",
+    "forgotPasswordLink": "¿Olvidaste tu contraseña?",
+    "backToSignIn": "Volver a iniciar sesión",
+    "newPassword": "Nueva contraseña",
+    "forgotPassword": {
+      "title": "Restablece tu contraseña",
+      "subtitle": "Ingresa el correo electrónico de tu cuenta y te enviaremos un enlace para restablecerla.",
+      "sent": "Si existe una cuenta con ese correo, un enlace de restablecimiento está en camino.",
+      "sending": "Enviando…",
+      "submit": "Enviar enlace de restablecimiento"
+    },
+    "resetPassword": {
+      "title": "Elige una nueva contraseña",
+      "subtitle": "Esto también inicia tu sesión en este dispositivo.",
+      "missingToken": "A este enlace le falta el token. Solicita uno nuevo desde la pantalla de inicio de sesión.",
+      "failed": "No se pudo restablecer la contraseña. El enlace puede haber expirado.",
+      "submitting": "Restableciendo…",
+      "submit": "Restablecer contraseña",
+      "revokesOtherSessions": "Por seguridad, se cerrará la sesión en todos los demás dispositivos conectados."
+    },
+    "verifyEmail": {
+      "title": "Verifica tu correo electrónico",
+      "subtitle": "Confirmando la dirección de tu cuenta.",
+      "missingToken": "A este enlace le falta el token.",
+      "verifying": "Verificando…",
+      "success": "Tu dirección de correo electrónico está verificada.",
+      "failed": "Este enlace no es válido o ha expirado.",
+      "continue": "Continuar"
+    },
+    "emailVerificationBanner": {
+      "message": "Verifica tu dirección de correo electrónico para asegurarte de poder recuperar tu cuenta y aceptar invitaciones de espacios de trabajo.",
+      "resend": "Reenviar correo",
+      "resent": "Correo de verificación enviado."
+    }
   },
   "dashboard": {
     "totalBalance": "Saldo total",

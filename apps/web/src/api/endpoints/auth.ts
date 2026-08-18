@@ -1,5 +1,15 @@
 import { api } from '../api';
-import type { AuthResult, LoginRequest, RegisterRequest, TokenPair, User } from '../types';
+import type {
+  AuthResult,
+  ForgotPasswordRequest,
+  LoginRequest,
+  RegisterRequest,
+  ResetPasswordRequest,
+  ResetPasswordResult,
+  TokenPair,
+  User,
+  VerifyEmailRequest,
+} from '../types';
 
 export const authApi = api.injectEndpoints({
   endpoints: (build) => ({
@@ -39,6 +49,24 @@ export const authApi = api.injectEndpoints({
     changePassword: build.mutation<void, { currentPassword: string; newPassword: string }>({
       query: (body) => ({ url: '/auth/change-password', method: 'POST', body }),
     }),
+
+    /** Always resolves, whether or not the address has an account. */
+    forgotPassword: build.mutation<void, ForgotPasswordRequest>({
+      query: (body) => ({ url: '/auth/forgot-password', method: 'POST', body }),
+    }),
+
+    /** Signs the caller in on success, the same shape as `login`. */
+    resetPassword: build.mutation<ResetPasswordResult, ResetPasswordRequest>({
+      query: (body) => ({ url: '/auth/reset-password', method: 'POST', body }),
+    }),
+
+    verifyEmail: build.mutation<void, VerifyEmailRequest>({
+      query: (body) => ({ url: '/auth/verify-email', method: 'POST', body }),
+    }),
+
+    resendVerification: build.mutation<void, void>({
+      query: () => ({ url: '/auth/resend-verification', method: 'POST', body: {} }),
+    }),
   }),
 });
 
@@ -50,4 +78,8 @@ export const {
   useLogoutAllMutation,
   useMeQuery,
   useChangePasswordMutation,
+  useForgotPasswordMutation,
+  useResetPasswordMutation,
+  useVerifyEmailMutation,
+  useResendVerificationMutation,
 } = authApi;

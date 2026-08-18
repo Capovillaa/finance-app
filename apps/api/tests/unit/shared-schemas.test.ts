@@ -7,6 +7,7 @@ import {
   isDateOnlyText,
   isMoneyText,
   isPositiveMoneyText,
+  isSafeUrl,
   isWholeNumberInRange,
   leadTimeDaysField,
   moneyField,
@@ -14,6 +15,7 @@ import {
   passwordField,
   positiveMoneyField,
   recurringIntervalField,
+  urlField,
   validationParamsFor,
 } from '@finance/schemas';
 import { describe, expect, it } from 'vitest';
@@ -111,6 +113,27 @@ describe('bounds that had drifted between the two sides', () => {
     expect(isWholeNumberInRange('3.5', 0, 90)).toBe(false);
     expect(isWholeNumberInRange('-3', -10, 90)).toBe(false);
     expect(isWholeNumberInRange('', 0, 90)).toBe(false);
+  });
+});
+
+describe('URL shape', () => {
+  // M-2 in AUDIT_REPORT.md: `javascript:`, `data:` and `file:` all parse
+  // successfully as a URL, so a bare format check lets them through a field
+  // every other workspace member's browser then fetches.
+  it('accepts only https:', () => {
+    expect(isSafeUrl('https://example.com/avatar.png')).toBe(true);
+    expect(isSafeUrl('http://example.com/avatar.png')).toBe(false);
+    expect(isSafeUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
+    expect(isSafeUrl('file:///etc/passwd')).toBe(false);
+    expect(isSafeUrl('vbscript:msgbox(1)')).toBe(false);
+    expect(isSafeUrl('not a url at all')).toBe(false);
+  });
+
+  it('urlField agrees with isSafeUrl', () => {
+    for (const value of ['https://example.com', 'http://example.com', 'javascript:alert(1)']) {
+      expect(urlField.safeParse(value).success).toBe(isSafeUrl(value));
+    }
   });
 });
 

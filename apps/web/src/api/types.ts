@@ -142,6 +142,15 @@ export type LoginRequest = Sends<'postAuthLogin'>;
 
 export type RegisterRequest = Sends<'postAuthRegister'>;
 
+export type ForgotPasswordRequest = Sends<'postAuthForgotPassword'>;
+
+export type ResetPasswordRequest = Sends<'postAuthResetPassword'>;
+
+/** What a successful reset answers: a signed-in session, the same shape as login. */
+export type ResetPasswordResult = Ok<'postAuthResetPassword'>;
+
+export type VerifyEmailRequest = Sends<'postAuthVerifyEmail'>;
+
 // ---------------------------------------------------------------------------
 // Workspaces
 // ---------------------------------------------------------------------------

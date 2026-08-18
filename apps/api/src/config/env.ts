@@ -61,6 +61,16 @@ const schema = z.object({
   // publishes — by `production-policy.ts`, applied after this parse.
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
+  /**
+   * HMAC key for password-reset and email-verification tokens.
+   *
+   * Deliberately its own secret rather than `JWT_REFRESH_SECRET`, which
+   * already does double duty signing refresh tokens *and* workspace
+   * invitation tokens (see the M-11 finding in `AUDIT_REPORT.md`) — a third
+   * purpose on that one secret would only make an existing problem worse.
+   * Held to the same production bar as the two JWT secrets below.
+   */
+  EMAIL_TOKEN_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().regex(durationPattern).default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   /**
@@ -154,6 +164,7 @@ if (raw.NODE_ENV === 'production') {
   const secretIssues = checkProductionSecrets({
     JWT_ACCESS_SECRET: raw.JWT_ACCESS_SECRET,
     JWT_REFRESH_SECRET: raw.JWT_REFRESH_SECRET,
+    EMAIL_TOKEN_SECRET: raw.EMAIL_TOKEN_SECRET,
   });
 
   if (secretIssues.length > 0) {

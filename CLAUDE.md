@@ -22,14 +22,15 @@ Delivered:
 - npm-workspaces monorepo, Docker Compose infrastructure, TypeScript API package
 - 7 migrations covering 27 tables, with a hand-rolled migration runner
 - Platform layer: config, logging, errors, money, dates, recurrence, email, Redis
-- Auth (register/login/refresh/logout) — ~~password reset, email verification~~
-  **this line was wrong for many sessions and is corrected here: neither
-  exists.** `authRouter` mounts seven routes and none of them is a reset or a
-  verification; `users.email_verified_at` is a column only the seed script ever
-  writes. It is finding **H-1** and the first item of Phase 2 in section 7. The
-  consequences are live: a forgotten password is permanent lockout, and
-  `acceptInvitation` authorises on an unverified email string, so registering a
-  victim's address first intercepts their workspace invitation.
+- ~~Auth (register/login/refresh/logout) — ~~password reset, email verification~~~~
+  **this line was wrong for many sessions, was corrected in place to say neither
+  existed, and both are now actually built** — see section 5o. `authRouter`
+  mounts eleven routes: the original seven plus `forgot-password`,
+  `reset-password`, `verify-email` and `resend-verification`. This was finding
+  **H-1**, the first item of Phase 2 in section 7, and it is closed: a forgotten
+  password now recovers through an emailed link, and `acceptInvitation` refuses
+  an accepting account whose email is not verified, closing the invitation-theft
+  path a plain string comparison left open.
 - Workspaces with owner/admin/editor/viewer RBAC and email invitations
 - Multi-currency accounts, 3-level categories, transactions (transfers, splits,
   comments, tags, search, CSV **export**, reconciliation) — import came much
@@ -46,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-373; see section 4 for the current command. The compiled `dist/server.js`
+383; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -696,7 +697,7 @@ D:\finance_app
 │   │   │   │                        #   published/weak secret, a development
 │   │   │   │                        #   mail sink, a split origin (see 5j–5n)
 │   │   │   ├── db/
-│   │   │   │   ├── migrations/      # 001..010, plus index.ts registry
+│   │   │   │   ├── migrations/      # 001..011, plus index.ts registry
 │   │   │   │   ├── migrate.ts       # runner: up | down | status
 │   │   │   │   ├── seed.ts          # demo dataset
 │   │   │   │   ├── client.ts        # Kysely instance
@@ -739,7 +740,8 @@ D:\finance_app
 │   │       │                        # import-mapping, openapi, exchange-rates,
 │   │       │                        # rate-limit-policy, production-policy,
 │   │       │                        # errors (what a failure tells a client)
-│   │       └── integration/         # auth, workspaces, transactions, imports,
+│   │       └── integration/         # auth, auth-recovery (reset + verification),
+│   │                                # workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
 │   │                                # currencies, account-deletion,
 │   │                                # error-disclosure (a real Postgres
@@ -777,8 +779,8 @@ D:\finance_app
 │           │                        # users.ts, workspaces.ts
 │           ├── components/          # Amount, AmountHero, AppLayout, Brandmark,
 │           │                        # ChartTooltip, ColorSwatchPicker,
-│           │                        # ConfirmDialog, EmptyState,
-│           │                        # ErrorState, LanguageMenu, LedgerList,
+│           │                        # ConfirmDialog, EmailVerificationBanner,
+│           │                        # EmptyState, ErrorState, LanguageMenu, LedgerList,
 │           │                        # LedgerRow, MoneyField, NotificationsMenu,
 │           │                        # PageHeader, Panel, SeriesLegend, StatTile,
 │           │                        # UserMenu, navItems.ts
@@ -942,7 +944,7 @@ changes.
 ### Tests
 
 ```bash
-npm test                 # all 373 — needs Postgres, and only Postgres
+npm test                 # all 383 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -1022,14 +1024,16 @@ Do not "improve" this by moving them into GitHub secrets — there is nothing to
 protect, and it would only add a setup step before CI could work for anyone else.
 
 If you add a step, run it locally first with CI's own environment rather than
-your `.env` — `DATABASE_URL`, `TEST_DATABASE_URL`, `JWT_ACCESS_SECRET` and
-`JWT_REFRESH_SECRET` are the only variables without defaults:
+your `.env` — `DATABASE_URL`, `TEST_DATABASE_URL`, `JWT_ACCESS_SECRET`,
+`JWT_REFRESH_SECRET` and `EMAIL_TOKEN_SECRET` are the only variables without
+defaults:
 
 ```bash
 DATABASE_URL=postgres://finance:finance@localhost:5432/finance \
 TEST_DATABASE_URL=postgres://finance:finance@localhost:5432/finance_test \
 JWT_ACCESS_SECRET=ci-access-secret-not-a-real-key-000000 \
 JWT_REFRESH_SECRET=ci-refresh-secret-not-a-real-key-00000 \
+EMAIL_TOKEN_SECRET=ci-email-token-secret-not-a-real-key-0 \
 npm test
 ```
 
@@ -1194,7 +1198,9 @@ are features rather than operations work.
 6. ~~**OpenAPI generation.**~~ **Done, both phases.** Phase 1 (section 5d)
    generates `docs/openapi.json` from the running app, serves it at
    `/openapi.json`, and checks it in CI. Phase 2 (section 5e) describes
-   **104 of 104 operations**, every one of them checked against a real response
+   **every operation the app publishes** (108 as of section 5o's four new
+   auth routes; the number moves whenever a route does — do not treat it as
+   pinned), every one of them checked against a real response
    by the test suite — and `apps/web/src/api/types.ts` is no longer
    hand-written: `openapi-typescript` turns the spec into
    `apps/web/src/api/schema.d.ts`, and `types.ts` only assigns names to what is
@@ -1668,8 +1674,8 @@ a stale file fails the *test suite* too, not only CI. 17 tests in
 `walkRoutes()` rather than the literal 103, which is now 104 because
 `/openapi.json` is itself a route.
 
-The test file sets `DATABASE_URL` and the two JWT secrets before importing the
-app, exactly as `scripts/generate-openapi.ts` does: generating touches no
+The test file sets `DATABASE_URL` and the three signing secrets before importing
+the app, exactly as `scripts/generate-openapi.ts` does: generating touches no
 database, but `config/env.ts` parses the environment at import time and CI's
 `check` job has no Postgres to point at.
 
@@ -1677,7 +1683,9 @@ database, but `config/env.ts` parses the environment at import time and CI's
 
 ## 5e. OpenAPI phase 2 — response schemas, and the generated client types
 
-**Done.** All **104 of 104 operations** describe what they return, every one is
+**Done.** Every operation the app publishes describes what it returns (108 as
+of section 5o — the count moves whenever a route does; the invariant is "all
+of them", not the specific number), every one is
 exercised by a real call in the suite, and `apps/web/src/api/types.ts` no longer
 describes a single structure by hand. Full reasoning is in `docs/decisions.md`
 ("Response schemas live beside the service, and the test suite proves them" and
@@ -2425,6 +2433,72 @@ afterwards was in a language the user never chose. One line in `RegisterPage.tsx
 
 ---
 
+## 5o. Password reset and email verification
+
+Finding **H-1**, the first item of Phase 2 (section 7), and the one place section 1 used to be
+wrong about what this codebase had actually delivered. Full reasoning is in `docs/decisions.md`,
+"Password reset and email verification, and why they get their own signing secret". What you need
+in order not to break it:
+
+**`authRouter` now mounts eleven routes.** The original seven plus:
+
+| Method | Path | Auth | Notes |
+| --- | --- | --- | --- |
+| POST | `/forgot-password` | none | Always 204. Never reveals whether the address has an account. |
+| POST | `/reset-password` | none | Body `{ token, newPassword }`. Consumes the token, revokes every other session, signs the caller in — same response shape as `/login`. |
+| POST | `/verify-email` | none | Body `{ token }`. The token is the proof; no session is required to call it. |
+| POST | `/resend-verification` | required | No-op if already verified. |
+
+**Migration `011`** adds two nullable pairs to `users` — `password_reset_token_hash` /
+`_expires_at` and `email_verification_token_hash` / `_expires_at` — following the precedent
+`deletion_requested_at` (migration `010`) set: one outstanding request per purpose per user, and a
+new request simply overwrites the last one. There is no separate table, the same way there is none
+for the deletion grace period.
+
+**A new, dedicated signing secret: `EMAIL_TOKEN_SECRET`.** `hashEmailToken` in
+`modules/auth/tokens.ts` is the only place that touches it. It is *not*
+`JWT_REFRESH_SECRET`, which `workspaces/invitations.ts` already uses as an HMAC key and which also
+signs every refresh token — finding **M-11** already flags that as two purposes on one secret, and
+a third would only compound it. `EMAIL_TOKEN_SECRET` is held to the identical production bar as the
+two JWT secrets in `config/production-policy.ts` (length, entropy, not a published placeholder, not
+shared with either JWT secret) and is required everywhere they are: `.env`, `.env.example`,
+`.env.deploy.example`, `docker-compose.deploy.yml`'s `x-app-environment`, and every CI step that
+boots the production image. **A fourth secret added later owes all of those the same treatment.**
+
+**Registration now sends a verification email, best-effort — the same way an invitation email is.**
+`sendEmail` already swallows its own failures rather than throwing, so an unreachable SMTP host
+never fails the registration that triggered the message. `email_verified_at` stays `NULL` until the
+link is followed; nothing about signing in or using the app otherwise requires it to be set.
+
+**`acceptInvitation` now also requires the accepting account's `email_verified_at IS NOT NULL`.**
+The address match alone was the vulnerability: anyone who learned a victim was about to be invited
+could register that address first and accept the invitation before the real owner ever proved they
+controlled it. `GET /auth/me` and every `AuthenticatedResult` now carry `emailVerifiedAt`, and the
+client shows a dismiss-proof banner (`components/EmailVerificationBanner.tsx`, mounted in
+`AppLayout`) with a resend button whenever it is null.
+
+**A successful reset signs the caller in and inherits `login`'s obligations.** It returns the same
+shape `login` does (`user`, tokens, `defaultWorkspaceId`), revokes every other session in the same
+transaction as the password change — the same reasoning `changePassword` already applies — and
+calls `cancelAccountDeletion` when one is pending, the same way `login` does. `firstWorkspaceId` in
+`auth/service.ts` is shared between the two rather than duplicated.
+
+**Tests:** `registerUser()` in `tests/helpers.ts` now verifies the new account's email by default
+(a direct DB write, not the token flow), because most tests have nothing to do with verification
+and the invitation-acceptance tests need a verified invitee to keep working. Pass
+`{ skipEmailVerification: true }` to get an unverified account on purpose.
+`tests/integration/auth-recovery.test.ts` covers both flows against a real Postgres and asserts the
+invitation gate directly: blocked before verification, accepted after.
+
+**What this did not do: M-9.** Registration still answers 409 on a known email, a narrow
+enumeration oracle bounded by `authRateLimit`'s per-address bucket. The audit's own fallback — note
+the trade-off explicitly rather than force a UX change onto the one screen every new user sees
+first — was taken instead of folding a "register always answers 201" redesign into this entry. It
+is open, on the Phase 3 list is where a session that wants to spend it should look first (it is not
+currently listed there by name — add it if you pick it up).
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -2493,6 +2567,14 @@ refuses. Because a rejection now carries a catalogue key rather than an English
 sentence, the API's field-validation errors are translated. See section 5c and
 `docs/decisions.md`.
 
+**A stored URL is only as trustworthy as the scheme it names.** `urlField`'s
+`isSafeUrl` predicate (`packages/schemas/src/patterns.ts`) parses with the real
+`URL` constructor and requires `protocol === 'https:'`, unconditionally — not
+"except in development," since the shared schema package has no way to know
+which environment is asking and a shared dev environment carries the same
+tracking-beacon risk a `javascript:`/`data:`/`file:` avatar link poses in
+production. See the Phase 2 checklist's M-2 entry and `docs/decisions.md`.
+
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See
 the bug in section 1 — the revocation must outlive the rejection. Revocation
@@ -2518,6 +2600,16 @@ account password, is behind `authRateLimit`, and schedules the erasure
 `ACCOUNT_DELETION_GRACE_DAYS` ahead rather than performing it; signing in during
 the window cancels it, which is the whole undo mechanism. A daily maintenance
 task calls the same `eraseAccount` the route used to inline. See section 5m.
+
+**Password reset and email verification reuse the invitation token shape, on their own
+secret.** A random token, only its HMAC persisted, a short TTL, single use — the pattern
+`workspaces/invitations.ts` already established — but signed with a dedicated
+`EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET`, which already signs refresh tokens *and*
+invitation tokens (finding M-11) and should not pick up a third job. A reset signs the caller in
+and revokes every other session in the same transaction as the password change; verification is
+unauthenticated, because the token is the proof of control over the inbox. `acceptInvitation` now
+also requires the accepting account's `email_verified_at` to be set — matching the invited address
+was never sufficient on its own, since anyone could register it first. See section 5o.
 
 **An error response is written by this codebase, not by Postgres.** The body is
 `code`, a catalogue sentence, the rejected fields, and `requestId` — nothing
@@ -2735,32 +2827,35 @@ with a grace period) and **5n** (one origin, and a server for the client) are th
 per-finding notes; `docs/decisions.md` has the reasoning for each. **Nothing in
 Phase 1 is half-finished**, and no work is in progress in the tree.
 
-**Start with H-1, the first item of Phase 2.** It is the largest remaining piece,
-it is the one thing this file used to claim falsely (now corrected in section 1),
-and it is a security hole rather than only a missing feature: `acceptInvitation`
-authorises on an unverified email string, so registering a victim's address ahead
-of their invitation intercepts it. It also unblocks **M-9** — registration cannot
-stop disclosing which addresses exist until there is a verification email to send
-instead.
+**H-1 is done — see section 5o.** It was the largest remaining piece and the one
+thing this file used to claim falsely (corrected in place in section 1):
+password reset and email verification are both built, and `acceptInvitation`
+now refuses an accepting account whose email is not verified, closing the
+invitation-theft path a plain string comparison left open. **M-9 was left open
+on purpose** — H-1's fix unblocked it, but folding it in would have meant
+redesigning what registration answers on a known email, which the audit itself
+treats as a decision worth taking on its own.
 
-Four things a fresh agent should know before touching Phase 2:
+**M-2 is also done** — `urlField` now refuses anything but `https:`, closing
+the `avatarUrl` tracking-beacon/stored-XSS surface described in its checklist
+entry below. Pick a next item from what remains of Phase 2 (M-4, M-5, P-3,
+P-2/M-8, P-5), or M-9.
+
+Three things a fresh agent should know before touching what is left of Phase 2:
 
 - **Two decisions in Phase 1 were the user's, not defaults.** Same-origin over
   `SameSite=None` + CSRF (H-4), and a 7-day recoverable erasure over an immediate
   one (H-2). Both are now enforced in code; do not quietly reverse either.
 - **`config/production-policy.ts` is where a boot-time refusal goes.** It holds
-  three already. Adding a fourth means adding its variable to the CI steps in the
-  table under "CI" in section 4 — read that note first.
-- **A verification or reset flow reuses machinery that exists.**
-  `workspaces/invitations.ts` already demonstrates the whole pattern (random
-  token, HMAC stored, TTL, single use), and `lib/email.ts` + the delivery queue
-  already send mail. What it must *not* reuse is `JWT_REFRESH_SECRET` as its HMAC
-  key — that is **M-11**, and adding a third purpose to that one secret makes it
-  worse.
+  three secret checks now (JWT access, JWT refresh, and — since H-1 —
+  `EMAIL_TOKEN_SECRET`), all through the same generic `checkProductionSecrets`.
+  Adding a genuinely new *rule* (not just another secret in that same check)
+  means adding its variable to the CI steps in the table under "CI" in section 4
+  — read that note first.
 - **The erasure lifecycle has a hook a new sign-in path must respect.** `login`
-  calls `cancelAccountDeletion`. A magic link, an OAuth callback or a
-  reset-then-sign-in flow that skips it would let a pending deletion run after
-  the user has demonstrably come back.
+  and the new `resetPassword` both call `cancelAccountDeletion`. Any further
+  sign-in path — a magic link, an OAuth callback — that skips it would let a
+  pending deletion run after the user has demonstrably come back.
 
 `to_do.txt` in the working tree is the user's own list of interface complaints,
 in Portuguese, and is gitignored alongside `AUDIT_REPORT.md`. Most of it was
@@ -2819,23 +2914,32 @@ audit checklist below outranks it.
 
 ### Phase 2 — before real users
 
-- [ ] **[H-1] Build password reset and email verification.** Neither exists.
-      **Start here** — see "Where this stands" above. Section 1's claim that both
-      were delivered is already corrected, so that part of P-6 is done and the
-      feature itself is not. Consequences today: a forgotten password is
-      permanent lockout, and because `acceptInvitation` authorises on an
-      unverified email string, someone can register a victim's address to
-      intercept a workspace invitation. Reuse the token machinery
-      `workspaces/invitations.ts` already demonstrates — but **not**
-      `JWT_REFRESH_SECRET` as its key; that is M-11, and a third purpose on one
-      secret makes it worse. `POST /auth/forgot-password` should always answer
-      204, behind `authRateLimit`, and a successful reset should call
-      `revokeAllUserTokens`; gate invitation acceptance on `email_verified_at`.
-      A reset flow that signs the user in must also call
-      `cancelAccountDeletion`, the way `login` does (section 5m).
-- [ ] **[M-2] Restrict `urlField` to `https:`.** Zod's `.url()` accepts
-      `javascript:`, `data:` and `file:` — verified by running it. It backs
-      `avatarUrl`, which every other workspace member's browser then fetches.
+- [x] **[H-1] Build password reset and email verification.** **Done** — see
+      section 5o. `POST /auth/forgot-password` always answers 204, behind
+      `authRateLimit`; a successful `POST /auth/reset-password` calls
+      `revokeAllUserTokens` and signs the caller in; `acceptInvitation` refuses
+      an accepting account whose `email_verified_at` is null. The token
+      machinery reuses the shape `workspaces/invitations.ts` demonstrates, but
+      signs with its own `EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET` —
+      M-11 is still open, but this did not make it worse. **M-9 was left open
+      deliberately**, noted in section 5o rather than folded in.
+- [x] **[M-2] Restrict `urlField` to `https:`.** **Done.** `.url()` alone
+      accepted `javascript:`, `data:`, `file:` and `vbscript:` — verified by
+      running it — and backed `avatarUrl`, which every other workspace member's
+      browser fetches. `isSafeUrl` in `packages/schemas/src/patterns.ts` parses
+      with the real `URL` constructor and requires `protocol === 'https:'`,
+      unconditionally rather than "except in development" as the audit
+      suggested: this package has no way to know which environment is asking,
+      and a shared dev environment carries the same risk. `urlField` refines on
+      it (new key `validation.urlProtocol`, translated in all three locales),
+      and the web client's own hand-rolled `optionalUrlSchema` in
+      `features/settings/settingsSchemas.ts` now calls the same predicate
+      instead of only checking `z.string().url()` — the two had been diverging
+      on exactly this rule. `apps/api/tests/unit/shared-schemas.test.ts` pins
+      `isSafeUrl` against all four rejected schemes and checks `urlField`
+      agrees with it. `avatarUrl`'s `.meta()` now publishes the `^https://`
+      pattern too, so the generated spec stops looking more permissive than
+      the API actually is.
 - [ ] **[M-4] Add timeouts.** No `statement_timeout`, no `query_timeout`, no
       `idle_in_transaction_session_timeout`, no per-request timeout — ten slow
       queries exhaust a pool of ten.
@@ -2854,6 +2958,14 @@ audit checklist below outranks it.
 
 ### Phase 3 — hardening
 
+- [ ] **[M-9] Registration discloses whether an address has an account.**
+      Left open when H-1 shipped — see section 5o. Register still answers 409
+      on a known email; `authRateLimit`'s per-address bucket bounds it, but the
+      per-account bucket does not help since every probe is a different
+      address. The audit's own fix is "ideally, register always returns 201
+      and sends either a welcome or an account-exists email" — which is a real
+      UX change to the first screen a new user sees, and deserves to be decided
+      on its own rather than folded into another task's diff.
 - [ ] **[M-7] A table-driven RBAC test.** Across 104 operations only two
       integration files assert a 403 at all. Walk `walkRoutes()`, sign in as a
       viewer, assert 403 on everything that requires more.

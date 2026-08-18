@@ -1827,3 +1827,140 @@ back in a language its owner never chose, inside a UI that was obeying them corr
   two modules are described — see "Response schemas live beside the service" above. The remaining
   modules still publish success as the `2XX` range with no content, and `apps/web/src/api/types.ts`
   stays hand-written until they do not.
+
+---
+
+### Password reset and email verification, and why they get their own signing secret
+
+Finding **H-1**, the first item of `AUDIT_REPORT.md`'s Phase 2. `CLAUDE.md` had claimed since
+session one that both existed; neither did. `authRouter` mounted seven routes and none of them was
+a reset or a verification, and `users.email_verified_at` was a column only the seed script ever
+wrote. Two consequences followed directly: a forgotten password was permanent lockout, and
+`acceptInvitation` authorised membership by comparing an invitation's email to `users.email` as a
+plain string — so anyone who learned that `victim@example.com` was about to be invited to a
+workspace could register that address first and accept the invitation before its real owner ever
+proved they controlled it.
+
+**Both flows reuse the shape `workspaces/invitations.ts` already demonstrated**: a random token,
+only its HMAC persisted, a short TTL, single use. What they do *not* reuse is
+`JWT_REFRESH_SECRET`, which that same file uses as its HMAC key — and which also signs every
+refresh token. Finding **M-11** already named that as a problem (rotating the secret after a leak
+silently invalidates every outstanding invitation, and a weakness in one context reaches the
+other); handing a *third* purpose to the same secret would only have made it worse the day someone
+finally fixes M-11 properly with HKDF subkeys. A new `EMAIL_TOKEN_SECRET` — held to the identical
+production bar as the two JWT secrets in `production-policy.ts` (length, entropy, not one of this
+repository's published placeholders, not shared with either JWT secret) — signs password-reset and
+email-verification tokens instead. `hashEmailToken` in `modules/auth/tokens.ts` is the one place
+that touches it.
+
+**The columns are nullable pairs on `users`, not a new table.** `password_reset_token_hash` /
+`_expires_at` and `email_verification_token_hash` / `_expires_at` (migration `011`) follow the
+precedent `deletion_requested_at` (migration `010`) set: at most one outstanding request per
+purpose per user, and a fresh request simply overwrites the last one, which is exactly the right
+behaviour — only the newest emailed link should work.
+
+**Registration now sends a verification email, best-effort, the same way an invitation email is
+best-effort.** `sendEmail` already logs and swallows its own failures rather than throwing, on the
+reasoning that an unreachable SMTP host must not fail the request that triggered the message; that
+reasoning applies identically here, so `register()` awaits it but nothing about the response
+depends on whether it actually got sent.
+
+**`POST /auth/forgot-password` always answers 204.** Whether the address has an account is decided
+inside the service and never reflected in the response — the whole point, since the alternative
+is an enumeration oracle. `POST /auth/reset-password` and `POST /auth/verify-email` are both
+unauthenticated by design: the token *is* the proof of control over the inbox, and a verification
+link in particular may be opened on a device that never held a session at all (a webmail
+provider's own preview pane, a different browser).
+
+**A successful reset signs the caller in**, returning the same shape `login` does — `user`,
+`accessToken`, `refreshToken`, `expiresIn`, `defaultWorkspaceId` — rather than requiring a second
+round trip through the login form with the password just chosen. It revokes every other session in
+the same transaction as the password change, for the same reason `changePassword` already does:
+a reset is exactly the moment a previous, possibly-compromised session should not survive. And it
+calls `cancelAccountDeletion` when one is pending, for the same reason `login` does — proving
+control of the account, here by controlling the inbox behind the reset link, is what calls off a
+scheduled erasure, and a reset flow that signs the user in inherits that obligation rather than
+being a second, forgotten path around it.
+
+**`acceptInvitation` now also requires `email_verified_at IS NOT NULL`** on the accepting account,
+checked alongside the existing email-string match. Matching the address was necessary but not
+sufficient — proving control of it is what the string comparison was silently assuming all along.
+
+**What this did *not* do: M-9.** Registration still answers 409 on a known email
+(`auth.emailTaken`), which is a narrow but real enumeration oracle — `authRateLimit`'s per-address
+bucket bounds it at ten attempts a minute, and the per-account bucket does not help since every
+probe uses a different candidate address. The audit's own fallback for M-9 was to accept the
+trade-off explicitly rather than force registration into an "always 201, and either a welcome or an
+account-exists email" shape, which is a real UX change to the one screen every new user sees first
+and deserves to be decided on its own rather than folded silently into this entry. Left open,
+deliberately, for a session that wants to spend it.
+
+**Verified against a real Postgres, a real SMTP sink, and a real browser, not only unit tests.** 8
+new integration tests cover: registration sends a verification email and the account starts
+unverified; verifying unblocks an invitation that was rejected before verification and accepted
+after; an unknown or already-used verification token is rejected; resending is a no-op once
+verified; `forgot-password` answers 204 for both a real and an unknown address; a reset changes the
+password, signs the caller in, and revokes the session that existed before it; an unknown or
+expired reset token is rejected; and a reset cancels a pending account deletion. All four new
+operations are exercised by a passing test (`RESPONSE_REACH=1`), and the full 381-test suite stayed
+green. Beyond that, Playwright drove the real dev stack end to end through MailHog: register, see
+the unverified banner, follow the emailed verification link, watch the banner clear without a
+reload, sign out, request a reset through the emailed link, land back on the dashboard already
+signed in, and confirm the old password is rejected while the new one works. The only surprise was
+in the *test tooling*, not the app: MailHog serves the raw SMTP wire body, which is
+quoted-printable encoded, so a 40-odd-character token routinely acquires a soft line break or an
+escaped `=` inside it — invisible if you only read `sentInTests` in the unit/integration suite,
+since that outbox holds the message before MIME encoding.
+
+---
+
+### A stored URL is only as safe as the schemes it can name
+
+Finding **M-2**. `packages/schemas/src/fields.ts`'s `urlField` was `z.string().url()` and nothing
+else, and Zod's `.url()` parses `javascript:alert(1)`, `data:text/html,<script>…`,
+`file:///etc/passwd` and `vbscript:x` as successfully as it parses `https://example.com` — a URL's
+grammar does not care what scheme it names. The field backs `avatarUrl`, which every other
+workspace member's browser fetches to render an `<img src>`. None of those schemes execute there,
+so this was not live script injection, but a `data:` or `javascript:` avatar link is still a
+tracking beacon (IP, User-Agent, viewing time) an attacker gets to choose, fired at everyone who
+shares a workspace with the account that set it — and it is one refactor into an `<a href>` away
+from becoming exactly the injection it currently only resembles.
+
+**The fix is one predicate, `isSafeUrl` in `patterns.ts`: parse with the real `URL` constructor and
+require `protocol === 'https:'`.** Nothing more elaborate was needed — the vulnerability was never
+about URL *syntax*, only about which schemes were allowed to reach a sink that treats a value as
+"safe to fetch."
+
+**Unconditionally `https:`, not "`https:` in production, `http:` elsewhere," which is what the
+audit itself suggested.** `@finance/schemas` is deliberately I/O-free and environment-blind — the
+same constraint `production-policy.ts`, `rate-limit-policy.ts` and `providers.ts` are written under,
+for the same reason: the decision is the part worth testing without an environment to stub, and a
+package that reads `NODE_ENV` to decide what it accepts stops being that. It would also not have
+bought anything: a development or staging deployment is exactly as multi-user as production, so the
+tracking-beacon risk does not become acceptable just because a build flag says "not production."
+
+**The predicate lives beside the other shared shapes, not inside `fields.ts` alone, because the web
+client needed it too.** `features/settings/settingsSchemas.ts` had its own hand-rolled
+`optionalUrlSchema`, built from `z.string().url()` directly rather than from anything in
+`@finance/schemas` — the exact drift section 5c's shared-schema package exists to end, just not yet
+noticed for this one field. It now calls `isSafeUrl` as a second `.refine()`, so a `javascript:`
+avatar link is rejected while typing rather than after a round trip that returns the same rejection
+translated. A new catalogue key, `validation.urlProtocol`, carries the message in all three
+languages, the same as every other shared rule.
+
+**`urlField` gained a `.meta()` alongside the real `.refine()`**, for the same reason `moneyField`
+and `dateField` already have one: `z.toJSONSchema()` drops a `.refine()` silently, so without it the
+generated spec would keep describing `avatarUrl` as `format: uri` with no hint that most URIs are
+now rejected — a spec that undersells its own strictness is a spec a consumer will code against
+incorrectly. The `^https://` pattern is documentation of a real constraint here, not a restatement
+that could drift from the check the way the money field's warns against, since both live in the one
+`isSafeUrl` call.
+
+Verified two ways: `apps/api/tests/unit/shared-schemas.test.ts` pins `isSafeUrl` against all four
+rejected schemes plus a plain non-URL string, and checks `urlField.safeParse(...).success` agrees
+with it at every one of those values, which is the same "the field and the predicate must not
+disagree" shape every other shared rule in that file is tested with. And against the real running
+API: a registered account's `PATCH /users/me` was sent `javascript:alert(1)`, a `data:` URL and
+`http://example.com/a.png`, each answering 422 with `validation.urlProtocol` — rendered in pt-BR,
+the account's default locale, without anything in this fix touching translation — while
+`https://example.com/a.png` on the same account answered 200.

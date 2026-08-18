@@ -2,9 +2,12 @@ import type { ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import AppLayout from './components/AppLayout';
+import ForgotPasswordPage from './features/auth/ForgotPasswordPage';
 import LoginPage from './features/auth/LoginPage';
 import RegisterPage from './features/auth/RegisterPage';
 import RequireAuth from './features/auth/RequireAuth';
+import ResetPasswordPage from './features/auth/ResetPasswordPage';
+import VerifyEmailPage from './features/auth/VerifyEmailPage';
 import AccountsPage from './pages/AccountsPage';
 import AlertsPage from './pages/AlertsPage';
 import BudgetsPage from './pages/BudgetsPage';
@@ -42,6 +45,10 @@ export default function App(): ReactElement {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      {/* Reachable signed in or out: the token is the proof, not the session. */}
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
 
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>

@@ -57,9 +57,11 @@ const PUBLISHED_SECRETS = new Set(
     'dev-refresh-secret-change-me-000000000000',
     'dev-only-insecure-access-secret-change-me',
     'dev-only-insecure-refresh-secret-change-me',
+    'dev-only-insecure-email-token-secret-change-me',
     // .github/workflows/ci.yml, and the same values in CLAUDE.md
     'ci-access-secret-not-a-real-key-000000',
     'ci-refresh-secret-not-a-real-key-00000',
+    'ci-email-token-secret-not-a-real-key-0',
     // scripts/generate-openapi.ts and tests/unit/openapi.test.ts
     'openapi-generation-placeholder-secret',
   ].map(normalise),

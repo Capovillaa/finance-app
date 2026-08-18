@@ -68,7 +68,12 @@
     "emailTaken": "An account with this email already exists",
     "accountSuspended": "This account is suspended",
     "noPasswordSet": "This account has no password set",
-    "wrongCurrentPassword": "Current password is incorrect"
+    "wrongCurrentPassword": "Current password is incorrect",
+    "resetTokenInvalid": "This password reset link is invalid",
+    "resetTokenExpired": "This password reset link has expired",
+    "verificationTokenInvalid": "This verification link is invalid",
+    "verificationTokenExpired": "This verification link has expired",
+    "emailAlreadyVerified": "This email address is already verified"
   },
   "workspaces": {
     "notSpecified": "Workspace not specified",
@@ -87,7 +92,8 @@
     "alreadyMember": "That person is already a member of this workspace",
     "notValid": "This invitation is no longer valid",
     "expired": "This invitation has expired",
-    "wrongEmail": "This invitation was sent to a different email address"
+    "wrongEmail": "This invitation was sent to a different email address",
+    "emailNotVerified": "Verify your email address before accepting this invitation"
   },
   "categories": {
     "depthLimit": "Category hierarchy is limited to three levels",
@@ -189,6 +195,23 @@
       "body2_one": "This invitation expires in {{count}} day.",
       "body2_other": "This invitation expires in {{count}} days.",
       "action": "Accept invitation"
+    },
+    "verification": {
+      "subject": "Verify your email address",
+      "greeting": "Confirm your email",
+      "body1": "Hi {{name}}, please confirm this is your email address to finish setting up your account.",
+      "body2_one": "This link expires in {{count}} hour.",
+      "body2_other": "This link expires in {{count}} hours.",
+      "action": "Verify email"
+    },
+    "passwordReset": {
+      "subject": "Reset your password",
+      "greeting": "Reset your password",
+      "body1": "Hi {{name}}, we received a request to reset your password.",
+      "body2_one": "This link expires in {{count}} hour.",
+      "body2_other": "This link expires in {{count}} hours.",
+      "body3": "If you did not request this, you can safely ignore this email — your password will not change.",
+      "action": "Reset password"
     },
     "notification": {
       "greeting": "Hi {{name}},",

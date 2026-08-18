@@ -16,6 +16,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import WorkspaceSwitcher from '../features/workspace/WorkspaceSwitcher';
 import AppBar from '@mui/material/AppBar';
 import Brandmark from './Brandmark';
+import EmailVerificationBanner from './EmailVerificationBanner';
 import NotificationsMenu from './NotificationsMenu';
 import UserMenu from './UserMenu';
 import { EASE_OUT, MotionBox, useReducedMotion } from '../lib/motion';
@@ -162,6 +163,7 @@ export default function AppLayout(): ReactElement {
       >
         <Toolbar />
         <Box sx={{ maxWidth: CONTENT_MAX_WIDTH, mx: 'auto', pt: 3 }}>
+          <EmailVerificationBanner />
           <Outlet />
         </Box>
       </Box>

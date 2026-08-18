@@ -1,3 +1,9 @@
+/// <reference lib="dom" />
+// The only reason for this: `URL` is a genuine runtime global in both Node and
+// every browser, but `tsconfig.json` deliberately sets `"types": []` and a DOM-
+// free `lib` so this package cannot accidentally reach for an environment API
+// it does not have — see the note there. This directive borrows just the type
+// declaration, not any actual DOM surface; nothing here runs in a document.
 import { LIMITS } from './limits.js';
 
 /**
@@ -70,4 +76,26 @@ export function isWholeNumberInRange(value: string, min: number, max: number): b
   if (!WHOLE_NUMBER_PATTERN.test(value)) return false;
   const parsed = Number(value);
   return parsed >= min && parsed <= max;
+}
+
+/**
+ * Whether a URL is safe to store as an avatar link.
+ *
+ * `javascript:`, `data:`, `file:` and `vbscript:` all parse successfully under
+ * `new URL()` — and under Zod's own `.url()` — so a bare format check lets any
+ * of them through a field that every other workspace member's browser then
+ * fetches. Today's sink is an `<img src>`, where none of those schemes
+ * execute, but a `data:` or `javascript:` URL there is still a tracking beacon
+ * an attacker chose, fired against everyone who shares a workspace with the
+ * account that set it, and one refactor into an `<a href>` away from stored
+ * XSS. `https:` is required unconditionally — in development too, since a
+ * shared dev environment carries the same risk and this package has no way to
+ * know which environment is asking.
+ */
+export function isSafeUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }

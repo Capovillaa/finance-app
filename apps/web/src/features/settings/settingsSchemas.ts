@@ -2,6 +2,7 @@ import {
   CURRENCY_CODE_LENGTH,
   GRANTABLE_ROLES,
   LIMITS,
+  isSafeUrl,
   type WorkspaceRole,
 } from '@finance/schemas';
 import { z } from 'zod';
@@ -21,12 +22,18 @@ import { passwordSchema } from '../auth/authSchemas';
  * The server takes `urlField.nullish()`, so the empty case is mapped to `null`
  * at submit time rather than being sent as an empty string, which would fail
  * its `url()` check.
+ *
+ * `isSafeUrl` is the same predicate the server's `urlField` refines on
+ * (`@finance/schemas`), so a `javascript:`/`data:`/`file:` avatar link is
+ * rejected here rather than round-tripping to the API to find out — see M-2
+ * in `AUDIT_REPORT.md`.
  */
 const optionalUrlSchema = z
   .string()
   .trim()
   .max(LIMITS.url.max)
-  .refine((value) => value === '' || z.string().url().safeParse(value).success, 'validation.urlInvalid');
+  .refine((value) => value === '' || z.string().url().safeParse(value).success, 'validation.urlInvalid')
+  .refine((value) => value === '' || isSafeUrl(value), 'validation.urlProtocol');
 
 export const profileFormSchema = z.object({
   fullName: z.string().trim().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),

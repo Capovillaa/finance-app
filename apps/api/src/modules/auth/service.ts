@@ -1,5 +1,9 @@
+import { randomBytes } from 'node:crypto';
+import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { conflict, invalidCredentials, notFound, unauthorized } from '../../lib/errors.js';
+import { passwordResetEmail, sendEmail, verificationEmail } from '../../lib/email.js';
+import { conflict, invalidCredentials, notFound, unauthorized, unprocessable } from '../../lib/errors.js';
+import { resolveLocale } from '../../lib/i18n.js';
 import { recordActivity } from '../activity/service.js';
 // `users/service` reaches back into `auth/password` and `auth/tokens`, never
 // into this file, so this import is one-way rather than a cycle.
@@ -7,12 +11,17 @@ import { cancelAccountDeletion } from '../users/service.js';
 import { createWorkspace } from '../workspaces/service.js';
 import { fakeVerify, hashPassword, verifyPassword } from './password.js';
 import {
+  hashEmailToken,
   issueRefreshToken,
   revokeAllUserTokens,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
 } from './tokens.js';
+
+/** How long an emailed link stays usable. Both are deliberately short-lived. */
+const EMAIL_VERIFICATION_TTL_HOURS = 24;
+const PASSWORD_RESET_TTL_HOURS = 1;
 
 export interface AuthContext {
   ipAddress?: string | null;
@@ -28,6 +37,7 @@ export interface AuthenticatedResult {
     timezone: string;
     baseCurrency: string;
     avatarUrl: string | null;
+    emailVerifiedAt: Date | null;
   };
   accessToken: string;
   refreshToken: string;
@@ -98,6 +108,11 @@ export async function register(input: RegisterInput, context: AuthContext): Prom
     userAgent: context.userAgent ?? null,
   });
 
+  // Best-effort, like the invitation email: `sendEmail` logs and swallows its
+  // own failures rather than throwing, so an unreachable SMTP host must not
+  // fail the registration that triggered it.
+  await issueEmailVerification(user);
+
   return {
     user: toPublicUser(user),
     ...tokens,
@@ -149,20 +164,12 @@ export async function login(
     userAgent: context.userAgent ?? null,
   });
 
-  const firstWorkspace = await db
-    .selectFrom('workspace_members')
-    .innerJoin('workspaces', 'workspaces.id', 'workspace_members.workspace_id')
-    .select('workspaces.id as id')
-    .where('workspace_members.user_id', '=', user.id)
-    .where('workspaces.archived_at', 'is', null)
-    .orderBy('workspaces.created_at', 'asc')
-    .limit(1)
-    .executeTakeFirst();
+  const defaultWorkspaceId = await firstWorkspaceId(user.id);
 
   return {
     user: toPublicUser(user),
     ...tokens,
-    ...(firstWorkspace ? { defaultWorkspaceId: firstWorkspace.id } : {}),
+    ...(defaultWorkspaceId ? { defaultWorkspaceId } : {}),
   };
 }
 
@@ -225,6 +232,227 @@ export async function changePassword(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Email verification
+// ---------------------------------------------------------------------------
+
+interface VerifiableUser {
+  id: string;
+  email: string;
+  full_name: string;
+  locale: string;
+}
+
+/** Generates a fresh verification token, stores its hash, and emails the link. */
+async function issueEmailVerification(user: VerifiableUser): Promise<void> {
+  const token = randomBytes(32).toString('base64url');
+
+  await db
+    .updateTable('users')
+    .set({
+      email_verification_token_hash: hashEmailToken(token),
+      email_verification_expires_at: new Date(Date.now() + EMAIL_VERIFICATION_TTL_HOURS * 3_600_000),
+    })
+    .where('id', '=', user.id)
+    .execute();
+
+  const verifyUrl = `${env.WEB_BASE_URL}/verify-email?token=${token}`;
+
+  await sendEmail(
+    verificationEmail({
+      to: user.email,
+      fullName: user.full_name,
+      verifyUrl,
+      expiresInHours: EMAIL_VERIFICATION_TTL_HOURS,
+      locale: resolveLocale(user.locale),
+    }),
+  );
+}
+
+/**
+ * Re-sends the verification email for the signed-in account.
+ *
+ * A no-op when the address is already verified, rather than an error: asking
+ * again must not spam the inbox, and the client hides the "resend" control
+ * once verified anyway, so this path is a defensive no-op rather than a case
+ * worth its own message.
+ */
+export async function resendVerification(userId: string): Promise<void> {
+  const user = await db
+    .selectFrom('users')
+    .select(['id', 'email', 'full_name', 'locale', 'email_verified_at'])
+    .where('id', '=', userId)
+    .executeTakeFirst();
+  if (!user) throw notFound('resources.user');
+  if (user.email_verified_at) return;
+
+  await issueEmailVerification(user);
+}
+
+/**
+ * Confirms an emailed verification link.
+ *
+ * Unauthenticated on purpose: the token itself is the proof of control over
+ * the inbox, and the link may be opened with no session at all — a different
+ * device, or a webmail client's own preview pane.
+ */
+export async function verifyEmail(token: string): Promise<void> {
+  const tokenHash = hashEmailToken(token);
+
+  const user = await db
+    .selectFrom('users')
+    .select(['id', 'email_verification_expires_at'])
+    .where('email_verification_token_hash', '=', tokenHash)
+    .executeTakeFirst();
+
+  if (!user) throw unprocessable('auth.verificationTokenInvalid');
+  if (!user.email_verification_expires_at || user.email_verification_expires_at.getTime() <= Date.now()) {
+    throw unprocessable('auth.verificationTokenExpired');
+  }
+
+  await db
+    .updateTable('users')
+    .set({
+      email_verified_at: new Date(),
+      email_verification_token_hash: null,
+      email_verification_expires_at: null,
+    })
+    .where('id', '=', user.id)
+    .execute();
+
+  await recordActivity({
+    actorUserId: user.id,
+    action: 'auth.email_verified',
+    entityType: 'user',
+    entityId: user.id,
+    summary: 'Email address verified',
+    auditOnly: true,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
+
+/**
+ * Requests a password-reset email.
+ *
+ * Always resolves, whether or not the address has an account — the route
+ * answers 204 unconditionally regardless, which is what keeps this from being
+ * an oracle for which addresses are registered.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const normalised = email.trim().toLowerCase();
+
+  const user = await db
+    .selectFrom('users')
+    .select(['id', 'email', 'full_name', 'locale'])
+    .where('email', '=', normalised)
+    .where('deleted_at', 'is', null)
+    .executeTakeFirst();
+  if (!user) return;
+
+  const token = randomBytes(32).toString('base64url');
+
+  await db
+    .updateTable('users')
+    .set({
+      password_reset_token_hash: hashEmailToken(token),
+      password_reset_expires_at: new Date(Date.now() + PASSWORD_RESET_TTL_HOURS * 3_600_000),
+    })
+    .where('id', '=', user.id)
+    .execute();
+
+  const resetUrl = `${env.WEB_BASE_URL}/reset-password?token=${token}`;
+
+  await sendEmail(
+    passwordResetEmail({
+      to: user.email,
+      fullName: user.full_name,
+      resetUrl,
+      expiresInHours: PASSWORD_RESET_TTL_HOURS,
+      locale: resolveLocale(user.locale),
+    }),
+  );
+}
+
+/**
+ * Consumes a password-reset token and signs the caller straight back in — the
+ * same shape `login` returns, so the client can treat a successful reset
+ * exactly like a fresh sign-in.
+ *
+ * Every other session is revoked in the same transaction as the password
+ * change, for the same reason `changePassword` does it: a reset is exactly the
+ * moment a previous, possibly-compromised session should not survive.
+ */
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+  context: AuthContext,
+): Promise<AuthenticatedResult> {
+  const tokenHash = hashEmailToken(token);
+
+  const user = await db
+    .selectFrom('users')
+    .selectAll()
+    .where('password_reset_token_hash', '=', tokenHash)
+    .executeTakeFirst();
+
+  if (!user) throw unprocessable('auth.resetTokenInvalid');
+  if (!user.password_reset_expires_at || user.password_reset_expires_at.getTime() <= Date.now()) {
+    throw unprocessable('auth.resetTokenExpired');
+  }
+
+  const hash = await hashPassword(newPassword);
+
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .updateTable('users')
+      .set({ password_hash: hash, password_reset_token_hash: null, password_reset_expires_at: null })
+      .where('id', '=', user.id)
+      .execute();
+    await revokeAllUserTokens(user.id, trx);
+  });
+
+  // Same reasoning as `login`: proving control of the account — here, of the
+  // inbox behind the reset link — is what calls off a pending erasure.
+  if (user.deletion_requested_at) await cancelAccountDeletion(user.id);
+
+  await recordActivity({
+    actorUserId: user.id,
+    action: 'auth.password_reset',
+    entityType: 'user',
+    entityId: user.id,
+    summary: 'Password reset',
+    auditOnly: true,
+    ipAddress: context.ipAddress ?? null,
+    userAgent: context.userAgent ?? null,
+  });
+
+  const tokens = await issueTokens(user.id, user.email, context);
+  const defaultWorkspaceId = await firstWorkspaceId(user.id);
+
+  return {
+    user: toPublicUser(user),
+    ...tokens,
+    ...(defaultWorkspaceId ? { defaultWorkspaceId } : {}),
+  };
+}
+
+/** The oldest active workspace a user belongs to, for the client's first navigation. */
+async function firstWorkspaceId(userId: string): Promise<string | undefined> {
+  const row = await db
+    .selectFrom('workspace_members')
+    .innerJoin('workspaces', 'workspaces.id', 'workspace_members.workspace_id')
+    .select('workspaces.id as id')
+    .where('workspace_members.user_id', '=', userId)
+    .where('workspaces.archived_at', 'is', null)
+    .orderBy('workspaces.created_at', 'asc')
+    .limit(1)
+    .executeTakeFirst();
+  return row?.id;
+}
+
 async function issueTokens(
   userId: string,
   email: string,
@@ -247,6 +475,7 @@ interface UserRow {
   timezone: string;
   base_currency: string;
   avatar_url: string | null;
+  email_verified_at?: Date | null;
 }
 
 export function toPublicUser(user: UserRow): AuthenticatedResult['user'] {
@@ -258,6 +487,7 @@ export function toPublicUser(user: UserRow): AuthenticatedResult['user'] {
     timezone: user.timezone,
     baseCurrency: user.base_currency,
     avatarUrl: user.avatar_url,
+    emailVerifiedAt: user.email_verified_at ?? null,
   };
 }
 

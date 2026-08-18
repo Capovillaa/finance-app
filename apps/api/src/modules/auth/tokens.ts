@@ -231,6 +231,18 @@ export async function purgeExpiredTokens(): Promise<number> {
   return Number(result.numDeletedRows ?? 0);
 }
 
+/**
+ * HMAC for password-reset and email-verification tokens.
+ *
+ * A separate key from `hashRefreshToken`'s `JWT_REFRESH_SECRET`, on purpose —
+ * see `EMAIL_TOKEN_SECRET` in `config/env.ts`. Only the hash reaches the
+ * database, so a leak of `users.password_reset_token_hash` or
+ * `.email_verification_token_hash` cannot be replayed into either flow.
+ */
+export function hashEmailToken(token: string): string {
+  return createHmac('sha256', env.EMAIL_TOKEN_SECRET).update(token).digest('hex');
+}
+
 /** Constant-time comparison for opaque tokens delivered by other channels. */
 export function safeEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a);

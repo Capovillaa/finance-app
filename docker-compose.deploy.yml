@@ -37,6 +37,7 @@ x-app-environment: &app-environment
   REDIS_URL: redis://:${REDIS_PASSWORD:?set a redis password - see .env.deploy.example}@redis:6379
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?generate one - node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"}
   JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?generate a second, different one the same way}
+  EMAIL_TOKEN_SECRET: ${EMAIL_TOKEN_SECRET:?generate a third, different one the same way}
   # There is no development mail sink here, and `config/env.ts` refuses to boot
   # in production without an explicit host rather than quietly falling back to
   # localhost and dropping every invitation on the floor.

@@ -141,7 +141,40 @@
     "passwordHintShort": "At least 10 characters, with letters and numbers",
     "baseCurrencyHint": "Reporting currency for this workspace.",
     "workspaceName": "Workspace name",
-    "workspaceNameHint": "Defaults to your name."
+    "workspaceNameHint": "Defaults to your name.",
+    "forgotPasswordLink": "Forgot password?",
+    "backToSignIn": "Back to sign in",
+    "newPassword": "New password",
+    "forgotPassword": {
+      "title": "Reset your password",
+      "subtitle": "Enter the email address on your account and we will send a reset link.",
+      "sent": "If an account exists for that address, a reset link is on its way.",
+      "sending": "Sending…",
+      "submit": "Send reset link"
+    },
+    "resetPassword": {
+      "title": "Choose a new password",
+      "subtitle": "This also signs you in, on this device.",
+      "missingToken": "This link is missing its token. Request a new one from the sign-in page.",
+      "failed": "Could not reset the password. The link may have expired.",
+      "submitting": "Resetting…",
+      "submit": "Reset password",
+      "revokesOtherSessions": "For your security, every other signed-in device will be signed out."
+    },
+    "verifyEmail": {
+      "title": "Verify your email",
+      "subtitle": "Confirming the address on your account.",
+      "missingToken": "This link is missing its token.",
+      "verifying": "Verifying…",
+      "success": "Your email address is verified.",
+      "failed": "This link is invalid or has expired.",
+      "continue": "Continue"
+    },
+    "emailVerificationBanner": {
+      "message": "Verify your email address to make sure you can recover your account and accept workspace invitations.",
+      "resend": "Resend email",
+      "resent": "Verification email sent."
+    }
   },
   "dashboard": {
     "totalBalance": "Total balance",

@@ -68,7 +68,12 @@
     "emailTaken": "Já existe uma conta com este e-mail",
     "accountSuspended": "Esta conta está suspensa",
     "noPasswordSet": "Esta conta não possui senha definida",
-    "wrongCurrentPassword": "A senha atual está incorreta"
+    "wrongCurrentPassword": "A senha atual está incorreta",
+    "resetTokenInvalid": "Este link de redefinição de senha é inválido",
+    "resetTokenExpired": "Este link de redefinição de senha expirou",
+    "verificationTokenInvalid": "Este link de verificação é inválido",
+    "verificationTokenExpired": "Este link de verificação expirou",
+    "emailAlreadyVerified": "Este endereço de e-mail já está verificado"
   },
   "workspaces": {
     "notSpecified": "Espaço de trabalho não especificado",
@@ -87,7 +92,8 @@
     "alreadyMember": "Essa pessoa já é membro deste espaço de trabalho",
     "notValid": "Este convite não é mais válido",
     "expired": "Este convite expirou",
-    "wrongEmail": "Este convite foi enviado para um endereço de e-mail diferente"
+    "wrongEmail": "Este convite foi enviado para um endereço de e-mail diferente",
+    "emailNotVerified": "Verifique seu endereço de e-mail antes de aceitar este convite"
   },
   "categories": {
     "depthLimit": "A hierarquia de categorias é limitada a três níveis",
@@ -189,6 +195,23 @@
       "body2_one": "Este convite expira em {{count}} dia.",
       "body2_other": "Este convite expira em {{count}} dias.",
       "action": "Aceitar convite"
+    },
+    "verification": {
+      "subject": "Verifique seu endereço de e-mail",
+      "greeting": "Confirme seu e-mail",
+      "body1": "Olá {{name}}, confirme que este é o seu endereço de e-mail para concluir a criação da sua conta.",
+      "body2_one": "Este link expira em {{count}} hora.",
+      "body2_other": "Este link expira em {{count}} horas.",
+      "action": "Verificar e-mail"
+    },
+    "passwordReset": {
+      "subject": "Redefina sua senha",
+      "greeting": "Redefina sua senha",
+      "body1": "Olá {{name}}, recebemos uma solicitação para redefinir sua senha.",
+      "body2_one": "Este link expira em {{count}} hora.",
+      "body2_other": "Este link expira em {{count}} horas.",
+      "body3": "Se você não solicitou isso, pode ignorar este e-mail com segurança — sua senha não será alterada.",
+      "action": "Redefinir senha"
     },
     "notification": {
       "greeting": "Olá, {{name}},",

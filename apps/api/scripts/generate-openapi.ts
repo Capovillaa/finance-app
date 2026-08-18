@@ -13,6 +13,7 @@
 process.env.DATABASE_URL ??= 'postgres://openapi:openapi@localhost:5432/openapi_not_connected';
 process.env.JWT_ACCESS_SECRET ??= 'openapi-generation-placeholder-secret';
 process.env.JWT_REFRESH_SECRET ??= 'openapi-generation-placeholder-secret';
+process.env.EMAIL_TOKEN_SECRET ??= 'openapi-generation-placeholder-secret';
 process.env.LOG_LEVEL ??= 'silent';
 
 import { readFile, writeFile } from 'node:fs/promises';

@@ -56,6 +56,18 @@ const changePasswordSchema = z.object({
   newPassword: passwordField,
 });
 
+const forgotPasswordSchema = z.object({ email: emailField });
+
+/** Not `emailField`/anything content-shaped: this is an opaque token, checked by hash. */
+const emailTokenSchema = z.string().min(20).max(200);
+
+const resetPasswordSchema = z.object({
+  token: emailTokenSchema,
+  newPassword: passwordField,
+});
+
+const verifyEmailSchema = z.object({ token: emailTokenSchema });
+
 const REFRESH_COOKIE = 'finance_refresh_token';
 
 export const authRouter: Router = Router();
@@ -183,9 +195,82 @@ authRouter.get(
   asyncHandler(async (req, res) => {
     const user = await db
       .selectFrom('users')
-      .select(['id', 'email', 'full_name', 'locale', 'timezone', 'base_currency', 'avatar_url'])
+      .select([
+        'id',
+        'email',
+        'full_name',
+        'locale',
+        'timezone',
+        'base_currency',
+        'avatar_url',
+        'email_verified_at',
+      ])
       .where('id', '=', req.user!.id)
       .executeTakeFirstOrThrow();
     res.json({ user: toPublicUser(user) });
+  }),
+);
+
+/**
+ * Always 204, whether or not the address has an account — see
+ * `requestPasswordReset`. `authRateLimit` bounds it on both axes: the calling
+ * address, and the account named in the body (when there is one).
+ */
+authRouter.post(
+  '/forgot-password',
+  authRateLimit,
+  validate({ body: forgotPasswordSchema }),
+  responds({ 204: NO_BODY }),
+  asyncHandler(async (req, res) => {
+    const input = body<z.infer<typeof forgotPasswordSchema>>(req);
+    await authService.requestPasswordReset(input.email);
+    res.status(204).send();
+  }),
+);
+
+/**
+ * Consumes the emailed token and signs the caller back in, the same shape
+ * `login` returns — see `resetPassword` for why.
+ */
+authRouter.post(
+  '/reset-password',
+  authRateLimit,
+  validate({ body: resetPasswordSchema }),
+  responds({ 200: authResultResponse }),
+  asyncHandler(async (req, res) => {
+    const input = body<z.infer<typeof resetPasswordSchema>>(req);
+    const result = await authService.resetPassword(input.token, input.newPassword, {
+      ipAddress: clientIp(req),
+      userAgent: req.header('user-agent') ?? null,
+    });
+    setRefreshCookie(res, result.refreshToken);
+    res.json(result);
+  }),
+);
+
+/**
+ * Unauthenticated: the token itself proves control of the inbox, and the link
+ * may be opened on a device with no session at all.
+ */
+authRouter.post(
+  '/verify-email',
+  authRateLimit,
+  validate({ body: verifyEmailSchema }),
+  responds({ 204: NO_BODY }),
+  asyncHandler(async (req, res) => {
+    const input = body<z.infer<typeof verifyEmailSchema>>(req);
+    await authService.verifyEmail(input.token);
+    res.status(204).send();
+  }),
+);
+
+authRouter.post(
+  '/resend-verification',
+  requireAuth,
+  authRateLimit,
+  responds({ 204: NO_BODY }),
+  asyncHandler(async (req, res) => {
+    await authService.resendVerification(req.user!.id);
+    res.status(204).send();
   }),
 );

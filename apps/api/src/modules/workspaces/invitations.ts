@@ -213,12 +213,20 @@ export async function acceptInvitation(token: string, userId: string): Promise<A
 
     const user = await trx
       .selectFrom('users')
-      .select(['id', 'email'])
+      .select(['id', 'email', 'email_verified_at'])
       .where('id', '=', userId)
       .executeTakeFirstOrThrow();
 
     if (user.email.toLowerCase() !== invitation.email.toLowerCase()) {
       throw unprocessable('invitations.wrongEmail');
+    }
+
+    // Membership is authorised by comparing an email *string* above, which is
+    // only meaningful once the account has proven it controls that address —
+    // otherwise anyone who learns a victim is about to be invited could
+    // register the address first and accept the invitation themselves.
+    if (!user.email_verified_at) {
+      throw unprocessable('invitations.emailNotVerified');
     }
 
     await addMember(invitation.workspace_id, userId, invitation.role, invitation.invited_by, trx);

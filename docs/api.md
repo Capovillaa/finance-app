@@ -91,10 +91,20 @@ Accept `?page=` and `?pageSize=` (max 200).
 | POST | `/logout` | Revokes the presented refresh token. Other sessions keep working. |
 | POST | `/logout-all` | Revokes every session for the user, **immediately** — access tokens included. |
 | POST | `/change-password` | Requires the current password; signs all sessions out immediately. |
-| GET | `/me` | Current user. |
+| POST | `/forgot-password` | Always answers 204, whether or not the address has an account — never an oracle for which emails are registered. Rate limited as a credential endpoint. |
+| POST | `/reset-password` | Body `{"token": "…", "newPassword": "…"}`. Consumes the emailed link, revokes every other session, and signs the caller in — same response shape as `/login`. |
+| POST | `/verify-email` | Body `{"token": "…"}`. Unauthenticated: the token is the proof. Sets `user.emailVerifiedAt`. |
+| POST | `/resend-verification` | Requires auth. No-op if already verified. |
+| GET | `/me` | Current user, including `emailVerifiedAt`. |
 
 The refresh token is returned in the body *and* set as an HttpOnly cookie scoped to `/api/v1/auth`,
 so a browser client never has to store it in JavaScript.
+
+Registration sends a verification email; nothing else currently requires `emailVerifiedAt` to be
+set **except accepting a workspace invitation** — see the Workspaces section below. A forgotten
+password recovers through `/forgot-password` + `/reset-password`, both HMAC-token flows following
+the same shape `workspaces/invitations.ts` established, but signed with their own
+`EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET`.
 
 Revocation reaches the access token too, not just the refresh token: `logout-all`, a password
 change and account deletion all move the user's `tokens_valid_from` forward, and an access token
@@ -149,7 +159,11 @@ quote keeps whatever rate it last had.
 | GET | `/:workspaceId/activity` | viewer (`?includeAudit=true` needs admin) |
 | POST | `/invitations/accept` | authenticated; body `{"token": "…"}` |
 
-An invitation can only be accepted by an account whose email matches the address it was sent to.
+An invitation can only be accepted by an account whose email matches the address it was sent to,
+**and that account's `emailVerifiedAt` must be set**. Matching the address alone would let anyone
+who learns a victim is about to be invited register that address first and accept the invitation
+themselves, before the real owner ever proves control of it — see `auth.emailNotVerified` /
+`POST /auth/verify-email` above.
 
 ## Accounts — `/workspaces/:workspaceId/accounts`
 

@@ -101,6 +101,51 @@ export function invitationEmail(params: {
   };
 }
 
+export function verificationEmail(params: {
+  to: string;
+  fullName: string;
+  verifyUrl: string;
+  expiresInHours: number;
+  locale?: Locale;
+}): EmailMessage {
+  const locale = params.locale ?? DEFAULT_LOCALE;
+  const action = t(locale, 'email.verification.action');
+  const lines = [
+    t(locale, 'email.verification.body1', { name: params.fullName }),
+    t(locale, 'email.verification.body2', { count: params.expiresInHours }),
+  ];
+
+  return {
+    to: params.to,
+    subject: t(locale, 'email.verification.subject'),
+    text: `${lines.join('\n\n')}\n\n${action}: ${params.verifyUrl}`,
+    html: layout(locale, t(locale, 'email.verification.greeting'), lines, { label: action, url: params.verifyUrl }),
+  };
+}
+
+export function passwordResetEmail(params: {
+  to: string;
+  fullName: string;
+  resetUrl: string;
+  expiresInHours: number;
+  locale?: Locale;
+}): EmailMessage {
+  const locale = params.locale ?? DEFAULT_LOCALE;
+  const action = t(locale, 'email.passwordReset.action');
+  const lines = [
+    t(locale, 'email.passwordReset.body1', { name: params.fullName }),
+    t(locale, 'email.passwordReset.body2', { count: params.expiresInHours }),
+    t(locale, 'email.passwordReset.body3'),
+  ];
+
+  return {
+    to: params.to,
+    subject: t(locale, 'email.passwordReset.subject'),
+    text: `${lines.join('\n\n')}\n\n${action}: ${params.resetUrl}`,
+    html: layout(locale, t(locale, 'email.passwordReset.greeting'), lines, { label: action, url: params.resetUrl }),
+  };
+}
+
 export function notificationEmail(params: {
   to: string;
   fullName: string;

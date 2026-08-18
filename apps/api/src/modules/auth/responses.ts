@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { component, currencyCode, integer, uuid } from '../shared/responses.js';
+import { component, currencyCode, integer, timestamp, uuid } from '../shared/responses.js';
 
 /**
  * What this module returns.
@@ -20,6 +20,7 @@ export const userSchema = component(
     timezone: z.string().describe('An IANA zone, e.g. `America/Sao_Paulo`.'),
     baseCurrency: currencyCode,
     avatarUrl: z.string().nullable(),
+    emailVerifiedAt: timestamp.nullable().describe('Null until the emailed link is confirmed.'),
   }),
 );
 

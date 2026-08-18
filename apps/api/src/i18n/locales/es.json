@@ -68,7 +68,12 @@
     "emailTaken": "Ya existe una cuenta con este correo electrónico",
     "accountSuspended": "Esta cuenta está suspendida",
     "noPasswordSet": "Esta cuenta no tiene una contraseña configurada",
-    "wrongCurrentPassword": "La contraseña actual es incorrecta"
+    "wrongCurrentPassword": "La contraseña actual es incorrecta",
+    "resetTokenInvalid": "Este enlace para restablecer la contraseña no es válido",
+    "resetTokenExpired": "Este enlace para restablecer la contraseña ha expirado",
+    "verificationTokenInvalid": "Este enlace de verificación no es válido",
+    "verificationTokenExpired": "Este enlace de verificación ha expirado",
+    "emailAlreadyVerified": "Esta dirección de correo electrónico ya está verificada"
   },
   "workspaces": {
     "notSpecified": "No se especificó el espacio de trabajo",
@@ -87,7 +92,8 @@
     "alreadyMember": "Esa persona ya es miembro de este espacio de trabajo",
     "notValid": "Esta invitación ya no es válida",
     "expired": "Esta invitación ha expirado",
-    "wrongEmail": "Esta invitación se envió a una dirección de correo diferente"
+    "wrongEmail": "Esta invitación se envió a una dirección de correo diferente",
+    "emailNotVerified": "Verifica tu dirección de correo electrónico antes de aceptar esta invitación"
   },
   "categories": {
     "depthLimit": "La jerarquía de categorías está limitada a tres niveles",
@@ -189,6 +195,23 @@
       "body2_one": "Esta invitación expira en {{count}} día.",
       "body2_other": "Esta invitación expira en {{count}} días.",
       "action": "Aceptar invitación"
+    },
+    "verification": {
+      "subject": "Verifica tu dirección de correo electrónico",
+      "greeting": "Confirma tu correo electrónico",
+      "body1": "Hola {{name}}, confirma que esta es tu dirección de correo electrónico para terminar de configurar tu cuenta.",
+      "body2_one": "Este enlace expira en {{count}} hora.",
+      "body2_other": "Este enlace expira en {{count}} horas.",
+      "action": "Verificar correo electrónico"
+    },
+    "passwordReset": {
+      "subject": "Restablece tu contraseña",
+      "greeting": "Restablece tu contraseña",
+      "body1": "Hola {{name}}, recibimos una solicitud para restablecer tu contraseña.",
+      "body2_one": "Este enlace expira en {{count}} hora.",
+      "body2_other": "Este enlace expira en {{count}} horas.",
+      "body3": "Si no solicitaste esto, puedes ignorar este correo con seguridad — tu contraseña no cambiará.",
+      "action": "Restablecer contraseña"
     },
     "notification": {
       "greeting": "Hola, {{name}},",

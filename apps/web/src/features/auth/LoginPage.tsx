@@ -99,6 +99,10 @@ export default function LoginPage(): ReactElement {
             {...register('password')}
           />
 
+          <Link component={RouterLink} to="/forgot-password" variant="body2" sx={{ alignSelf: 'flex-end' }}>
+            {t('auth.forgotPasswordLink')}
+          </Link>
+
           <Button type="submit" variant="contained" size="large" disabled={isLoading}>
             {isLoading ? t('auth.signingIn') : t('auth.signIn')}
           </Button>

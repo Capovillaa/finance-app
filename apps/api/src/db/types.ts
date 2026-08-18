@@ -69,6 +69,16 @@ export interface UsersTable {
    * before then clears this. NULL means no deletion is pending.
    */
   deletion_requested_at: Timestamp | null;
+  /**
+   * The HMAC of an outstanding password-reset token, and when it expires.
+   * NULL means no reset is pending. A new request overwrites both, which is
+   * what makes only the newest emailed link work.
+   */
+  password_reset_token_hash: string | null;
+  password_reset_expires_at: Timestamp | null;
+  /** Same shape as the reset pair above, for the email-verification link. */
+  email_verification_token_hash: string | null;
+  email_verification_expires_at: Timestamp | null;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
   deleted_at: Timestamp | null;
