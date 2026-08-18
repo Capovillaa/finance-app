@@ -30,17 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-          # This monorepo has three tsconfigs (packages/schemas, apps/api,
-          # apps/web) and @finance/schemas has to be built before the other
-          # two typecheck at all — see the shared-package convention in
-          # CLAUDE.md section 3. The `autobuild` default does not know that
-          # ordering, so the build step below is explicit instead.
-          build-mode: manual
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -49,13 +38,22 @@ jobs:
       - name: Install
         run: npm ci
 
+      # JavaScript/TypeScript has no compiled build for CodeQL to run — its
+      # extractor reads source directly, and `build-mode: manual` (which this
+      # workflow tried first) fails outright with "does not support the manual
+      # build mode." `@finance/schemas`'s compiled `dist/` is still built
+      # first, though: apps/api and apps/web import it as compiled output (the
+      # shared-package convention, CLAUDE.md section 3), and having real type
+      # declarations to resolve improves the analysis even though nothing here
+      # is actually run.
       - name: Build shared schemas
         run: npm run build:schemas
 
-      - name: Build api and web
-        run: |
-          npm run build --workspace=@finance/api
-          npm run build --workspace=@finance/web
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          build-mode: none
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
