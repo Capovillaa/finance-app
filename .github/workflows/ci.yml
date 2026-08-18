@@ -119,11 +119,18 @@ jobs:
       # that package under `apps/api/node_modules` and only the root tree had
       # been copied.
       #
-      # The environment is what `config/production-policy.ts` demands of a
-      # production boot, which the image is: secrets generated per run rather
-      # than reused from the `test` job, because those throwaways are published
-      # and are exactly what is now refused; and an SMTP host that is not a
-      # development sink. Nothing here signs or sends anything.
+      # The environment is everything `config/production-policy.ts` demands of a
+      # production boot, which the image is — and it has to be *all* of it, or
+      # this step fails for a reason that has nothing to do with the module
+      # graph it exists to check. That is not hypothetical: adding the
+      # same-origin rule broke this step, because the two base URLs fall back to
+      # the development defaults (`:4000` and `:5173`), which are different
+      # origins. **A new refusal in `production-policy.ts` owes this step a
+      # matching variable.**
+      #
+      # Secrets are generated per run rather than reused from the `test` job,
+      # since those throwaways are published and are exactly what is refused.
+      # Nothing here signs, sends or resolves anything.
       - name: The image can load the whole app graph
         run: |
           docker run --rm \
@@ -131,6 +138,8 @@ jobs:
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
             -e SMTP_HOST=smtp.invalid \
+            -e API_BASE_URL=https://finance.invalid \
+            -e WEB_BASE_URL=https://finance.invalid \
             -e LOG_LEVEL=silent \
             finance-api:ci \
             node --input-type=module -e "await import('/app/apps/api/dist/app.js'); console.log('app graph loaded')"
@@ -156,15 +165,21 @@ jobs:
             echo "refused: $label"
           }
 
+          # Each of these must fail for *its own* reason, so every case supplies
+          # a valid value for every rule it is not testing.
           refuses "a published JWT secret" \
             -e JWT_ACCESS_SECRET=dev-only-insecure-access-secret-change-me \
             -e JWT_REFRESH_SECRET=dev-only-insecure-refresh-secret-change-me \
-            -e SMTP_HOST=smtp.invalid
+            -e SMTP_HOST=smtp.invalid \
+            -e API_BASE_URL=https://finance.invalid \
+            -e WEB_BASE_URL=https://finance.invalid
 
           refuses "a development mail sink" \
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
-            -e SMTP_HOST=mailhog
+            -e SMTP_HOST=mailhog \
+            -e API_BASE_URL=https://finance.invalid \
+            -e WEB_BASE_URL=https://finance.invalid
 
           # A split origin does not degrade the session, it ends it: the refresh
           # cookie is SameSite=Lax and would never be sent, so every user is
