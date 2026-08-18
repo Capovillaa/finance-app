@@ -238,7 +238,7 @@ BullMQ over Redis, with stable repeat keys so restarts re-use the existing sched
 | `recurring-materialization` | hourly | Create transactions due within the next 7 days |
 | `alert-evaluation` | every 3 h | Run every enabled rule for every workspace |
 | `notification-delivery` | every 2 min | Send queued emails, bounded retries |
-| `maintenance` | daily + hourly | Purge expired tokens, expire invitations, refresh rates; hourly, sweep abandoned CSV-import previews |
+| `maintenance` | daily + hourly | Purge expired tokens, expire invitations, refresh rates, erase accounts past their deletion grace period; hourly, sweep abandoned CSV-import previews |
 
 Materialisation looks ahead so bills exist *before* they are due — that is what gives the
 `bill_due` alert its lead time. It is idempotent: an occurrence that already produced a

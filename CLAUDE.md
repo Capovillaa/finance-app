@@ -22,7 +22,14 @@ Delivered:
 - npm-workspaces monorepo, Docker Compose infrastructure, TypeScript API package
 - 7 migrations covering 27 tables, with a hand-rolled migration runner
 - Platform layer: config, logging, errors, money, dates, recurrence, email, Redis
-- Auth (register/login/refresh/logout, password reset, email verification)
+- Auth (register/login/refresh/logout) — ~~password reset, email verification~~
+  **this line was wrong for many sessions and is corrected here: neither
+  exists.** `authRouter` mounts seven routes and none of them is a reset or a
+  verification; `users.email_verified_at` is a column only the seed script ever
+  writes. It is finding **H-1** and the first item of Phase 2 in section 7. The
+  consequences are live: a forgotten password is permanent lockout, and
+  `acceptInvitation` authorises on an unverified email string, so registering a
+  victim's address first intercepts their workspace invitation.
 - Workspaces with owner/admin/editor/viewer RBAC and email invitations
 - Multi-currency accounts, 3-level categories, transactions (transfers, splits,
   comments, tags, search, CSV **export**, reconciliation) — import came much
@@ -133,6 +140,9 @@ Per-screen notes:
   **Members** (role changes, removal, ownership transfer, plus an admin-only
   invitations panel), **Data** (JSON export, sign-out-everywhere, account
   deletion). Tab state is local, not in the URL, matching the rest of the app.
+  Account deletion is no longer a `ConfirmDialog`: it has its own dialog, takes
+  the account password, and reports the date the erasure will actually run —
+  see section 5m.
 
 Three shared presentational pieces — `StatTile`, `ChartTooltip` and
 `SeriesLegend` — moved from `features/dashboard/` to `components/` when Reports
@@ -680,9 +690,13 @@ D:\finance_app
 │   │   │   ├── server.ts            # HTTP entrypoint
 │   │   │   ├── worker.ts            # background job entrypoint
 │   │   │   ├── app.ts               # express app factory (used by tests too)
-│   │   │   ├── config/              # env parsing and typed config
+│   │   │   ├── config/              # env.ts (parsing + typed config) and
+│   │   │   │                        # production-policy.ts: the pure rules
+│   │   │   │                        #   production refuses to boot on — a
+│   │   │   │                        #   published/weak secret, a development
+│   │   │   │                        #   mail sink, a split origin (see 5j–5n)
 │   │   │   ├── db/
-│   │   │   │   ├── migrations/      # 001..009, plus index.ts registry
+│   │   │   │   ├── migrations/      # 001..010, plus index.ts registry
 │   │   │   │   ├── migrate.ts       # runner: up | down | status
 │   │   │   │   ├── seed.ts          # demo dataset
 │   │   │   │   ├── client.ts        # Kysely instance
@@ -723,15 +737,22 @@ D:\finance_app
 │   │   └── tests/
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
 │   │       │                        # import-mapping, openapi, exchange-rates,
-│   │       │                        # rate-limit-policy
+│   │       │                        # rate-limit-policy, production-policy,
+│   │       │                        # errors (what a failure tells a client)
 │   │       └── integration/         # auth, workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
-│   │                                # currencies,
+│   │                                # currencies, account-deletion,
+│   │                                # error-disclosure (a real Postgres
+│   │                                #   violation, grepped for leaks),
 │   │                                # response-contracts (one success call per
 │   │                                #   endpoint that declares a response schema)
 │   └── web/                         # @finance/web — React client (Vite)
 │       ├── index.html
 │       ├── vite.config.ts
+│       ├── Dockerfile               # nginx serving dist + proxying /api — the
+│       │                            # deployed client. Build from the REPO ROOT
+│       ├── nginx.conf               # SPA fallback, the /api proxy, and the
+│       │                            # document's CSP/HSTS/frame headers (5n)
 │       ├── scripts/
 │       │   ├── generate-types.mjs   # docs/openapi.json -> src/api/schema.d.ts;
 │       │   │                        #   --check for CI
@@ -768,7 +789,9 @@ D:\finance_app
 │           │                        # recurring, reports, settings,
 │           │                        # transactions, workspace — each holds its
 │           │                        # *Schemas.ts (client mirror of the
-│           │                        # server's Zod schemas), dialogs and cards
+│           │                        # server's Zod schemas), dialogs and cards.
+│           │                        # settings/ also has DeleteAccountDialog:
+│           │                        #   erasure takes a password now (5m)
 │           ├── pages/               # AccountsPage, AlertsPage, BudgetsPage,
 │           │                        # DashboardPage, GoalsPage, RecurringPage,
 │           │                        # ReportsPage, SettingsPage,
@@ -805,14 +828,24 @@ D:\finance_app
 │   └── finance_management_project_prompt.md   # original brief
 ├── infra/postgres/init/             # container init SQL
 ├── .github/workflows/ci.yml         # typecheck, builds, generated-file and
-│                                    # i18n checks, unit tests, image build +
-│                                    # boot; and the full suite on Postgres
-├── .gitignore
+│                                    # i18n checks, unit tests, both images +
+│                                    # what they refuse to boot on, the deploy
+│                                    # composition; and the full suite on Postgres
+├── .gitignore                       # also ignores AUDIT_REPORT.md and
+│                                    # to_do.txt on purpose — see section 7
 ├── .gitattributes                   # LF in the repo, native in the tree
 ├── .dockerignore                    # keeps node_modules and .env out of the
 │                                    # build context
-├── docker-compose.yml               # postgres, redis, mailhog; plus the `app`
-│                                    # profile — migrate, api, worker (see 5g)
+├── docker-compose.yml               # DEVELOPMENT ONLY: postgres, redis,
+│                                    # mailhog, all bound to 127.0.0.1 (see 5k)
+├── docker-compose.deploy.yml        # the deployed shape: web (nginx), api,
+│                                    # worker, migrate, and its own postgres +
+│                                    # redis. No mail sink, no published data
+│                                    # store ports, no credential defaults (5k)
+├── .env.example                     # development config; its JWT values are
+│                                    # public and production refuses them (5j)
+├── .env.deploy.example              # deployment config; nothing that is a
+│                                    # credential has a default
 └── package.json                     # workspace root; also pins `vite` to
                                      # dedupe it — see "Environment quirks"
 ```
@@ -955,10 +988,27 @@ below for what it was. Any output from these commands is now a real failure.
 
 `.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
 Two jobs run in parallel: **check** (the dependency-advisory gate, typecheck,
-both builds, the OpenAPI freshness check, the i18n check, unit tests, and
-building the production image and booting its module graph — no services) and
+both builds, the OpenAPI freshness check, the i18n check, unit tests, both
+container images, and what those images refuse to do — no services) and
 **test** (the full suite against a `postgres:16` service container, then a
 migration rollback round-trip). Green on the first run, in about a minute.
+
+**Four of the `check` steps are about the deployed artefacts** and are easy to
+break from the source side without noticing:
+
+| Step | What it proves |
+| --- | --- |
+| Build the production image | the API's Dockerfile still builds (it rotted for sessions once) |
+| Build the web image + `nginx -t` | the client's image builds and its config parses |
+| The image can load the whole app graph | every route, service and library imports |
+| The image refuses … | a published secret, a development mail sink and a split origin each stop the boot |
+
+**A new refusal in `config/production-policy.ts` owes both of the last two steps
+a variable.** The positive step boots the image with a complete production
+environment, so a rule it does not satisfy fails it for a reason that has nothing
+to do with the module graph — which is exactly what happened when the same-origin
+rule landed. Each negative case likewise supplies valid values for every rule it
+is *not* testing, or it passes on the wrong refusal and asserts nothing.
 
 **The advisory gate is deliberately narrow.** It fails on a high or critical
 advisory in a **runtime** dependency (`npm audit --omit=dev --audit-level=high`)
@@ -1176,9 +1226,10 @@ are features rather than operations work.
    it now carries a divided budget, says when it engages, and engages in
    milliseconds rather than parking behind ioredis's offline queue.
 10. ~~**Deployment story**~~ **Done** (section 5g). One image, three
-    entrypoints — server, worker, migration runner — with `docker compose
-    --profile app up -d` bringing them up in an order where the schema is
-    current before anything serves traffic. CI now builds the image and boots
+    entrypoints — server, worker, migration runner — brought up in an order
+    where the schema is current before anything serves traffic. (The command was
+    `docker compose --profile app up -d` then; it is
+    `docker compose -f docker-compose.deploy.yml up -d` since section 5k.) CI now builds the image and boots
     its module graph, because nothing ever building it is exactly how the old
     Dockerfile came to be broken.
 
@@ -2090,11 +2141,13 @@ Four things that are deliberate:
 3. **If you ever publish a new placeholder — in `.env.example`, in the CI
    workflow, in a script — add it to `PUBLISHED_SECRETS`.** The exact list is
    what makes "this value is public knowledge" a fact rather than a guess.
-4. **The `app` compose services no longer load `.env`.** That was the pipe the
+4. **The deployed services do not load `.env`.** That was the pipe the
    placeholder travelled down: a development file, loaded wholesale, into
    containers forced to `NODE_ENV=production`. They take `x-app-environment` at
-   the top of `docker-compose.yml`, where the two secrets are required
-   (`${JWT_ACCESS_SECRET:?…}` stops compose before it starts anything).
+   the top of **`docker-compose.deploy.yml`** — which was still
+   `docker-compose.yml` when this section was written, and moved in 5k — where
+   every credential is a required variable (`${JWT_ACCESS_SECRET:?…}` stops
+   compose before it starts anything).
 
 **CI gates it in both directions**, in the `check` job: the existing "load the
 whole app graph" step now generates a fresh `openssl rand -hex 32` per run,
@@ -2495,7 +2548,7 @@ fresh clone to a running production stack carried public JWT keys end to end,
 and a stack running on them looked exactly like one that was not.
 `config/production-policy.ts` (pure, no imports, unit-tested) now rejects a
 production secret that is short, published, still placeholder-shaped, low in
-distinct characters, or shared between the two variables; the `app` compose
+distinct characters, or shared between the two variables; the deployed compose
 services require both explicitly instead of inheriting `.env`; and CI proves
 both that a generated secret boots and that a published one does not. The
 `.env.example` values still work in development on purpose. See section 5j and
@@ -2536,8 +2589,8 @@ from one.
 
 **The API, the worker and the migration runner are one image with three
 commands, and the migration gates the rollout.** They are the same codebase, so
-they ship as one artifact; `docker compose --profile app up -d` runs `migrate`
-to completion and starts the other two behind
+they ship as one artifact; `docker compose -f docker-compose.deploy.yml up -d`
+runs `migrate` to completion and starts the other two behind
 `service_completed_successfully`, which means a failed migration stops the
 deploy rather than leaving a new binary on an old schema. The image is built
 from the **repository root**, because the API depends on the `@finance/schemas`
@@ -2673,7 +2726,48 @@ application logic is in good shape. Almost everything below is either
 *deployment and configuration surface* or *a feature this file claimed existed
 and does not* (see the first item of Phase 2).
 
-### Phase 1 — blocks any deploy
+### Where this stands, and what to pick up
+
+**Phase 1 is complete** — all eight items, across four commits ending at
+`74709f0`, each pushed with CI green. Sections **5j** (published secrets),
+**5k** (two compose files), **5l** (what an error body says), **5m** (erasure
+with a grace period) and **5n** (one origin, and a server for the client) are the
+per-finding notes; `docs/decisions.md` has the reasoning for each. **Nothing in
+Phase 1 is half-finished**, and no work is in progress in the tree.
+
+**Start with H-1, the first item of Phase 2.** It is the largest remaining piece,
+it is the one thing this file used to claim falsely (now corrected in section 1),
+and it is a security hole rather than only a missing feature: `acceptInvitation`
+authorises on an unverified email string, so registering a victim's address ahead
+of their invitation intercepts it. It also unblocks **M-9** — registration cannot
+stop disclosing which addresses exist until there is a verification email to send
+instead.
+
+Four things a fresh agent should know before touching Phase 2:
+
+- **Two decisions in Phase 1 were the user's, not defaults.** Same-origin over
+  `SameSite=None` + CSRF (H-4), and a 7-day recoverable erasure over an immediate
+  one (H-2). Both are now enforced in code; do not quietly reverse either.
+- **`config/production-policy.ts` is where a boot-time refusal goes.** It holds
+  three already. Adding a fourth means adding its variable to the CI steps in the
+  table under "CI" in section 4 — read that note first.
+- **A verification or reset flow reuses machinery that exists.**
+  `workspaces/invitations.ts` already demonstrates the whole pattern (random
+  token, HMAC stored, TTL, single use), and `lib/email.ts` + the delivery queue
+  already send mail. What it must *not* reuse is `JWT_REFRESH_SECRET` as its HMAC
+  key — that is **M-11**, and adding a third purpose to that one secret makes it
+  worse.
+- **The erasure lifecycle has a hook a new sign-in path must respect.** `login`
+  calls `cancelAccountDeletion`. A magic link, an OAuth callback or a
+  reset-then-sign-in flow that skips it would let a pending deletion run after
+  the user has demonstrably come back.
+
+`to_do.txt` in the working tree is the user's own list of interface complaints,
+in Portuguese, and is gitignored alongside `AUDIT_REPORT.md`. Most of it was
+addressed in the sessions behind sections 2e–2g; it is not a work queue, and the
+audit checklist below outranks it.
+
+### Phase 1 — blocks any deploy  ✅ complete
 
 - [x] **[C-1] Refuse the published JWT secrets in production.** **Done** — see
       section 5j. `config/production-policy.ts` rejects a short, published,
@@ -2726,12 +2820,19 @@ and does not* (see the first item of Phase 2).
 ### Phase 2 — before real users
 
 - [ ] **[H-1] Build password reset and email verification.** Neither exists.
-      Section 1 of this file says both were delivered; that is wrong and should
-      be corrected as part of this work. Consequences today: a forgotten
-      password is permanent lockout, and because `acceptInvitation` authorises
-      on an unverified email string, someone can register a victim's address to
+      **Start here** — see "Where this stands" above. Section 1's claim that both
+      were delivered is already corrected, so that part of P-6 is done and the
+      feature itself is not. Consequences today: a forgotten password is
+      permanent lockout, and because `acceptInvitation` authorises on an
+      unverified email string, someone can register a victim's address to
       intercept a workspace invitation. Reuse the token machinery
-      `workspaces/invitations.ts` already demonstrates.
+      `workspaces/invitations.ts` already demonstrates — but **not**
+      `JWT_REFRESH_SECRET` as its key; that is M-11, and a third purpose on one
+      secret makes it worse. `POST /auth/forgot-password` should always answer
+      204, behind `authRateLimit`, and a successful reset should call
+      `revokeAllUserTokens`; gate invitation acceptance on `email_verified_at`.
+      A reset flow that signs the user in must also call
+      `cancelAccountDeletion`, the way `login` does (section 5m).
 - [ ] **[M-2] Restrict `urlField` to `https:`.** Zod's `.url()` accepts
       `javascript:`, `data:` and `file:` — verified by running it. It backs
       `avatarUrl`, which every other workspace member's browser then fetches.
@@ -2768,8 +2869,11 @@ and does not* (see the first item of Phase 2).
       and CodeQL are not.
 - [ ] **[L-5] Require TLS to Postgres and Redis.**
 - [ ] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
-      worker — its container inherits an HTTP healthcheck against a port it
-      never opens.
+      worker. Its container no longer *reports* a false unhealthy — the deployed
+      composition disables the inherited HTTP healthcheck, since the worker opens
+      no port — but disabling a wrong probe is not adding a right one, and a
+      wedged worker is still invisible until alerts stop arriving.
+      `processors.ts` already exports `workerHealthy()` with nothing calling it.
 
 ### Phase 4 — polish
 

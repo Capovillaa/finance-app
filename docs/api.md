@@ -114,7 +114,7 @@ Passwords must be at least 10 characters and contain both letters and digits.
 | --- | --- | --- |
 | PATCH | `/me` | Name, avatar, locale, timezone, base currency. |
 | GET | `/me/export` | GDPR export: full JSON download. |
-| DELETE | `/me` | GDPR erasure. Body `{"confirm": true}`. Anonymises the account, deletes solo workspaces, archives shared ones. |
+| DELETE | `/me` | GDPR erasure, **scheduled rather than performed**. Body `{"confirm": true, "currentPassword": "…"}`; rate limited as a credential endpoint. Revokes every session and answers `{"deletionScheduledFor": "…"}`. Signing in before that date cancels it; otherwise a daily job anonymises the account, deletes solely-owned workspaces and archives shared ones. |
 
 ## Currencies — `/currencies`
 

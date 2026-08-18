@@ -1086,9 +1086,12 @@ codebase by design, so they ship as one artifact and differ only by command. Tha
 "the worker runs the same code the API does" true of the thing deployed rather than only of the
 repository.
 
-**The migration is a gate, not a sidecar.** In the `app` compose profile `migrate` runs to
-completion and `api` and `worker` wait on `service_completed_successfully`. A failed migration
-stops the rollout instead of leaving a new binary talking to an old schema.
+**The migration is a gate, not a sidecar.** `migrate` runs to completion and `api` and `worker`
+wait on `service_completed_successfully`. A failed migration stops the rollout instead of leaving a
+new binary talking to an old schema. *(Amended later: this lived in an `app` profile of
+`docker-compose.yml` when it was written. A profile turned out not to be a boundary at all — see
+"Development and deployment are two files" below — so it is now
+`docker-compose.deploy.yml`, unchanged in every other respect.)*
 
 Everything below was found by building and running the thing, and none of it is visible in a
 review of the file:
