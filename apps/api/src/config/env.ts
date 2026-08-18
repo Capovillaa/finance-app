@@ -8,6 +8,7 @@ import { z } from 'zod/v4';
 import { parseTrustProxy } from '../middleware/rate-limit-policy.js';
 import {
   checkProductionSecrets,
+  crossOriginBaseUrls,
   formatSecretIssues,
   isDevelopmentMailHost,
 } from './production-policy.js';
@@ -62,6 +63,14 @@ const schema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().regex(durationPattern).default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  /**
+   * How long a requested account erasure waits before it happens. Signing in
+   * during the window cancels it, which is the whole undo mechanism — so this
+   * is also how long a mistaken or coerced deletion stays recoverable. It is
+   * not "how long we keep the data after erasure": the erasure itself is still
+   * immediate and irreversible when it runs.
+   */
+  ACCOUNT_DELETION_GRACE_DAYS: z.coerce.number().int().positive().max(90).default(7),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(12),
 
   // The default is the local MailHog sink, which is right in development and
@@ -156,6 +165,23 @@ if (raw.NODE_ENV === 'production') {
   // cannot fail the request that triggered the message. Left on the development
   // default, a deployment therefore posts every invitation into a socket that
   // is not listening and reports success to the admin who sent it.
+  // The refresh cookie is SameSite=Lax and is the only credential
+  // `/auth/refresh` accepts, so a split origin does not degrade the session —
+  // it ends it, fifteen minutes in, for every user, with nothing but a 401 to
+  // show for it. Serve both from one host; the deployed composition's `web`
+  // service proxies `/api` to the API for exactly this reason.
+  if (crossOriginBaseUrls(raw.API_BASE_URL, raw.WEB_BASE_URL)) {
+    throw new Error(
+      `Refusing to start in production with the API and the web client on different origins:\n` +
+        `  API_BASE_URL: ${new URL(raw.API_BASE_URL).origin}\n` +
+        `  WEB_BASE_URL: ${new URL(raw.WEB_BASE_URL).origin}\n\n` +
+        'The refresh cookie is SameSite=Lax, so a browser will not send it on a cross-site request:\n' +
+        'every session would end at the first token refresh. Serve the client and the API from one\n' +
+        'host — docker-compose.deploy.yml\'s `web` service proxies /api to the API container — and\n' +
+        'point both variables at that host.',
+    );
+  }
+
   if (isDevelopmentMailHost(raw.SMTP_HOST)) {
     throw new Error(
       `Refusing to start in production with SMTP_HOST=${raw.SMTP_HOST}: that is a development\n` +

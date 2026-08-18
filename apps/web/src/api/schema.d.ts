@@ -2292,16 +2292,22 @@ export interface operations {
                 "application/json": {
                     /** @constant */
                     confirm: true;
+                    currentPassword: string;
                 };
             };
         };
         responses: {
-            /** @description No content. */
-            204: {
+            /** @description An erasure that has been scheduled, not performed. Every session is revoked immediately; the data is removed once the grace period elapses. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** @description When the erasure will actually happen. Signing in before then cancels it. */
+                        deletionScheduledFor: components["schemas"]["Timestamp"];
+                    };
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

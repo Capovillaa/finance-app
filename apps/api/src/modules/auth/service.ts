@@ -1,6 +1,9 @@
 import { db } from '../../db/client.js';
 import { conflict, invalidCredentials, notFound, unauthorized } from '../../lib/errors.js';
 import { recordActivity } from '../activity/service.js';
+// `users/service` reaches back into `auth/password` and `auth/tokens`, never
+// into this file, so this import is one-way rather than a cycle.
+import { cancelAccountDeletion } from '../users/service.js';
 import { createWorkspace } from '../workspaces/service.js';
 import { fakeVerify, hashPassword, verifyPassword } from './password.js';
 import {
@@ -126,6 +129,12 @@ export async function login(
   if (user.status !== 'active') throw unauthorized('auth.accountSuspended');
 
   await db.updateTable('users').set({ last_login_at: new Date() }).where('id', '=', user.id).execute();
+
+  // Signing in is how a scheduled erasure is called off. Proving you can still
+  // authenticate is proof enough that you want the account, and it is the one
+  // action a person who has changed their mind is certain to attempt — so there
+  // is no second endpoint and no emailed cancellation token to lose.
+  if (user.deletion_requested_at) await cancelAccountDeletion(user.id);
 
   const tokens = await issueTokens(user.id, user.email, context);
 

@@ -165,6 +165,36 @@ export function isDevelopmentMailHost(host: string): boolean {
   return DEVELOPMENT_MAIL_HOSTS.has(host.trim().toLowerCase());
 }
 
+/**
+ * Whether the browser will actually send the refresh cookie.
+ *
+ * The cookie is `SameSite=Lax`, which is what stands in for CSRF protection on
+ * `/auth/refresh` — that route accepts the cookie alone. A `Lax` cookie is
+ * **not sent on a cross-site fetch at all**, only on a top-level navigation, so
+ * a deployment serving the client from a different origin than the API loses
+ * every session at the first access-token expiry: the refresh call arrives
+ * without the cookie, answers 401, and the client signs the user out. Fifteen
+ * minutes into every session, for everyone, with nothing in the logs but a 401.
+ *
+ * So the topology is a requirement rather than a preference, and it is checked
+ * where a mistake is cheap. Serve the client and the API from one host — the
+ * `web` service in `docker-compose.deploy.yml` proxies `/api` to the API
+ * container for exactly this reason — and point both variables at it.
+ *
+ * A port difference counts: `https://app.example.com` and
+ * `https://app.example.com:8443` are different origins to a browser, and
+ * `URL.origin` says so.
+ */
+export function crossOriginBaseUrls(apiBaseUrl: string, webBaseUrl: string): boolean {
+  try {
+    return new URL(apiBaseUrl).origin !== new URL(webBaseUrl).origin;
+  } catch {
+    // Unparseable is not this function's problem: the schema has already
+    // rejected anything that is not a URL by the time it runs.
+    return false;
+  }
+}
+
 /** The message `config/env.ts` throws. Names the variables, never the values. */
 export function formatSecretIssues(issues: readonly SecretIssue[]): string {
   const lines = issues.map((issue) => `  - ${issue.variable}: ${issue.message}`).join('\n');

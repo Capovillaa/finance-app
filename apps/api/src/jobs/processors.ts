@@ -10,6 +10,7 @@ import { markDelivery, pendingDeliveries } from '../modules/notifications/servic
 import { purgeExpiredTokens } from '../modules/auth/tokens.js';
 import { purgeExpiredPreviews } from '../modules/imports/service.js';
 import { dueSchedules, materializeSchedule } from '../modules/recurring/service.js';
+import { purgeDueAccountDeletions } from '../modules/users/service.js';
 import { expireStaleInvitations } from '../modules/workspaces/invitations.js';
 import type { AlertJobData, MaintenanceJobData, RecurringJobData } from './queues.js';
 
@@ -126,6 +127,14 @@ export async function processMaintenance(data: MaintenanceJobData): Promise<{ ta
     case 'purge_import_previews': {
       const affected = await purgeExpiredPreviews();
       if (affected > 0) logger.info({ affected }, 'Purged expired import previews');
+      return { task: data.task, affected };
+    }
+    case 'purge_deleted_accounts': {
+      // The irreversible half of `DELETE /users/me`: everything the request
+      // scheduled happens here, once the grace period has run out and nobody
+      // has signed in to call it off.
+      const affected = await purgeDueAccountDeletions();
+      if (affected > 0) logger.info({ affected }, 'Erased accounts past their deletion grace period');
       return { task: data.task, affected };
     }
     default:

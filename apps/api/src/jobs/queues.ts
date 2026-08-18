@@ -20,7 +20,12 @@ export interface AlertJobData {
 }
 
 export type MaintenanceJobData = {
-  task: 'purge_tokens' | 'expire_invitations' | 'refresh_rates' | 'purge_import_previews';
+  task:
+    | 'purge_tokens'
+    | 'expire_invitations'
+    | 'refresh_rates'
+    | 'purge_import_previews'
+    | 'purge_deleted_accounts';
 };
 
 export type DeliveryJobData = Record<string, never>;
@@ -96,6 +101,13 @@ export async function registerSchedules(): Promise<void> {
     'hourly',
     { task: 'purge_import_previews' },
     { repeat: { pattern: '40 * * * *' }, jobId: 'maintenance-purge-import-previews' },
+  );
+  // Daily is the right granularity for a window measured in days, and the hour
+  // matters less than that it is quiet: this task hard-deletes workspaces.
+  await maintenanceQueue.add(
+    'daily',
+    { task: 'purge_deleted_accounts' },
+    { repeat: { pattern: '50 3 * * *' }, jobId: 'maintenance-purge-deleted-accounts' },
   );
 }
 

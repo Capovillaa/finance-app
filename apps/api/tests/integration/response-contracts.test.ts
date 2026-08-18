@@ -413,8 +413,14 @@ describe('auth and the account', () => {
     expect(exported.status).toBe(200);
     expect(exported.headers['content-disposition']).toContain('attachment');
 
-    const erased = await api().delete('/api/v1/users/me').set(user.auth).send({ confirm: true });
-    expect(erased.status).toBe(204);
+    // Scheduled, not performed: the erasure needs the password, and answers
+    // with when it will actually happen.
+    const erased = await api()
+      .delete('/api/v1/users/me')
+      .set(user.auth)
+      .send({ confirm: true, currentPassword: user.password });
+    expect(erased.status).toBe(200);
+    expect(Date.parse(erased.body.deletionScheduledFor)).toBeGreaterThan(Date.now());
   });
 });
 

@@ -63,6 +63,12 @@ export interface UsersTable {
    * `revokeAllUserTokens`; NULL means nothing has been revoked.
    */
   tokens_valid_from: Timestamp | null;
+  /**
+   * When the account holder asked to be erased. The erasure itself happens
+   * `ACCOUNT_DELETION_GRACE_DAYS` later, in a maintenance task; signing in
+   * before then clears this. NULL means no deletion is pending.
+   */
+  deletion_requested_at: Timestamp | null;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
   deleted_at: Timestamp | null;

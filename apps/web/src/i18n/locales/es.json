@@ -676,8 +676,8 @@
     "signOutAllDescription": "Todo dispositivo con sesión, este incluido, quedará desconectado. Tendrás que entrar de nuevo.",
     "signOutAllFailed": "No se pudo cerrar la sesión en todas partes.",
     "deleteAccountTitle": "Eliminar cuenta",
-    "deleteAccountExplainer": "Tu perfil se anonimiza y todas las sesiones terminan. Los espacios que solo tienes tú se van contigo; los compartidos se archivan, para que el historial de los demás miembros siga teniendo sentido. No se puede deshacer.",
-    "deleteAccountDescription": "Esto anonimiza tu perfil y termina todas las sesiones. No se puede deshacer. Descarga tus datos antes si quieres una copia.",
+    "deleteAccountExplainer": "La eliminación se programa en lugar de ejecutarse de inmediato: todas las sesiones terminan ahora, y volver a iniciar sesión antes de la fecha la cancela. Cuando ocurra, tu perfil se anonimiza, los espacios que solo tienes tú se van contigo, y los compartidos se archivan para que el historial de los demás miembros siga teniendo sentido.",
+    "deleteAccountDescription": "Tu cuenta se eliminará después de un período de gracia, y todas las sesiones terminan ahora. Si vuelves a iniciar sesión antes, se cancela. Descarga tus datos antes si quieres una copia.",
     "deleteMyAccount": "Eliminar mi cuenta",
     "deleteAccountFailed": "No se pudo eliminar la cuenta.",
     "role": {
@@ -697,7 +697,10 @@
     "joined": "Se unió",
     "you": "tú",
     "invitedBy": "Invitado por",
-    "expires": "Expira"
+    "expires": "Expira",
+    "deleteScheduledTitle": "Eliminación programada",
+    "deleteScheduledOn": "Tu cuenta y tus datos se eliminarán el {{date}}.",
+    "deleteScheduledCancel": "Se cerró tu sesión en todos los dispositivos. Inicia sesión antes de esa fecha para cancelar la eliminación."
   },
   "imports": {
     "action": "Importar CSV",

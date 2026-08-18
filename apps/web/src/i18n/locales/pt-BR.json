@@ -676,8 +676,8 @@
     "signOutAllDescription": "Todo dispositivo conectado, este inclusive, será desconectado. Você precisará entrar de novo.",
     "signOutAllFailed": "Não foi possível sair de todos os lugares.",
     "deleteAccountTitle": "Excluir conta",
-    "deleteAccountExplainer": "Seu perfil é anonimizado e todas as sessões terminam. Espaços que só você tem vão junto; os compartilhados são arquivados, para que o histórico dos outros membros continue coerente. Isso não pode ser desfeito.",
-    "deleteAccountDescription": "Isso anonimiza seu perfil e encerra todas as sessões. Não pode ser desfeito. Baixe seus dados antes, se quiser uma cópia.",
+    "deleteAccountExplainer": "A exclusão é agendada, não imediata: todas as sessões terminam agora, e entrar de novo antes da data cancela tudo. Quando acontecer, seu perfil é anonimizado, os espaços que só você tem vão junto, e os compartilhados são arquivados para que o histórico dos outros membros continue coerente.",
+    "deleteAccountDescription": "Sua conta será excluída após um período de carência, e todas as sessões terminam agora. Entrar de novo antes disso cancela a exclusão. Baixe seus dados antes, se quiser uma cópia.",
     "deleteMyAccount": "Excluir minha conta",
     "deleteAccountFailed": "Não foi possível excluir a conta.",
     "role": {
@@ -697,7 +697,10 @@
     "joined": "Entrou em",
     "you": "você",
     "invitedBy": "Convidado por",
-    "expires": "Expira em"
+    "expires": "Expira em",
+    "deleteScheduledTitle": "Exclusão agendada",
+    "deleteScheduledOn": "Sua conta e seus dados serão excluídos em {{date}}.",
+    "deleteScheduledCancel": "Você saiu de todos os dispositivos. Entre de novo antes dessa data para cancelar a exclusão."
   },
   "imports": {
     "action": "Importar CSV",

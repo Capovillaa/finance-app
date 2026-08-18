@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-365; see section 4 for the current command. The compiled `dist/server.js`
+373; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -909,7 +909,7 @@ changes.
 ### Tests
 
 ```bash
-npm test                 # all 365 — needs Postgres, and only Postgres
+npm test                 # all 373 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -2246,6 +2246,132 @@ overwrites `Accept-Language` with the signed-in user's stored value. Patch
 
 ---
 
+## 5m. Erasure is a request with a grace period
+
+Finding **H-2**. Full reasoning is in `docs/decisions.md`, "Erasure is a request,
+not an act". What you need in order not to undo it:
+
+`DELETE /users/me` used to *be* the erasure — one transaction that hard-deleted
+every solely-owned workspace and all its history, behind a bearer token and
+`{ confirm: true }`. Three things guard it now, and the third was a product
+decision rather than a security one:
+
+1. **The account password**, verified with `verifyPassword`. Any path yielding a
+   fifteen-minute access token was otherwise enough to destroy someone's whole
+   financial record.
+2. **`authRateLimit`**, because an endpoint that takes a password is a guessing
+   oracle whether or not that is its purpose.
+3. **A grace period** — `ACCOUNT_DELETION_GRACE_DAYS`, default 7. The request
+   stamps `users.deletion_requested_at` (migration `010`) and revokes every
+   session; a daily maintenance task does the real erasure once the window
+   closes. The endpoint answers **200 with `deletionScheduledFor`**, not 204.
+
+**Signing in cancels it, and that is the entire undo mechanism.** `login` clears
+the column when it finds one set. There is no cancel endpoint and no emailed
+token: proving you can still authenticate is proof enough that you want the
+account, and it works from any device the person still has. If you add another
+way in — an OAuth flow, a magic link — it owes the same call to
+`cancelAccountDeletion`.
+
+Four smaller things that are deliberate:
+
+- **Asking twice does not extend the countdown.** `requestAccountDeletion`
+  reuses the existing `deletion_requested_at` rather than restamping it.
+- **`eraseAccount` is one function, called by the route's job and by nothing
+  else.** It was inline in the route handler before; the maintenance task and
+  the route must never drift into two different definitions of "erased".
+- **The sweep erases one account per transaction and logs-and-skips a failure**,
+  because a thrown error in a retried job stops on the same row forever.
+- **A shared workspace is archived, not deleted.** Only ones the user owns alone
+  go with them, or other members lose their records.
+
+**The client change is not optional**: the endpoint now requires a password, so
+the old `ConfirmDialog` would simply 422. `features/settings/DeleteAccountDialog.tsx`
+collects it and then stays open to show the date, because the session ends the
+moment it closes.
+
+---
+
+## 5n. One origin, and something that serves the client
+
+Findings **H-4**, **H-5** and **P-1**, which are one piece of work: the fix for
+the cookie is the thing that also serves the HTML that also carries the CSP.
+Full reasoning is in `docs/decisions.md`, "One origin, because the cookie says
+so". What you need:
+
+**There was no way to deploy the web client at all.** `npm run build
+--workspace=@finance/web` produced `apps/web/dist` and nothing consumed it — no
+Dockerfile, no static server, no compose service. `apps/web/Dockerfile` and
+`apps/web/nginx.conf` are that, and the `web` service in
+`docker-compose.deploy.yml` runs it.
+
+**The topology is now enforced, not documented.** The refresh cookie is
+`SameSite=Lax` and is the only credential `/auth/refresh` accepts, so a browser
+on a different origin than the API never sends it: every session would end at
+the first token refresh, fifteen minutes in, with a 401 and a forced sign-out.
+`config/production-policy.ts`'s `crossOriginBaseUrls` makes the API refuse to
+boot in production when `API_BASE_URL` and `WEB_BASE_URL` disagree, and
+`.env.deploy.example` has **one** `PUBLIC_URL` filling both. `apps/web/.env.example`
+now says to keep `VITE_API_BASE_URL` relative.
+
+**nginx is the shared origin**: it serves the bundle and proxies `/api` to the
+API container. Five things in that config are load-bearing:
+
+1. **`TRUST_PROXY=1` on the API service in the deployed composition**, because
+   there is now genuinely one proxy in front. Left at `false`, every request
+   would appear to come from the nginx container and the per-address rate limit
+   would become a single shared bucket for the internet. Verified: three logins
+   claiming three different `X-Forwarded-For` values drew down one budget
+   (8 → 7 → 6) rather than getting a fresh one each.
+2. **The upstream goes through a variable and a `resolver`**, not a literal
+   `proxy_pass http://api:4000`. nginx resolves a literal upstream **once at
+   startup** and caches it for the process's life, so recreating the API
+   container — any redeploy — leaves the proxy pointing at a dead address. It is
+   also what lets `nginx -t` parse the file outside the compose network, which
+   is the CI check.
+3. **`add_header` in a `location` block replaces the inherited set**, so the
+   security headers are repeated in `/assets/` and `/index.html`. Omitting them
+   there is the classic way a hardened site serves one bare path.
+4. **`always` on every `add_header`**, or an error page — which is HTML, and
+   exactly where a clickjacking frame would sit — goes out without them.
+5. **`index.html` is `no-store`; hashed assets are `immutable`.** Caching the
+   entry document pins a browser to the JS bundle of a build that is gone.
+
+The policy is `default-src 'self'` with `style-src 'unsafe-inline'` as the one
+relaxation — MUI/emotion inject `<style>` tags at runtime. `font-src 'self'`
+needs no Google origin because all three families are self-hosted via Fontsource,
+and `connect-src 'self'` is only possible *because* of the proxy.
+
+**And the seed script refuses a real database** (**M-10**). `npm run seed`
+creates two accounts whose password is published on GitHub and deletes existing
+rows for them first. It now refuses when `NODE_ENV=production` **and** when
+`DATABASE_URL`'s host is not local — `NODE_ENV` is not the check that matters,
+because nobody sets it before typing `npm run seed`; what they get wrong is a
+`DATABASE_URL` still exported in the shell. `--i-know-this-is-not-a-demo-database`
+overrides it out loud.
+
+### Verified by driving the deployed stack in Chrome
+
+Not by typechecking: the whole composition was built and run, and Playwright
+drove it end to end — 12 checks, all green. Registration through nginx, the
+refresh cookie present on the app origin with `HttpOnly`/`Lax`/`path=/api/v1/auth`,
+a deep-link reload of `/transactions` (the SPA fallback), every `/api/` call
+staying on the one origin, the erasure dialog refusing a wrong password and then
+naming the deletion date, the session ending on close, signing back in cancelling
+it, **no CSP violations in the console**, and no failed requests. A `curl` pass
+covered the headers themselves, the immutable asset caching, and the
+forged-`X-Forwarded-For` case above.
+
+**One real bug that only the browser could show**: the wrong-password message
+came back in **pt-BR** while the UI was in English. `RegisterPage` sends
+`timezone` and `baseCurrency` from the device but never sent `locale`, so every
+account was stamped with the API's `'pt-BR'` default — and since `requireAuth`
+prefers the stored locale over `Accept-Language`, every server-rendered sentence
+afterwards was in a language the user never chose. One line in `RegisterPage.tsx`.
+**A form that collects a preference the API can store should send it.**
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -2323,6 +2449,22 @@ everywhere" is immediate rather than "within fifteen minutes". The token carries
 a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
 token issued just before a revocation from one issued just after — which would
 make either the stale token or the user's fresh sign-in wrong. See section 5i.
+
+**The client and the API share one origin, because the refresh cookie says so.**
+It is `SameSite=Lax` and it is the only credential `/auth/refresh` accepts, so a
+split deployment does not degrade sessions — it ends them, at the first token
+refresh. `apps/web/Dockerfile` + `nginx.conf` serve the bundle and proxy `/api`
+to the API container, which is also the only place a Content-Security-Policy,
+`frame-ancestors` and HSTS can live (nothing served the HTML before), and what
+lets `connect-src` be `'self'`. Production refuses to boot when `API_BASE_URL`
+and `WEB_BASE_URL` disagree, and the deployed API runs with `TRUST_PROXY=1`
+because there is now exactly one proxy in front of it. See section 5n.
+
+**Erasing an account is a request, not an act.** `DELETE /users/me` costs the
+account password, is behind `authRateLimit`, and schedules the erasure
+`ACCOUNT_DELETION_GRACE_DAYS` ahead rather than performing it; signing in during
+the window cancels it, which is the whole undo mechanism. A daily maintenance
+task calls the same `eraseAccount` the route used to inline. See section 5m.
 
 **An error response is written by this codebase, not by Postgres.** The body is
 `code`, a catalogue sentence, the rejected fields, and `requestId` — nothing
@@ -2554,26 +2696,32 @@ and does not* (see the first item of Phase 2).
       section 5l. `rawMessage` became `internalDetail`, `localize()` always
       renders from the catalogue, and the same pass took **M-1** below, since it
       is the neighbouring line of the same response body.
-- [ ] **[H-2] Re-authenticate before `DELETE /users/me`.** It hard-deletes every
-      solely-owned workspace and all its financial history, behind a bearer
-      token and `{confirm: true}`. Require the current password, mount
-      `authRateLimit`, and consider a soft-delete grace period.
-- [ ] **[H-4] Decide the production origin topology and fix the refresh cookie.**
-      `sameSite: 'lax'` is never sent on a cross-site fetch, and
-      `apps/web/.env.example` documents the API on a *different* host — so every
-      session would die at the first token expiry. Either enforce same-origin,
-      or move to `SameSite=None; Secure` with a CSRF token on `/auth/refresh`.
-- [ ] **[H-5, P-1] Ship a way to serve the web client.** There is no Dockerfile,
-      no static server and no compose service for `apps/web`; `dist/` is built
-      and nothing consumes it. This is also the only place CSP, HSTS and
-      `frame-ancestors` can be set — `helmet` has `contentSecurityPolicy: false`
-      and `index.html` has no meta policy.
+- [x] **[H-2] Re-authenticate before `DELETE /users/me`.** **Done** — see
+      section 5m. It now requires the account password, is behind
+      `authRateLimit`, and schedules the erasure `ACCOUNT_DELETION_GRACE_DAYS`
+      ahead (migration `010`) instead of performing it; signing in cancels it,
+      and a daily maintenance task carries it out. The grace period was the
+      chosen option rather than the audit's "consider".
+- [x] **[H-4] Decide the production origin topology and fix the refresh cookie.**
+      **Done** — see section 5n. Same-origin was chosen, so `Lax` stays and no
+      CSRF token is needed; the `web` nginx proxies `/api`, and production
+      **refuses to boot** when `API_BASE_URL` and `WEB_BASE_URL` disagree rather
+      than leaving it to a deployment note.
+- [x] **[H-5, P-1] Ship a way to serve the web client.** **Done** — see
+      section 5n. `apps/web/Dockerfile` + `nginx.conf` + the `web` service:
+      static bundle, SPA fallback, the `/api` proxy, and the document headers
+      (CSP, `frame-ancestors 'none'`, HSTS, `Referrer-Policy`,
+      `Permissions-Policy`). CI builds the image and runs `nginx -t`.
+      **`helmet`'s own CSP on the API is still `false`** — the JSON responses'
+      policy was left alone deliberately; the document's is the one that
+      mattered.
 - [x] **[M-1] Never send `stack` in an error response.** **Done**, with H-3 —
       see section 5l. It used to be sent whenever `!isProduction && !expose`,
       which includes staging and preview deployments.
-- [ ] **[M-10] Guard `npm run seed` against production.** It hardcodes a
-      published demo password and its reset step deletes from `users`, with no
-      `NODE_ENV` check anywhere.
+- [x] **[M-10] Guard `npm run seed` against production.** **Done** — see the
+      end of section 5n. It refuses on `NODE_ENV=production` *and* on a
+      `DATABASE_URL` whose host is not local, which is the check that actually
+      catches the mistake people make.
 
 ### Phase 2 — before real users
 

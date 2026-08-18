@@ -7,8 +7,9 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useState, type ReactElement } from 'react';
 import { useLogoutAllMutation } from '../../api/endpoints/auth';
-import { useEraseMyAccountMutation, useExportMyDataMutation } from '../../api/endpoints/users';
+import { useExportMyDataMutation } from '../../api/endpoints/users';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import DeleteAccountDialog from './DeleteAccountDialog';
 import { getApiErrorMessage } from '../../lib/apiError';
 import { downloadText } from '../../lib/download';
 import { todayIso } from '../../lib/format';
@@ -27,7 +28,6 @@ export default function DataSection(): ReactElement {
   const endSession = useEndSession();
   const [exportData, exportState] = useExportMyDataMutation();
   const [logoutAll, logoutAllState] = useLogoutAllMutation();
-  const [eraseMyAccount, deleteState] = useEraseMyAccountMutation();
 
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -52,13 +52,12 @@ export default function DataSection(): ReactElement {
     endSession();
   };
 
-  const handleDelete = async (): Promise<void> => {
-    const ok = await eraseMyAccount()
-      .unwrap()
-      .then(() => true)
-      .catch(() => false);
-
-    if (!ok) return;
+  /**
+   * The erasure dialog owns its own request, because it needs a password field
+   * and it stays open afterwards to say when the data actually goes. All this
+   * has to do is end the local session once the user has read that.
+   */
+  const handleScheduled = (): void => {
     setConfirmingDelete(false);
     endSession();
   };
@@ -126,10 +125,6 @@ export default function DataSection(): ReactElement {
               </Typography>
             </Stack>
 
-            {deleteState.error ? (
-              <Alert severity="error">{getApiErrorMessage(deleteState.error, t('settings.deleteAccountFailed'))}</Alert>
-            ) : null}
-
             <Stack direction="row" justifyContent="flex-end">
               <Button color="error" variant="outlined" onClick={() => setConfirmingDelete(true)}>
                 {t('settings.deleteMyAccount')}
@@ -149,15 +144,10 @@ export default function DataSection(): ReactElement {
         onCancel={() => setConfirmingSignOut(false)}
       />
 
-      <ConfirmDialog
+      <DeleteAccountDialog
         open={confirmingDelete}
-        title={t('settings.deleteAccountTitle')}
-        description={t('settings.deleteAccountDescription')}
-        confirmLabel={t('settings.deleteMyAccount')}
-        destructive
-        loading={deleteState.isLoading}
-        onConfirm={() => void handleDelete()}
         onCancel={() => setConfirmingDelete(false)}
+        onScheduled={handleScheduled}
       />
     </Stack>
   );

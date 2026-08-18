@@ -72,6 +72,12 @@ export default function RegisterPage(): ReactElement {
       password: values.password,
       baseCurrency: values.baseCurrency,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      // The language this form was just read in. Without it the API applies its
+      // own default, and since `requireAuth` prefers the stored locale over
+      // `Accept-Language`, every server-rendered sentence afterwards — a
+      // rejected password, an alert email — comes back in a language the user
+      // never chose, while the UI around it stays in the one they did.
+      locale: appLocale(),
       // Sent only when filled in, so the API applies its own default name.
       ...(values.workspaceName ? { workspaceName: values.workspaceName } : {}),
     })

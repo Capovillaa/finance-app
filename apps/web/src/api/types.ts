@@ -135,6 +135,9 @@ export type AuthResult = Ok<'postAuthLogin'>;
 
 export type TokenPair = Ok<'postAuthRefresh'>;
 
+/** What `DELETE /users/me` answers: an erasure booked for later, not done. */
+export type DeletionScheduled = Ok<'deleteUsersMe'>;
+
 export type LoginRequest = Sends<'postAuthLogin'>;
 
 export type RegisterRequest = Sends<'postAuthRegister'>;

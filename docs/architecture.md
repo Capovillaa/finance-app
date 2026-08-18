@@ -289,9 +289,20 @@ the shared package first, then the API, then prunes to production dependencies.
 `docker compose -f docker-compose.deploy.yml up -d` is the deployment in miniature:
 
 ```
-postgres (healthy) ──▶ migrate (runs to completion) ──┬──▶ api
+                                                              browser
+                                                                 │
+postgres (healthy) ──▶ migrate (runs to completion) ──┬──▶ api ◀─┤ /api  (proxied)
+                                                      │         │
+                                                      │        web  ◀── / (the bundle)
                                                       └──▶ worker
 ```
+
+`web` is an nginx serving the built client and proxying `/api` to `api`, so the browser talks to
+**one origin**. That is a requirement rather than a layout: the refresh token is a `SameSite=Lax`
+cookie and is the only credential `/auth/refresh` accepts, so a split origin ends every session at
+the first token refresh — the API refuses to start in production when its two base URLs disagree.
+It is also the only place the document's security headers can live (CSP, `frame-ancestors`, HSTS);
+`helmet` on the API sets headers on JSON, which is a different job. Only `web` publishes a port.
 
 That is a **separate file** from `docker-compose.yml`, which holds development infrastructure and
 nothing else. It used to be a `profiles: ["app"]` section of the same file, which did not work as a

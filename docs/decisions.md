@@ -1674,6 +1674,139 @@ serializer rather than assumed.
 
 ---
 
+### Erasure is a request, not an act
+
+`DELETE /users/me` did exactly what it said: one transaction that hard-deleted every workspace the
+caller solely owned — accounts, transactions, budgets, goals, reconciliations, every row hanging
+off them — archived the shared ones, anonymised the user and revoked their tokens. What guarded it
+was a valid access token and a body of `{ "confirm": true }`. No password, no recent-auth window,
+not even the credential rate limiter. Any path that yields a fifteen-minute bearer token — a
+borrowed laptop, a leaked token, a future XSS — was sufficient to destroy a person's entire
+financial history, permanently, with one request.
+
+Two of the three fixes were not in question: the endpoint now takes the current password and
+verifies it, and it carries `authRateLimit`, because an endpoint that accepts a password is a
+guessing oracle regardless of what it is for.
+
+The third was a product decision and it went the recoverable way. **The request now schedules the
+erasure rather than performing it**: `users.deletion_requested_at` is stamped (migration `010`),
+every session is revoked, and a daily maintenance task does the real work once
+`ACCOUNT_DELETION_GRACE_DAYS` — seven by default — has passed. The endpoint answers 200 with
+`deletionScheduledFor` instead of 204, because "when" is the only thing the user needs and the
+session is about to end.
+
+**Signing in is the cancellation, and there is nothing else.** No cancel endpoint, no emailed
+token, no support path: `login` clears the column when it finds one set. Proving you can still
+authenticate is proof enough that you want the account, it works from any device the person still
+has, and it is the one action someone who has changed their mind is certain to attempt. The cost
+is that the mechanism is invisible unless the UI says so, which is why the dialog stays open after
+the request to name the date and spell out that signing in calls it off.
+
+Four details worth keeping:
+
+- **Asking twice does not extend the countdown.** `requestAccountDeletion` reuses an existing
+  `deletion_requested_at`. A second request must not quietly buy another week — the person asked
+  once, and that is when they asked.
+- **`eraseAccount` is a function now, not a route body.** The maintenance task and the endpoint
+  must never become two definitions of "erased"; it was inlined in the handler before, where
+  nothing else could reach it.
+- **The sweep erases one account per transaction, and logs-and-skips a failure.** A thrown error
+  in a retried job stops on the same row forever, which would silently stall every later deletion
+  behind one bad one.
+- **A shared workspace is archived rather than deleted**, unchanged from before: only the ones the
+  user owns alone go with them, or other members lose records that were never theirs to lose.
+
+The client had to change with it — the endpoint now 422s without a password, so the old
+`ConfirmDialog` was no longer a valid caller. That is the honest shape of this finding: a
+step-up-authentication fix is never only a server change.
+
+---
+
+### One origin, because the cookie says so
+
+Three findings collapsed into one piece of work, and the collapse is the interesting part. **H-4**
+said the refresh cookie could not function in the documented production deployment. **H-5** said no
+Content-Security-Policy was set anywhere. **P-1** said there was no way to deploy the web client at
+all: `npm run build --workspace=@finance/web` produced `apps/web/dist` and nothing on earth
+consumed it. The fix for the first is the thing that serves the second's HTML, and both of them are
+the third.
+
+**The cookie problem was not a hardening gap, it was a broken deployment.** `setRefreshCookie` sets
+`SameSite=Lax`, which is what stands in for CSRF protection on `/auth/refresh` — that route accepts
+the cookie and nothing else. A browser does not send a `Lax` cookie on a cross-site fetch *at all*.
+`apps/web/.env.example` documented production as `VITE_API_BASE_URL=https://api.example.com/api/v1`,
+a different site from the client's own. So every session would have died at the first access-token
+expiry: a refresh with no cookie, a 401, and `baseQueryWithReauth` signing the user out. Fifteen
+minutes into every session, for every user, with nothing in the logs but a 401. It worked in
+development only because Vite proxies `/api`, and the comment in `vite.config.ts` says exactly why.
+
+Given the choice between same-origin and `SameSite=None` plus a CSRF token, same-origin won on
+every axis: fewer moving parts, no new token to implement and rotate, `connect-src 'self'` becomes
+possible in the CSP, and CORS stops being load-bearing. So `apps/web/Dockerfile` builds the bundle
+and `apps/web/nginx.conf` serves it *and* proxies `/api` to the API container. One origin, one
+certificate, one thing to publish.
+
+**And the requirement is enforced rather than written down.** `crossOriginBaseUrls` in
+`config/production-policy.ts` — the third rule in the file that C-1 created and C-2 renamed — makes
+the API refuse to boot in production when `API_BASE_URL` and `WEB_BASE_URL` have different origins.
+A deployment note would have been obeyed until the first time someone put the client on a CDN, and
+the symptom (sessions ending at fifteen minutes) points nowhere near the cause.
+`.env.deploy.example` accordingly has one `PUBLIC_URL` that fills both.
+
+**Serving the HTML is what makes a CSP possible at all.** `helmet` sets headers on the API's JSON
+responses, which is worth doing and is a different thing: a Content-Security-Policy,
+`X-Frame-Options`, `Referrer-Policy` and HSTS only mean anything on the document a browser loads,
+and nothing was loading a document from anything. The policy is `default-src 'self'` with exactly
+one relaxation — `style-src 'unsafe-inline'`, because MUI and emotion inject `<style>` elements at
+runtime. `font-src 'self'` needs no Google origin, because the redesign self-hosted all three
+families through Fontsource; `frame-ancestors 'none'` because the transfer and delete flows are one
+click each; `connect-src 'self'` only because of the proxy above.
+
+Five things in that config file would each have been a real defect:
+
+1. **`TRUST_PROXY=1` on the API service.** There is now genuinely one proxy in front, and section
+   "Rate limiting is two-dimensional" is about what `req.ip` means. Left at `false`, every request
+   would appear to come from the nginx container — the per-address budget would become one shared
+   bucket for the entire internet, which is worse than no limiter, because it would also lock
+   everyone out together. Measured after the change: three logins claiming three different
+   `X-Forwarded-For` values drew down a single budget, 8 → 7 → 6.
+2. **The upstream is a variable behind a `resolver`, not a literal host.** nginx resolves a literal
+   `proxy_pass http://api:4000` once, at startup, and caches that address for the life of the
+   process — so recreating the API container, which is what a redeploy *is*, leaves the proxy
+   talking to an address nothing answers on until someone restarts nginx too. It also makes the
+   file parseable outside the compose network, which is what lets CI run `nginx -t`.
+3. **`add_header` in a `location` block replaces the inherited set rather than adding to it.** The
+   headers are therefore repeated in `/assets/` and `/index.html`. Omitting them there is the
+   standard way a carefully hardened site ends up serving one unprotected path.
+4. **`always` on every header**, or they are attached to 2xx/3xx only — and an error page is HTML,
+   which is precisely where a clickjacking frame would sit.
+5. **`index.html` is `no-store` while hashed assets are `immutable`.** Caching the entry document
+   pins a browser to the bundle of a build that no longer exists.
+
+**M-10 rode along**, because it is the same class of mistake. `npm run seed` creates two accounts
+whose password is published on GitHub and deletes any existing rows for them first. It now refuses
+under `NODE_ENV=production` — and, more importantly, refuses when `DATABASE_URL`'s host is not
+local. `NODE_ENV` is not the check that matters: nobody sets it before typing `npm run seed`. What
+they get wrong is a `DATABASE_URL` still exported in the shell, and only the target database can
+see that.
+
+**Verified by driving the whole thing.** The composition was built and run, and Playwright drove
+the real browser through it: 12 checks green, covering registration through nginx, the refresh
+cookie landing on the app origin with `HttpOnly`/`Lax`/`path=/api/v1/auth`, a hard reload of
+`/transactions` hitting the SPA fallback, every `/api/` request staying on the one origin, the new
+erasure dialog rejecting a wrong password and then naming the deletion date, the session ending,
+signing back in cancelling it, **no CSP violations in the console**, and no failed requests.
+
+That run also surfaced a bug none of this work would have caused or caught otherwise: the
+wrong-password message came back in **pt-BR** while the interface was in English. `RegisterPage`
+sends `timezone` and `baseCurrency` derived from the device but never sent `locale`, so every
+account was stamped with the API's `'pt-BR'` default — and because `requireAuth` prefers the stored
+locale over `Accept-Language`, every server-rendered sentence for the life of that account came
+back in a language its owner never chose, inside a UI that was obeying them correctly. One line.
+**A form that collects a preference the API is willing to store should send it.**
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

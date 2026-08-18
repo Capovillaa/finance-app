@@ -676,8 +676,8 @@
     "signOutAllDescription": "Every signed-in device, including this one, will be signed out. You will need to sign in again.",
     "signOutAllFailed": "Could not sign out everywhere.",
     "deleteAccountTitle": "Delete account",
-    "deleteAccountExplainer": "Your profile is anonymised and every session ends. Workspaces you own alone go with you; shared ones are archived, so the other members’ history stays coherent. This cannot be undone.",
-    "deleteAccountDescription": "This anonymises your profile and ends every session. It cannot be undone. Download your data first if you want a copy.",
+    "deleteAccountExplainer": "Deletion is scheduled rather than immediate: every session ends now, and signing in again before the date cancels it. When it runs, your profile is anonymised, workspaces you own alone go with you, and shared ones are archived so the other members’ history stays coherent.",
+    "deleteAccountDescription": "Your account will be deleted after a grace period, and every session ends now. Signing in again before then cancels it. Download your data first if you want a copy.",
     "deleteMyAccount": "Delete my account",
     "deleteAccountFailed": "Could not delete the account.",
     "role": {
@@ -697,7 +697,10 @@
     "joined": "Joined",
     "you": "you",
     "invitedBy": "Invited by",
-    "expires": "Expires"
+    "expires": "Expires",
+    "deleteScheduledTitle": "Deletion scheduled",
+    "deleteScheduledOn": "Your account and its data will be deleted on {{date}}.",
+    "deleteScheduledCancel": "You have been signed out everywhere. Sign in again before that date to cancel the deletion."
   },
   "imports": {
     "action": "Import CSV",

@@ -1,5 +1,5 @@
 import { api } from '../api';
-import type { User } from '../types';
+import type { DeletionScheduled, User } from '../types';
 
 export interface ProfileInput {
   fullName?: string;
@@ -29,9 +29,16 @@ export const usersApi = api.injectEndpoints({
     }),
 
     /**
-     * Erasure. The server anonymises rather than hard-deletes so shared history
-     * stays coherent for other members, and revokes every session, so the caller
-     * must tear down local state too.
+     * Erasure — **scheduled, not immediate**. The server stamps the request,
+     * revokes every session, and performs the real erasure once a grace period
+     * has passed; signing in again before then cancels it. It answers with the
+     * date, which is worth showing before the caller is signed out.
+     *
+     * The account password is required: a fifteen-minute access token on its
+     * own was enough to destroy every workspace the user solely owns.
+     *
+     * The server anonymises rather than hard-deletes the user row when the time
+     * comes, so shared-workspace history stays coherent for other members.
      *
      * Named `eraseMyAccount` rather than `deleteAccount` — that name collided
      * with `accounts.ts`'s financial-account delete mutation on the shared RTK
@@ -43,8 +50,12 @@ export const usersApi = api.injectEndpoints({
      * user's entire profile instead. Never reuse an endpoint key across
      * modules, even when the two are unrelated in every other way.
      */
-    eraseMyAccount: build.mutation<void, void>({
-      query: () => ({ url: '/users/me', method: 'DELETE', body: { confirm: true } }),
+    eraseMyAccount: build.mutation<DeletionScheduled, { currentPassword: string }>({
+      query: ({ currentPassword }) => ({
+        url: '/users/me',
+        method: 'DELETE',
+        body: { confirm: true, currentPassword },
+      }),
     }),
   }),
 });

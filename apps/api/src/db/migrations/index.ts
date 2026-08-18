@@ -8,6 +8,7 @@ import * as m006 from './006_alerts_notifications_activity.js';
 import * as m007 from './007_updated_at_triggers.js';
 import * as m008 from './008_imports.js';
 import * as m009 from './009_session_invalidation.js';
+import * as m010 from './010_account_deletion_grace.js';
 
 /**
  * Migrations are registered statically rather than discovered from disk: the
@@ -26,4 +27,5 @@ export const migrations: Record<string, Migration> = {
   '007_updated_at_triggers': m007,
   '008_imports': m008,
   '009_session_invalidation': m009,
+  '010_account_deletion_grace': m010,
 };

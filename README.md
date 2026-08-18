@@ -8,7 +8,7 @@ recurring bills, anomaly-aware alerting, analytics, and CSV import/export.
 Both halves are built and run against each other:
 
 - **`apps/api`** — TypeScript/Express over Postgres 16 with Kysely, plus a BullMQ worker.
-  28 tables across 8 migrations. Endpoint reference in [`docs/api.md`](docs/api.md).
+  28 tables across 10 migrations. Endpoint reference in [`docs/api.md`](docs/api.md).
 - **`apps/web`** — React + Vite client (Material-UI, Redux Toolkit, Recharts, React Hook Form
   and Zod) covering nine screens.
 
@@ -68,14 +68,20 @@ password `Demo1234567`.
 ### Running the built system
 
 `docker-compose.yml` is development infrastructure only — Postgres, Redis and MailHog, each
-published on `127.0.0.1`. The API, the worker and the migration runner live in
-`docker-compose.deploy.yml`, which is the deployed shape: no mail sink, no published database or
-cache ports, and no default for anything that is a credential.
+published on `127.0.0.1`. Everything that ships lives in `docker-compose.deploy.yml`: the client
+behind nginx, the API, the worker, the migration runner, and their own Postgres and Redis. No mail
+sink, no published database or cache ports, and no default for anything that is a credential.
 
 ```bash
 cp .env.deploy.example .env.deploy   # then fill in every REQUIRED value
 docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
 ```
+
+The whole app is then on one port — `127.0.0.1:8080` by default — because the nginx serving the
+client also proxies `/api` to the API container. That is a requirement, not a convenience: the
+refresh token is a `SameSite=Lax` cookie, which a browser will not send cross-site, so the API
+refuses to start in production if `API_BASE_URL` and `WEB_BASE_URL` disagree. Put TLS in front of
+it; the cookie is `Secure`.
 
 It brings up its own Postgres and Redis, so it does not share the development database.
 
@@ -100,7 +106,8 @@ It brings up its own Postgres and Redis, so it does not share the development da
 
 **Identity & access**
 - Registration, login, JWT access tokens plus rotating refresh tokens with replay detection
-- Password change (revokes every session), GDPR data export and account erasure
+- Password change (revokes every session), GDPR data export, and account erasure that is scheduled
+  rather than immediate — it costs the account password, and signing back in cancels it
 - Redis-backed rate limiting, per-IP *and* per-email on credential endpoints
 
 **Workspaces**

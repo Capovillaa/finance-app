@@ -3350,18 +3350,41 @@
                   "confirm": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "currentPassword": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
                   }
                 },
                 "required": [
-                  "confirm"
+                  "confirm",
+                  "currentPassword"
                 ]
               }
             }
           }
         },
         "responses": {
-          "204": {
-            "description": "No content."
+          "200": {
+            "description": "An erasure that has been scheduled, not performed. Every session is revoked immediately; the data is removed once the grace period elapses.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deletionScheduledFor": {
+                      "description": "When the erasure will actually happen. Signing in before then cancels it.",
+                      "$ref": "#/components/schemas/Timestamp"
+                    }
+                  },
+                  "required": [
+                    "deletionScheduledFor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -63,6 +63,14 @@ export const authRouter: Router = Router();
 /**
  * The refresh token is returned in the body (for native clients) *and* set as an
  * HttpOnly cookie (for browsers), so the web app never has to keep it in JS.
+ *
+ * **This cookie requires the client and the API to share an origin**, which is
+ * why `config/env.ts` refuses to start in production when `API_BASE_URL` and
+ * `WEB_BASE_URL` disagree. `Lax` is not merely a hardening choice here — it is
+ * what protects `/auth/refresh`, which accepts the cookie and nothing else —
+ * and a browser does not send a `Lax` cookie on a cross-site fetch at all. The
+ * deployed composition puts nginx in front and proxies `/api` to this process;
+ * the Vite dev server does the same thing for the same reason.
  */
 function setRefreshCookie(res: Response, token: string): void {
   res.cookie(REFRESH_COOKIE, token, {

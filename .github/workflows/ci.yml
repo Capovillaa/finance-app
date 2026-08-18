@@ -99,6 +99,18 @@ jobs:
       - name: Build the production image
         run: docker build -f apps/api/Dockerfile -t finance-api:ci .
 
+      # The client's image, for the same reason: nothing else builds it, and it
+      # is the only thing that serves the HTML — so it is the only place a
+      # Content-Security-Policy, `frame-ancestors` or HSTS can be set. A broken
+      # nginx.conf would otherwise be discovered at deploy time.
+      - name: Build the web image
+        run: docker build -f apps/web/Dockerfile -t finance-web:ci .
+
+      # `nginx -t` parses the config the way the real server will. Cheap, and it
+      # catches the class of mistake that makes a container restart-loop.
+      - name: The web image's nginx config parses
+        run: docker run --rm finance-web:ci nginx -t
+
       # Building proves it compiles; this proves it can *run*. Importing the
       # express app factory pulls in every route, service and library the server
       # touches, without opening a socket to anything — which is precisely the
@@ -154,6 +166,16 @@ jobs:
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
             -e SMTP_HOST=mailhog
 
+          # A split origin does not degrade the session, it ends it: the refresh
+          # cookie is SameSite=Lax and would never be sent, so every user is
+          # signed out fifteen minutes in with nothing but a 401 to show for it.
+          refuses "the API and client on different origins" \
+            -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
+            -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e SMTP_HOST=smtp.invalid \
+            -e API_BASE_URL=https://api.example.com \
+            -e WEB_BASE_URL=https://app.example.com
+
       # The deployment composition is not exercised by anything else here, and a
       # broken anchor or a mistyped `${VAR:?}` only shows up at deploy time.
       # Both directions matter: it renders when the credentials are supplied, and
@@ -171,8 +193,7 @@ jobs:
           POSTGRES_PASSWORD=$(openssl rand -hex 16) \
           REDIS_PASSWORD=$(openssl rand -hex 16) \
           SMTP_HOST=smtp.invalid \
-          API_BASE_URL=https://api.invalid \
-          WEB_BASE_URL=https://app.invalid \
+          PUBLIC_URL=https://finance.invalid \
             docker compose -f docker-compose.deploy.yml --env-file /dev/null config --quiet
           echo "deployment composition ok"
           echo "refused, as it should"

@@ -54,6 +54,18 @@ export const passwordFormSchema = z
 
 export type PasswordFormValues = z.infer<typeof passwordFormSchema>;
 
+/**
+ * Erasure asks for the current password, not a new one, so it takes the same
+ * "prove it is you" shape the password change uses for `currentPassword`: a
+ * bound and nothing else. Applying the password *policy* here would reject an
+ * account whose password predates it.
+ */
+export const deleteAccountFormSchema = z.object({
+  currentPassword: z.string().min(1, 'validation.currentPasswordRequired').max(LIMITS.password.max),
+});
+
+export type DeleteAccountFormValues = z.infer<typeof deleteAccountFormSchema>;
+
 export const workspaceFormSchema = z.object({
   name: z.string().trim().min(LIMITS.name.min, 'validation.nameRequired').max(LIMITS.name.max),
   baseCurrency: z.string().length(CURRENCY_CODE_LENGTH, 'validation.currencyCode').toUpperCase(),

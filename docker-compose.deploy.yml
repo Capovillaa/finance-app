@@ -46,13 +46,22 @@ x-app-environment: &app-environment
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_SECURE: ${SMTP_SECURE:-false}
   MAIL_FROM: ${MAIL_FROM:-Finance App <no-reply@finance.local>}
-  API_BASE_URL: ${API_BASE_URL:?the public URL of this API}
-  WEB_BASE_URL: ${WEB_BASE_URL:?the public URL of the web client - it is what invitation and reset links point at}
+  # One public URL, and both variables point at it: the `web` service below is
+  # the origin, and it proxies /api here. They must agree — the API refuses to
+  # start in production otherwise, because the refresh cookie is SameSite=Lax
+  # and a split origin ends every session at the first token refresh.
+  API_BASE_URL: ${PUBLIC_URL:?the public URL this app is served from, e.g. https://finance.example.com}
+  WEB_BASE_URL: ${PUBLIC_URL:?the public URL this app is served from, e.g. https://finance.example.com}
   CORS_ORIGINS: ${CORS_ORIGINS:-}
-  # `req.ip` is read out of `X-Forwarded-For`, which the client sends. Set this
-  # to the number of proxy hops actually in front of the API — trusting a header
-  # nobody rewrites hands every caller a fresh rate-limit bucket per request.
-  TRUST_PROXY: ${TRUST_PROXY:-false}
+  # `req.ip` is read out of `X-Forwarded-For`, which the client sends — so this
+  # is a security setting. The default is `1` here and `false` everywhere else,
+  # because in *this* composition there is exactly one proxy in front: the nginx
+  # in the `web` service, which overwrites the header with the real peer. Left
+  # at `false`, every request would look like it came from that container and
+  # the per-address rate limit would become one shared bucket for the internet.
+  # Raise it only if you put further proxies in front of `web`.
+  TRUST_PROXY: ${TRUST_PROXY:-1}
+  ACCOUNT_DELETION_GRACE_DAYS: ${ACCOUNT_DELETION_GRACE_DAYS:-7}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
   REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
@@ -138,16 +147,40 @@ services:
     container_name: finance_deploy_api
     restart: unless-stopped
     environment: *app-environment
-    ports:
-      # Bound to the loopback interface by default, on the assumption that a
-      # reverse proxy terminating TLS is what faces the internet. Set
-      # API_BIND_ADDRESS=0.0.0.0 only if you mean it.
-      - "${API_BIND_ADDRESS:-127.0.0.1}:${PORT:-4000}:4000"
+    # No `ports:` by default. The browser reaches the API through `web`, on the
+    # same origin, which is what the SameSite=Lax refresh cookie requires — so
+    # publishing this one as well would only create a second origin nobody
+    # should use. Set API_BIND_ADDRESS and API_PORT to expose it for debugging.
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  # The client, and the origin the whole app is served from.
+  #
+  # There was no way to deploy the web client at all before this service: the
+  # build produced `apps/web/dist` and nothing consumed it. It is also the only
+  # place the document's security headers can live — a Content-Security-Policy,
+  # `frame-ancestors` and HSTS mean nothing on a JSON response, and the HTML was
+  # not being served by anything. See `apps/web/nginx.conf`.
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: finance-web
+    container_name: finance_deploy_web
+    restart: unless-stopped
+    ports:
+      # Loopback by default: TLS termination is the job of whatever fronts this,
+      # and the app must be reached over HTTPS — the refresh cookie is `Secure`
+      # in production and a browser will not send it over plain HTTP. Set
+      # WEB_BIND_ADDRESS=0.0.0.0 only when something else terminates TLS in
+      # front, or when you have put a certificate on this port yourself.
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_started
 
   worker:
     build: *app-build

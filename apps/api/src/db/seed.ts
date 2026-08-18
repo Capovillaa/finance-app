@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import { db, closeDatabase } from './client.js';
 import { addDays, addMonths, startOfMonth, today } from '../lib/dates.js';
 import { logger } from '../lib/logger.js';
@@ -39,7 +40,53 @@ function randomBetween(min: number, max: number): number {
   return Math.round((min + Math.random() * (max - min)) * 100) / 100;
 }
 
+/**
+ * Two accounts whose password is printed in a public repository, and a reset
+ * step that deletes from `users`. Both are correct for demo data and neither is
+ * survivable against a real database, so this refuses to run against one.
+ *
+ * `NODE_ENV` alone is not the check that matters. Nobody sets `NODE_ENV` before
+ * typing `npm run seed`; what they get wrong is `DATABASE_URL` — a shell that
+ * still has production's exported, a `.env` copied from the wrong place. So the
+ * target database has to look local as well, and anything else has to be said
+ * out loud with `--i-know-this-is-not-a-demo-database`.
+ */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', 'postgres', 'db']);
+const OVERRIDE_FLAG = '--i-know-this-is-not-a-demo-database';
+
+function refuseUnlessDemoDatabase(): void {
+  if (env.isProduction) {
+    throw new Error(
+      'Refusing to seed with NODE_ENV=production. This script creates accounts whose password is\n' +
+        'published on GitHub, and clears existing demo users first.',
+    );
+  }
+
+  if (process.argv.includes(OVERRIDE_FLAG)) {
+    logger.warn('Seeding a non-local database because the override flag was given');
+    return;
+  }
+
+  let host: string;
+  try {
+    host = new URL(env.DATABASE_URL).hostname;
+  } catch {
+    throw new Error(`Refusing to seed: DATABASE_URL is not a URL this script can inspect.`);
+  }
+
+  if (!LOCAL_HOSTS.has(host)) {
+    throw new Error(
+      `Refusing to seed the database at "${host}": it does not look like a local one.\n\n` +
+        'This script creates ana@demo.local and bruno@demo.local with a password published on\n' +
+        `GitHub, and deletes any existing rows for them first. If you really mean it, re-run with\n` +
+        `${OVERRIDE_FLAG}.`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
+  refuseUnlessDemoDatabase();
+
   logger.info('Seeding demo data...');
 
   await db
