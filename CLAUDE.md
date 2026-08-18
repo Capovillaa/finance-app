@@ -1031,6 +1031,24 @@ container images, and what those images refuse to do — no services) and
 **test** (the full suite against a `postgres:16` service container, then a
 migration rollback round-trip). Green on the first run, in about a minute.
 
+**Two more workflows run alongside it (L-6, section 5q).**
+`.github/workflows/gitleaks.yml` runs the open-source `gitleaks` binary
+directly, via its published container image, against the full git history on
+every push and pull request — this is the automated check for the exact
+mistake C-1 was, a real secret committed to a public repository.
+`.gitleaks.toml` allowlists exactly the placeholder strings
+`production-policy.ts`'s `PUBLISHED_SECRETS` already tracks, plus
+`apps/api/tests/` wholesale (the test suite hardcodes fake passwords
+throughout, on purpose — real Postgres, real credential flows, no mocks — and
+a fixture is not a secret). **Add a new placeholder to both lists together, or
+this scan starts failing on your own dev secrets.**
+`.github/workflows/codeql.yml` runs GitHub's own static analysis
+(`javascript-typescript`) on push, pull request and a weekly schedule; free
+for a public repository, no account or key needed beyond what
+`github-actions` already has. `build-mode: manual` because this monorepo's
+`autobuild` default does not know `@finance/schemas` has to build before the
+other two workspaces typecheck (the shared-package convention, section 3).
+
 **Four of the `check` steps are about the deployed artefacts** and are easy to
 break from the source side without noticing:
 
@@ -3230,8 +3248,14 @@ audit checklist below outranks it.
       hashes differently after it ships, which is the same "everyone signs
       back in once" consequence a secret rotation already carries, not a new
       kind of incident.
-- [ ] **[L-6] Secret scanning and SAST in CI.** `npm audit` is there; gitleaks
-      and CodeQL are not.
+- [x] **[L-6] Secret scanning and SAST in CI.** **Done** — see the CI note in
+      section 4 and `docs/decisions.md`. `gitleaks.yml` (the OSS binary
+      directly, not the license-gated marketplace action) and `codeql.yml`,
+      both needing no account. Verified locally with the real gitleaks image
+      against this repository's actual history before either config existed:
+      3 false positives, all hardcoded test passwords in
+      `tests/integration/auth.test.ts`; `.gitleaks.toml`'s path allowlist for
+      `apps/api/tests/` brings that to zero without touching real source.
 - [ ] **[L-5] Require TLS to Postgres and Redis.**
 - [x] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
       worker. **Both done.** `docs/runbook.md` covers the single-instance

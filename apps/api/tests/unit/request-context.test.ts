@@ -1,6 +1,18 @@
+/**
+ * `middleware/request-context.ts` imports `lib/logger.ts`, which imports
+ * `config/env.ts` — stubbed here the same way `tests/unit/openapi.test.ts`
+ * and `tests/unit/db-client.test.ts` do, via `await import` so the
+ * assignments below run before env.ts is ever evaluated.
+ */
+process.env.DATABASE_URL ??= 'postgres://request-context-test:x@localhost:5432/request_context_test_not_connected';
+process.env.JWT_ACCESS_SECRET ??= 'request-context-test-placeholder-secret';
+process.env.JWT_REFRESH_SECRET ??= 'request-context-test-placeholder-secret';
+process.env.EMAIL_TOKEN_SECRET ??= 'request-context-test-placeholder-secret';
+
 import type { Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
-import { requestId } from '../../src/middleware/request-context.js';
+
+const { requestId } = await import('../../src/middleware/request-context.js');
 
 /**
  * L-1 in AUDIT_REPORT.md: a length cap alone still let a client hand this

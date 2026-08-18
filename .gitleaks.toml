@@ -1,0 +1,40 @@
+# Config for .github/workflows/gitleaks.yml.
+#
+# This repository already has a documented threat model for exactly the
+# strings allowlisted below: PUBLISHED_SECRETS in
+# apps/api/src/config/production-policy.ts refuses every one of them at boot
+# under NODE_ENV=production (finding C-1, docs/decisions.md — "A published
+# secret is refused at boot, not documented as something to change"), and
+# .env.example / the CI workflow ship them deliberately so a fresh clone or a
+# CI run works with no setup. Allowlisting them here is not a weakening of
+# this scan — it is what keeps the scan's signal meaningful, since a real,
+# never-published secret committed by mistake would still trip it. Keep this
+# list and PUBLISHED_SECRETS in sync: a new placeholder added to one belongs
+# in the other.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberately public development and CI placeholders — see production-policy.ts's PUBLISHED_SECRETS"
+regexes = [
+  '''dev-access-secret-change-me-0000000000000000''',
+  '''dev-refresh-secret-change-me-000000000000''',
+  '''dev-only-insecure-access-secret-change-me''',
+  '''dev-only-insecure-refresh-secret-change-me''',
+  '''dev-only-insecure-email-token-secret-change-me''',
+  '''ci-access-secret-not-a-real-key-000000''',
+  '''ci-refresh-secret-not-a-real-key-00000''',
+  '''ci-email-token-secret-not-a-real-key-0''',
+  '''openapi-generation-placeholder-secret''',
+]
+# The test suite hardcodes fake passwords and tokens throughout — e.g.
+# 'Sup3rSecret123' and 'NotMyPassword1' in tests/integration/auth.test.ts,
+# confirmed by running this exact scan locally before this config existed —
+# because CLAUDE.md's own testing convention is real Postgres and real
+# credential flows, never mocks. A fake password asserted against in a test
+# is not a secret; excluding test paths keeps the scan's signal on the code
+# that could actually leak something.
+paths = [
+  '''apps/api/tests/''',
+]

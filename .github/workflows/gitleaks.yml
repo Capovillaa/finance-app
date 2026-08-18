@@ -1,0 +1,35 @@
+name: Secret scanning
+
+# Finding L-6 in AUDIT_REPORT.md: this is the automated check for the exact
+# mistake C-1 was — a real secret committed to a file, published the moment the
+# push reaches a public repository.
+#
+# Runs the open-source `gitleaks` binary directly (via its published container
+# image) rather than the `gitleaks-action` marketplace wrapper: the wrapper's
+# newer major versions gate some behaviour behind a paid license even though
+# the scanner itself is free and open source, and this repository has no
+# license key to give it. The image needs no account, no key and no setup step
+# beyond what is already here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: ghcr.io/gitleaks/gitleaks:latest
+      options: --entrypoint ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan
+        run: gitleaks detect --config .gitleaks.toml --redact --verbose --exit-code 1

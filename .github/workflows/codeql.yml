@@ -1,0 +1,63 @@
+name: CodeQL
+
+# Finding L-6 in AUDIT_REPORT.md: `npm audit` (ci.yml) catches a known-vulnerable
+# dependency; it has never looked at code this repository wrote itself. CodeQL is
+# GitHub's own static analysis, free for a public repository and requiring no
+# account or key beyond what `github-actions` already has — the same reason
+# gitleaks.yml needed nothing new either.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Dependency-aware queries change under a codebase even when the code
+    # itself does not, so this also runs on a schedule rather than only on a
+    # diff — a Tuesday chosen for no reason other than not being at the same
+    # instant every other scheduled job in a busy org tends to be.
+    - cron: '17 3 * * 2'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # This monorepo has three tsconfigs (packages/schemas, apps/api,
+          # apps/web) and @finance/schemas has to be built before the other
+          # two typecheck at all — see the shared-package convention in
+          # CLAUDE.md section 3. The `autobuild` default does not know that
+          # ordering, so the build step below is explicit instead.
+          build-mode: manual
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build shared schemas
+        run: npm run build:schemas
+
+      - name: Build api and web
+        run: |
+          npm run build --workspace=@finance/api
+          npm run build --workspace=@finance/web
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'

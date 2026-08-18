@@ -2369,3 +2369,44 @@ one, not just that a file exists. `tests/unit/worker-healthcheck.test.ts` pins t
 arithmetic on its own (including that an unparsable heartbeat — `NaN` — fails closed rather than
 computing a nonsensical age), separated from the file I/O and `process.exit` calls that make the
 rest of `worker-healthcheck.ts` awkward to unit test directly.
+
+---
+
+### Secret scanning and SAST run the open-source tools directly, not the marketplace wrappers (L-6)
+
+`npm audit` in `ci.yml` catches a known-vulnerable *dependency*; nothing was watching for a
+mistake this codebase's own commits could make — a real secret typed into a file, or a code
+pattern a static analyser would flag. C-1 was exactly the first kind, found by a human audit
+rather than by anything automated; L-6 is closing that gap for the next one.
+
+**Secret scanning: `gitleaks`, run as its own published container image rather than through
+`gitleaks-action`.** The marketplace wrapper's newer major versions gate some behaviour behind a
+paid license, and this repository has no license key to give it — the scanner itself is fully
+open source, so running the binary directly (`ghcr.io/gitleaks/gitleaks`, as the job's `container:`
+image) sidesteps the question entirely rather than gambling on which of the wrapper's features
+still work unlicensed.
+
+**This was tested against the repository's real history before `.gitleaks.toml` existed, not
+assumed to work.** A local run (same image, same command CI now runs) found three findings, all in
+`tests/integration/auth.test.ts` — `'NotMyPassword1'` and similar fixture strings the
+`generic-api-key` rule's entropy heuristic could not tell apart from a real key. That is exactly
+the shape of false positive this codebase's own testing convention (real Postgres, real credential
+flows, no mocks — `CLAUDE.md` section 6) guarantees will recur throughout `apps/api/tests/`, so the
+config allowlists that whole path rather than each fixture string individually — a fixture
+asserted against in a test is not a secret, and excluding the path keeps the scan's attention on
+code that could actually leak one. A second regex-based allowlist covers the handful of
+*deliberately* published placeholders this repository already documents:
+`production-policy.ts`'s `PUBLISHED_SECRETS` list, copied rather than referenced, because gitleaks
+has no way to read a TypeScript source file. **The two lists have to be kept in sync by hand** — a
+new placeholder added to one and not the other either breaks this scan on a legitimate value or
+stops flagging a real category of mistake, and nothing enforces the pairing beyond this note and
+the comment at the top of `.gitleaks.toml`.
+
+**SAST: `codeql.yml`, GitHub's own analysis, free for a public repository with no account or key
+needed beyond what `github-actions` already has.** `build-mode: manual` rather than the default
+`autobuild`: this monorepo's build order is not obvious to a generic build detector —
+`@finance/schemas` has to compile before `apps/api` or `apps/web` will even typecheck (the
+shared-package convention, `CLAUDE.md` section 3) — so the workflow's own build step states that
+order explicitly instead of hoping autobuild infers it. Runs on push, on pull request, and weekly,
+since a dependency-aware query can surface a new finding in unchanged code as CodeQL's own query
+packs are updated, not only when this repository's code changes.
