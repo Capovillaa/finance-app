@@ -2474,3 +2474,42 @@ pointed at one. `.env.deploy.example` now documents the three settings that matt
 — `sslmode=verify-full`, `rediss://`, and `NODE_EXTRA_CA_CERTS` for a private CA — rather than this
 codebase inventing certificate management for a threat model its own compose file does not
 actually have.
+
+---
+
+### A table-driven RBAC sweep, and why 21 of 49 routes needed a second pass (M-7)
+
+Across every operation this API publishes, only two integration files had ever asserted a 403 —
+real coverage existed, but only for whichever endpoint each test happened to be about, never
+systematically. `tests/integration/rbac.test.ts` is the systematic version: it calls the exact
+`walkRoutes()` the OpenAPI document is generated from, so the set of routes it checks is the set of
+routes the app actually mounts, not a hand-kept list that can quietly stop matching. Every route
+stamped with a role above `viewer` (49 of them) gets hit as a signed-in viewer in a real shared
+workspace, substituting a random UUID for every path parameter except `workspaceId` — safe because
+`RBAC is resolved once per request by withWorkspace middleware into a workspace context, then
+checked by requireViewer/.../requireOwner` (`CLAUDE.md` section 6): the role check runs before any
+resource the path names is ever looked up, so a fake ID still produces a 403, not a 404.
+
+**28 of the 49 are exercised by the automated sweep; 21 needed a second pass, and the reason is a
+genuine methodological trap rather than an edge case.** This codebase consistently mounts
+`validate(...)` *before* the role-check middleware on every route that has both (verified by
+grepping the actual order across every route file, not assumed) — schema validation runs first,
+authorization second. That means a route requiring a non-empty body answers 422 to an empty `{}`
+regardless of whether the role check after it works, is broken, or was deleted entirely: the
+request never reaches far enough to find out. Asserting "403" against those 21 would have been
+asserting nothing — a passing test with zero actual signal about RBAC, which is worse than an
+honest gap because it looks like coverage. `isCleanlyTestable()` checks `route.body.safeParse({})`
+(and the same for every accumulated `query` schema) before including a route in the strict sweep,
+and the 21 that fail it are logged by name — via `console.warn`, not a silent skip — rather than
+disappearing from view.
+
+**Five of the twenty-one are spot-checked by hand with a body that actually clears `validate()`**:
+creating a transaction and an account (`requireEditor`), inviting a member and renaming the
+workspace (`requireAdmin`), and transferring ownership (`requireOwner`) — chosen as the highest-
+stakes writes among the twenty-one, not as a claim that the other sixteen are covered. They are
+not, today; the honest state is 33 of 49 elevated routes with a real, direct RBAC assertion in this
+file, plus whatever incidental coverage the two pre-existing test files already had for routes this
+one also reaches. A future session extending this coverage should add to the spot-check list rather
+than trying to make `isCleanlyTestable` cleverer about synthesising an arbitrary valid body — Zod
+schemas are not uniform enough (unions, refinements, cross-field rules) for that to be reliable, and
+a hand-written case that is obviously correct is worth more than a generic one that might not be.

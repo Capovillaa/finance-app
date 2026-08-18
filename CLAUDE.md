@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-410; see section 4 for the current command. The compiled `dist/server.js`
+412; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -756,6 +756,7 @@ D:\finance_app
 │   │       │                        # request-context, query-schemas (L-1/L-3/L-8),
 │   │       │                        # subkey (M-11), worker-healthcheck (P-6)
 │   │       └── integration/         # auth, auth-recovery (reset + verification),
+│   │                                # rbac (M-7's walkRoutes() sweep),
 │   │                                # workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
 │   │                                # currencies, account-deletion,
@@ -980,7 +981,7 @@ gitignored — a database dump must never reach a public repository.
 ### Tests
 
 ```bash
-npm test                 # all 410 — needs Postgres, and only Postgres
+npm test                 # all 412 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -3218,9 +3219,18 @@ audit checklist below outranks it.
       and sends either a welcome or an account-exists email" — which is a real
       UX change to the first screen a new user sees, and deserves to be decided
       on its own rather than folded into another task's diff.
-- [ ] **[M-7] A table-driven RBAC test.** Across 104 operations only two
-      integration files assert a 403 at all. Walk `walkRoutes()`, sign in as a
-      viewer, assert 403 on everything that requires more.
+- [x] **[M-7] A table-driven RBAC test.** **Done** —
+      `tests/integration/rbac.test.ts`. Walks the same `walkRoutes()` the
+      OpenAPI document is generated from (so it can never drift from what the
+      app actually mounts), signs in as a viewer in a real shared workspace,
+      and asserts 403 on every one of the 49 routes stamped with a role above
+      `viewer`. 28 are exercised automatically with an empty body/query; the
+      other 21 need a real body to clear `validate()` before the role check
+      is ever reached (an empty `{}` there tests the schema, not RBAC), so
+      they are skipped from the automated sweep with a console warning naming
+      each one, and 5 of the highest-stakes are spot-checked by hand with a
+      real body (create transaction, create account, invite a member, rename
+      the workspace, transfer ownership). See `docs/decisions.md`.
 - [ ] **[M-3] Type the alert-rule `config`.** It is an open
       `z.record(z.string(), z.unknown())` whose values drive lookback windows and
       `Decimal` parsing on the **shared** worker, with no bounds.
