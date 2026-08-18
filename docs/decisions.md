@@ -2435,3 +2435,42 @@ have to re-derive this table from scratch. **A CodeQL query that starts flagging
 pattern — not one of the six above — is a real finding and should be treated as one**; this table
 describes what was true the day L-6 shipped, not a blanket license to dismiss anything this rule
 ever reports again.
+
+---
+
+### TLS to Postgres and Redis already works — verified, not assumed (L-5)
+
+The audit's finding was simply that nothing required it. Investigating turned up something worth
+writing down instead of a code change: **`pg` and `ioredis` — the exact versions already in this
+codebase's `package.json` — already negotiate TLS with zero code changes**, purely from the
+connection string. `createPool` (`db/client.ts`) passes `DATABASE_URL` straight through, and `pg`'s
+own connection-string parser already understands `?sslmode=verify-full`; `lib/redis.ts`'s `build()`
+passes `REDIS_URL` straight through, and `ioredis` already enables TLS the moment the scheme reads
+`rediss://` instead of `redis://`. Neither client needed a new option threaded through this
+codebase's own config.
+
+**This was proven against real TLS-enabled containers, not inferred from documentation.** A
+self-signed certificate and a throwaway `postgres:16` image with `ssl=on` were built specifically
+for this; connecting through this codebase's actual `createPool()` with
+`?sslmode=verify-full&NODE_EXTRA_CA_CERTS=<the test CA>` returned
+`{ ssl: true, version: 'TLSv1.3', cipher: 'TLS_AES_256_GCM_SHA384' }` from `pg_stat_ssl` — a real
+negotiated session, not a flag that was merely accepted. The same exercise against a throwaway
+`redis:7-alpine` configured for TLS confirmed `ioredis` does the identical thing on `rediss://`:
+refusing an untrusted self-signed cert by default (the secure default — `rejectUnauthorized`
+defaults to true), and connecting once the cert was either trusted via `NODE_EXTRA_CA_CERTS` or
+`rejectUnauthorized: false` was passed explicitly for the test. Both containers and all generated
+key material were thrown away once the exercise was done; nothing here changed the dev stack.
+
+**No default was flipped in this codebase's own compose files, and that is a deliberate scope
+decision, not an oversight.** `docker-compose.deploy.yml` runs its own Postgres and Redis
+containers on the compose network's private bridge — a real network boundary neither the host nor
+the internet can reach (section 5k) — so the two containers this file bundles are not, today,
+talking to each other across a boundary TLS meaningfully protects. Generating and rotating
+certificates for that pair would be defending a wire that already goes nowhere an attacker can
+reach. What TLS *does* meaningfully protect is the deployment shape this repository has always
+expected to be a stepping stone rather than the end state: a **remote**, managed Postgres or Redis
+reached over the internet, which is exactly the shape both database URLs already support once
+pointed at one. `.env.deploy.example` now documents the three settings that matters for that case
+— `sslmode=verify-full`, `rediss://`, and `NODE_EXTRA_CA_CERTS` for a private CA — rather than this
+codebase inventing certificate management for a threat model its own compose file does not
+actually have.

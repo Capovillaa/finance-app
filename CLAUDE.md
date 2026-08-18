@@ -3266,7 +3266,18 @@ audit checklist below outranks it.
       the same protection. **A new CodeQL alert that is not one of the six
       patterns in that table is a real finding, not something to dismiss on
       reflex.**
-- [ ] **[L-5] Require TLS to Postgres and Redis.**
+- [x] **[L-5] TLS to Postgres and Redis.** **Investigated and documented, no
+      code change needed** — see `docs/decisions.md`. `pg` and `ioredis`
+      already negotiate TLS with zero code changes, purely from the
+      connection string (`?sslmode=verify-full`, `rediss://`); verified for
+      real against throwaway TLS-enabled Postgres and Redis containers built
+      for this, not assumed from either library's docs.
+      `docker-compose.deploy.yml`'s bundled Postgres/Redis are on the compose
+      network's private bridge, a real boundary TLS would not meaningfully
+      add to (section 5k) — deliberately not certificate-managed for that
+      reason. `.env.deploy.example` documents the three settings that matter
+      once `DATABASE_URL`/`REDIS_URL` point at a **remote** managed service
+      instead, which is where this actually protects something.
 - [x] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
       worker. **Both done.** `docs/runbook.md` covers the single-instance
       release this repo's own compose file already does correctly, the
