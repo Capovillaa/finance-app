@@ -274,7 +274,10 @@ outage degrades latency, not correctness. Caching is bypassed entirely under `NO
   that a resource exists
 - `helmet`, CORS locked to the web origin in production, 1 MB body cap
 - CSV export escapes leading `=`/`+`/`-`/`@` so a transaction description cannot become a formula
-- Errors ≥500 return a fixed message; the detail stays in the logs with the request id
+- An error body is `code`, a sentence from the translation catalogue, the rejected fields, and
+  `requestId` — never a stack, and never text written by Postgres or by a trigger, both of which
+  name columns, constraints and other rows' values. All of that stays in the log under the same
+  request id
 
 ## How it ships
 

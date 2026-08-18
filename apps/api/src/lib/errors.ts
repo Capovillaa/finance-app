@@ -56,20 +56,31 @@ export class AppError extends Error {
   readonly messageKey: string;
   readonly messageParams: Record<string, unknown> | undefined;
   /**
-   * Bypasses translation entirely. Used only for text this app did not write —
-   * a raw Postgres constraint `detail` — which is already English and not
-   * meaningfully translatable without inventing wording Postgres never said.
+   * Text this app did not write, kept for the log line and **never sent to a
+   * client**. It is `Error.message` — which is what the error handler logs —
+   * and `localize()` deliberately ignores it.
+   *
+   * It used to be the response message whenever it was present, on the
+   * reasoning that a Postgres `detail` is already English and not meaningfully
+   * translatable. What that overlooked is *what* Postgres puts in it: a unique
+   * violation reads `Key (email)=(someone@example.com) already exists.` and a
+   * foreign-key violation names the table it looked in. Since `expose` is
+   * `status < 500` and these map to 409, 422 and 400, the API was handing every
+   * caller its column names, its constraint names, and values belonging to rows
+   * they cannot otherwise see. There is no version of that which is worth the
+   * extra specificity, so the generic `database.*` message goes out instead and
+   * the detail stays in the log, correlated by `requestId`.
    */
-  readonly rawMessage: string | undefined;
+  readonly internalDetail: string | undefined;
 
   constructor(
     code: ErrorCode,
     messageKey: string,
     messageParams?: Record<string, unknown>,
     details?: FieldIssue[],
-    rawMessage?: string,
+    internalDetail?: string,
   ) {
-    super(rawMessage ?? t(DEFAULT_LOCALE, messageKey, messageParams));
+    super(internalDetail ?? t(DEFAULT_LOCALE, messageKey, messageParams));
     this.name = 'AppError';
     this.code = code;
     this.status = STATUS_BY_CODE[code];
@@ -77,13 +88,18 @@ export class AppError extends Error {
     this.expose = this.status < 500;
     this.messageKey = messageKey;
     this.messageParams = messageParams;
-    this.rawMessage = rawMessage;
+    this.internalDetail = internalDetail;
     Error.captureStackTrace?.(this, AppError);
   }
 
-  /** Renders this error's message in `locale`, for the HTTP response body. */
+  /**
+   * Renders this error's message in `locale`, for the HTTP response body.
+   *
+   * Always from the catalogue. Anything a client reads is wording this codebase
+   * chose and translated; `internalDetail` never reaches here.
+   */
   localize(locale: Locale): string {
-    return this.rawMessage ?? t(locale, this.messageKey, this.messageParams);
+    return t(locale, this.messageKey, this.messageParams);
   }
 }
 
@@ -116,7 +132,18 @@ export function isAppError(err: unknown): err is AppError {
   return err instanceof AppError;
 }
 
-/** Maps well-known Postgres error codes onto the taxonomy above. */
+/**
+ * Maps well-known Postgres error codes onto the taxonomy above.
+ *
+ * The driver's `detail` is carried as `internalDetail`, which means it reaches
+ * the log line and nothing else — see the field's own comment for why that is
+ * not a lost opportunity. The `P0001` branch is our own trigger text rather than
+ * Postgres's, and it is treated the same way on purpose: every case those
+ * triggers catch is already rejected earlier, in the service, with a translated
+ * message (`categories.depthLimit` and friends), so the trigger is a backstop
+ * against a race or a hand-written statement and the caller has no use for its
+ * developer-facing wording.
+ */
 export function fromDatabaseError(err: unknown): AppError | null {
   if (typeof err !== 'object' || err === null || !('code' in err)) return null;
   const pgCode = String((err as { code: unknown }).code);

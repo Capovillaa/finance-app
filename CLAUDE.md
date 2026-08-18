@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-354; see section 4 for the current command. The compiled `dist/server.js`
+365; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -909,8 +909,8 @@ changes.
 ### Tests
 
 ```bash
-npm test                 # all 354 — needs Postgres, and only Postgres
-npm run test:unit        # 208 pure units, no infrastructure at all
+npm test                 # all 365 — needs Postgres, and only Postgres
+npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -2188,6 +2188,64 @@ which is also where CSP and HSTS will live).
 
 ---
 
+## 5l. An error response says only what this codebase wrote
+
+Findings **H-3** and **M-1** of `AUDIT_REPORT.md`, the third and seventh Phase 1
+tasks — done together because they are the same four lines of the same response
+body. Full reasoning is in `docs/decisions.md`, "An error response is written by
+this codebase, not by Postgres". What you need in order not to undo it:
+
+**An error body is now exactly four fields: `code`, `message`, `details` when
+there are any, and `requestId`.** Nothing else leaves the process.
+
+- **`AppError.rawMessage` is now `internalDetail`, and `localize()` ignores it.**
+  It reaches `Error.message` — which is what the error handler logs — and never
+  a response. It used to *be* the response message whenever present, on the
+  reasoning that a Postgres `detail` is already English. What that overlooked is
+  what Postgres puts in it: a unique violation reads `Key
+  (email)=(someone@example.com) already exists.`, a foreign-key violation names
+  the table it searched, a check violation quotes the failing row. `expose` is
+  `status < 500` and these map to 409, 422 and 400 — so the API handed every
+  caller its column names, its constraint names, and **other rows' values**, in
+  production too.
+- **The `P0001` branch is treated the same way, and that is deliberate.** Those
+  are our own `RAISE EXCEPTION` strings from migration `003`. Every case they
+  catch is already rejected earlier by the service with a translated message
+  (`categories.depthLimit`, a 404 from `getCategory`), so the trigger is a
+  backstop against a race or a hand-written statement, and its developer-facing
+  wording is for us.
+- **The `stack` is gone unconditionally.** It used to be sent whenever
+  `!env.isProduction && !expose` — which includes staging and preview
+  deployments, exactly the shape of the CORS bug section 5i fixed — carrying
+  absolute filesystem paths and the module structure.
+
+**This is a gain as well as a subtraction:** the sentence now comes from the
+catalogue, so it is translated. A 409 answers `Já existe um registro com esses
+valores` to a pt-BR caller, which a raw `detail` structurally could not.
+
+**The generic wording already existed** — `database.conflict`, `foreignKey`,
+`constraint`, `notNull`, `malformed`, `serialization`, `rejected` are in all
+three catalogues and were only being bypassed.
+
+Two tests hold it: `tests/unit/errors.test.ts` pins the mapping and asserts the
+detail survives on `.message` while `localize()` never repeats it, and
+`tests/integration/error-disclosure.test.ts` drives a **real** unique violation
+(two accounts of the same name — neither the accounts nor the tags service
+pre-checks its name index) and greps the whole response body for eight
+Postgres-only fragments. Verified separately that pino still carries `detail`,
+the SQLSTATE and the `requestId` into the log line.
+
+**If you add an error path, the wording it shows a client comes from
+`i18n/locales/`.** Passing text you did not write to `new AppError(...)`'s fifth
+argument is fine and is where it belongs — it will be logged, not sent.
+
+One thing worth knowing when writing a test against a localized message: a
+registration defaults the user's `locale` to **pt-BR**, and `requireAuth`
+overwrites `Accept-Language` with the signed-in user's stored value. Patch
+`/users/me` if a test needs English.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -2265,6 +2323,16 @@ everywhere" is immediate rather than "within fifteen minutes". The token carries
 a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
 token issued just before a revocation from one issued just after — which would
 make either the stale token or the user's fresh sign-in wrong. See section 5i.
+
+**An error response is written by this codebase, not by Postgres.** The body is
+`code`, a catalogue sentence, the rejected fields, and `requestId` — nothing
+else. `AppError.internalDetail` (once `rawMessage`) carries a driver's or a
+trigger's own text to the **log** and is ignored by `localize()`, because a
+Postgres `detail` names columns, constraints and other rows' values, and
+`expose` being `status < 500` meant every 409 and 422 published them. The
+`stack` is no longer sent in any environment. The subtraction buys something
+too: a message that comes from the catalogue can be translated, which a raw
+`detail` could not. See section 5l and `docs/decisions.md`.
 
 **Development and deployment are two compose files, because a profile was never
 a boundary.** A service without a `profiles:` key starts unconditionally, so
@@ -2482,10 +2550,10 @@ and does not* (see the first item of Phase 2).
       refuses to boot with `SMTP_HOST` pointing at a development mail sink.
       **L-5 (TLS to Postgres and Redis) is still open** and was the one item on
       C-2's fix list not taken.
-- [ ] **[H-3] Stop reflecting Postgres `detail` to clients.** `lib/errors.ts`
-      copies it into `rawMessage`, and `expose` is `status < 500`, so a 409
-      returns `Key (email)=(someone@example.com) already exists.` — table names,
-      column names and another row's values. Keep it in the log only.
+- [x] **[H-3] Stop reflecting Postgres `detail` to clients.** **Done** — see
+      section 5l. `rawMessage` became `internalDetail`, `localize()` always
+      renders from the catalogue, and the same pass took **M-1** below, since it
+      is the neighbouring line of the same response body.
 - [ ] **[H-2] Re-authenticate before `DELETE /users/me`.** It hard-deletes every
       solely-owned workspace and all its financial history, behind a bearer
       token and `{confirm: true}`. Require the current password, mount
@@ -2500,8 +2568,9 @@ and does not* (see the first item of Phase 2).
       and nothing consumes it. This is also the only place CSP, HSTS and
       `frame-ancestors` can be set — `helmet` has `contentSecurityPolicy: false`
       and `index.html` has no meta policy.
-- [ ] **[M-1] Never send `stack` in an error response.** The log already has it,
-      correlated by `requestId`.
+- [x] **[M-1] Never send `stack` in an error response.** **Done**, with H-3 —
+      see section 5l. It used to be sent whenever `!isProduction && !expose`,
+      which includes staging and preview deployments.
 - [ ] **[M-10] Guard `npm run seed` against production.** It hardcodes a
       published demo password and its reset step deletes from `users`, with no
       `NODE_ENV` check anywhere.

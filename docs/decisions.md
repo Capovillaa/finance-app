@@ -1620,6 +1620,60 @@ managed database will want `sslmode=require`.
 
 ---
 
+### An error response is written by this codebase, not by Postgres
+
+`AppError` could carry a `rawMessage` that bypassed translation entirely, and `localize()`
+returned it in preference to the catalogue. The reasoning written beside it was sound as far as it
+went: a Postgres constraint `detail` is already English, and translating it would mean inventing
+wording Postgres never said. What it did not ask is *what Postgres actually writes there*.
+
+A unique violation writes `Key (email)=(someone@example.com) already exists.` A foreign-key
+violation names the table it searched. A check violation quotes the failing row and the constraint
+expression. And since `expose` is `status < 500` and those violations map to 409, 422 and 400, all
+of it went out in the response body — in production too, where the guard suppressed only the
+stack. So the API published its column names, its constraint names, and **values belonging to rows
+the caller cannot otherwise read**: an account-creation conflict returned a workspace id and an
+index definition, and a registration conflict would have confirmed an address.
+
+`rawMessage` is now `internalDetail`, and the invariant is in the name: it is `Error.message`,
+which is what the error handler logs, and `localize()` ignores it. Every sentence a client reads
+comes from `i18n/locales/`. The generic wording for this was already there —
+`database.conflict`, `database.foreignKey`, `database.constraint`, `database.notNull` and the rest
+existed in all three catalogues and were simply being bypassed whenever a `detail` was present,
+which is nearly always.
+
+**The `P0001` branch goes the same way, which is the part worth arguing.** That code is
+`RAISE EXCEPTION` from this repository's own triggers — text we wrote, not Postgres's — so keeping
+it would have been defensible. It is dropped because every case those triggers catch is already
+rejected earlier by the service with a translated message: `categories.depthLimit` for the depth
+rule, a 404 from `getCategory` for a parent in another workspace. The trigger is a backstop against
+a race or a hand-written statement, and `category hierarchy is limited to three levels` is wording
+for whoever reads the log, not for an API client.
+
+**The subtraction buys something.** A message that comes from the catalogue can be translated, and
+a raw `detail` structurally cannot: a pt-BR caller now gets `Já existe um registro com esses
+valores` where they used to get a sentence in English with a UUID in it. The fix makes the API
+*more* useful to the client it was over-serving.
+
+**M-1 came along with it**, because it is the neighbouring line of the same object. The response
+included `stack` whenever `!env.isProduction && !appError.expose` — which is the same shape as the
+CORS bug that "Rate limiting is two-dimensional" fixed: `NODE_ENV` is a three-valued enum, so
+"not production" silently includes staging and preview deployments, and the stack carries absolute
+filesystem paths and the internal module structure. There is no environment in which a client needs
+it. An error body is now exactly `code`, `message`, `details` when there are any, and `requestId`.
+
+**Tested at both levels, because neither is sufficient alone.** `tests/unit/errors.test.ts` pins
+the mapping — each SQLSTATE to its status and catalogue sentence, the detail surviving on
+`.message` for the log while `localize()` never repeats it, and the same failure rendering in three
+languages. `tests/integration/error-disclosure.test.ts` provokes a **real** unique violation, by
+creating two accounts with the same name — neither the accounts nor the tags service pre-checks its
+name index, so this is a genuine path to a Postgres error rather than a simulated one — and greps
+the entire serialised body for eight fragments that can only come from a `detail`. That the log
+still carries the detail, the SQLSTATE and the request id was checked separately against pino's own
+serializer rather than assumed.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

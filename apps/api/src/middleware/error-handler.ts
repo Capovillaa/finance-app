@@ -1,7 +1,6 @@
 import { VALIDATION_NAMESPACE, validationParamsFor } from '@finance/schemas';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod/v4';
-import { env } from '../config/env.js';
 import {
   AppError,
   fromDatabaseError,
@@ -17,6 +16,17 @@ export const notFoundHandler: RequestHandler = (req, _res, next) => {
   next(routeNotFound(req.method, req.path));
 };
 
+/**
+ * The one place an error becomes a response body, and therefore the one place
+ * that decides what a caller learns about the inside of this process.
+ *
+ * The answer is: the taxonomy code, a sentence from the catalogue, the rejected
+ * fields when there are any, and the request id. Nothing else — no stack (it
+ * used to be sent outside production, which included staging and preview
+ * deployments, and it carried absolute filesystem paths and the module
+ * structure), and no text written by Postgres or by a trigger. All of it is in
+ * the log line below, correlated by the same `requestId` the caller can quote.
+ */
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   const appError = normalize(err);
   const locale = req.locale ?? DEFAULT_LOCALE;
@@ -39,11 +49,17 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   res.status(appError.status).json({
     error: {
       code: appError.code,
-      // Internal failures return a fixed message; the real one stays in the logs.
+      // Two layers, and both matter. Internal failures return a fixed message
+      // rather than the thrown one; and `localize()` always renders from the
+      // catalogue, so even an exposed error says only what this codebase chose
+      // to say. Anything a driver or a trigger wrote stays in `logPayload.err`
+      // above, correlated by `requestId`.
       message: appError.expose ? appError.localize(locale) : t(locale, 'common.internal'),
       ...(appError.details ? { details: localizeIssues(appError.details, locale) } : {}),
+      // The one thing a caller gets to correlate with. Everything else about
+      // this failure — the stack, the driver's `detail`, the SQLSTATE, the
+      // originating query — is in the log line above under this same id.
       requestId: req.requestId,
-      ...(env.isProduction || appError.expose ? {} : { stack: (err as Error)?.stack }),
     },
   });
 };
