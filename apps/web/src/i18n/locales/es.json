@@ -695,6 +695,8 @@
     "invitations": "Invitaciones",
     "inviteExplainer": "La persona invitada recibe un correo con un enlace que caduca. Entra con el rol que elijas aquí.",
     "inviteFailed": "No se pudo enviar la invitación.",
+    "inviteSent": "Invitación enviada.",
+    "inviteEmailFailed": "El lugar quedó reservado, pero el correo de la invitación no se pudo enviar. Contacta a esa persona por otro medio.",
     "emailAddress": "Dirección de correo",
     "invite": "Invitar",
     "sending": "Enviando…",

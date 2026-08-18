@@ -18,6 +18,10 @@ dist/
 # Local Postgres data, if a bind mount is ever used instead of a named volume
 infra/postgres/data/
 
+# Where scripts/backup.sh writes by default. A database dump is exactly the
+# kind of file that must never land in a public repository.
+/backups/
+
 # Ad-hoc scratch from load-testing sessions; not part of the project
 .tmp/
 

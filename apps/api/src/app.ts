@@ -9,11 +9,13 @@ import { asyncHandler } from './lib/http.js';
 import { pingRedis } from './lib/redis.js';
 import { mount } from './lib/route-metadata.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
-import { responds } from './middleware/responds.js';
+import { responds, media } from './middleware/responds.js';
 import { resolveRequestLocale } from './middleware/locale.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
 import { httpLogger, requestId } from './middleware/request-context.js';
+import { httpMetrics } from './middleware/metrics.js';
 import { requestTimeout } from './middleware/request-timeout.js';
+import { registry } from './lib/metrics.js';
 import { buildDocument } from './openapi/document.js';
 import { healthResponse, openApiDocumentResponse, readinessResponse } from './openapi/service-responses.js';
 import { apiRouter } from './routes.js';
@@ -31,6 +33,7 @@ export function createApp(): Express {
   app.disable('x-powered-by');
 
   app.use(requestId);
+  app.use(httpMetrics());
   app.use(resolveRequestLocale);
   app.use(httpLogger);
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
@@ -64,6 +67,19 @@ export function createApp(): Express {
   app.get('/health', responds({ 200: healthResponse }), (_req, res) => {
     res.json({ status: 'ok', uptime: process.uptime(), env: env.NODE_ENV });
   });
+
+  // Unauthenticated and unrated for the same reason `/health` is: a scraper
+  // has no credentials, and in the deployed composition (section 5n) nothing
+  // outside the compose network can reach this port at all regardless. See
+  // `lib/metrics.ts` for what is actually collected.
+  app.get(
+    '/metrics',
+    responds({ 200: media('text/plain; version=0.0.4; charset=utf-8', 'Prometheus text-format metrics.') }),
+    asyncHandler(async (_req, res) => {
+      res.setHeader('content-type', registry.contentType);
+      res.send(await registry.metrics());
+    }),
+  );
 
   // Readiness: this instance can actually serve traffic.
   //

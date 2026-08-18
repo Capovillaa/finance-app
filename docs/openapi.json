@@ -2718,6 +2718,33 @@
         "security": []
       }
     },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "tags": [
+          "service"
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text-format metrics.",
+            "content": {
+              "text/plain; version=0.0.4; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": []
+      }
+    },
     "/health/ready": {
       "get": {
         "operationId": "getHealthReady",
@@ -5143,10 +5170,15 @@
                   "properties": {
                     "invitation": {
                       "$ref": "#/components/schemas/WorkspaceInvitation"
+                    },
+                    "emailDelivered": {
+                      "description": "Whether the invitation email actually left the building. The seat is reserved either way — the token is not returned — but `false` means the invitee will not have received a link and needs to be reached another way.",
+                      "type": "boolean"
                     }
                   },
                   "required": [
-                    "invitation"
+                    "invitation",
+                    "emailDelivered"
                   ],
                   "additionalProperties": false
                 }

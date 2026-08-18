@@ -695,6 +695,8 @@
     "invitations": "Invitations",
     "inviteExplainer": "The invitee gets an email with a link that expires. They join with the role you pick here.",
     "inviteFailed": "Could not send the invitation.",
+    "inviteSent": "Invitation sent.",
+    "inviteEmailFailed": "The seat was reserved, but the invitation email failed to send. Reach out to them another way.",
     "emailAddress": "Email address",
     "invite": "Invite",
     "sending": "Sending…",

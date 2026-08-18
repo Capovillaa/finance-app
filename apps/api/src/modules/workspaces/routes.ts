@@ -204,7 +204,7 @@ workspaceRouter.post(
     const workspace = workspaceContext(req);
     const input = body<{ email: string; role: 'admin' | 'editor' | 'viewer' }>(req);
 
-    const { invitation } = await createInvitation({
+    const { invitation, emailDelivered } = await createInvitation({
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       email: input.email,
@@ -214,7 +214,7 @@ workspaceRouter.post(
       inviterLocale: req.locale,
     });
 
-    res.status(201).json({ invitation });
+    res.status(201).json({ invitation, emailDelivered });
   }),
 );
 

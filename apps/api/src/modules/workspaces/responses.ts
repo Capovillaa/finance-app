@@ -72,7 +72,16 @@ export const workspaceInvitationSchema = component(
 export const invitationListResponse = z.object({ invitations: z.array(workspaceInvitationSchema) });
 
 export const invitationResponse = z
-  .object({ invitation: workspaceInvitationSchema })
+  .object({
+    invitation: workspaceInvitationSchema,
+    emailDelivered: z
+      .boolean()
+      .describe(
+        'Whether the invitation email actually left the building. The seat is reserved either way — ' +
+          'the token is not returned — but `false` means the invitee will not have received a link and ' +
+          'needs to be reached another way.',
+      ),
+  })
   .describe('The seat is reserved and the email is on its way. The token is not returned.');
 
 export const acceptedInvitationResponse = z

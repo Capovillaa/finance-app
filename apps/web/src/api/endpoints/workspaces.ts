@@ -115,7 +115,7 @@ export const workspacesApi = api.injectEndpoints({
     }),
 
     createInvitation: build.mutation<
-      { invitation: WorkspaceInvitation },
+      { invitation: WorkspaceInvitation; emailDelivered: boolean },
       { workspaceId: string; email: string; role: GrantableRole }
     >({
       query: ({ workspaceId, ...body }) => ({

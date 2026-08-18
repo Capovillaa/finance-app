@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-389; see section 4 for the current command. The compiled `dist/server.js`
+390; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -707,13 +707,15 @@ D:\finance_app
 │   │   │   │                        # errors, http, logger, i18n,
 │   │   │   │                        # csv (reader + writer, both directions),
 │   │   │   │                        # route-metadata (stampRoute + mount: what
-│   │   │   │                        #   the app records about its own shape)
+│   │   │   │                        #   the app records about its own shape),
+│   │   │   │                        # metrics (the prom-client registry, P-2)
 │   │   │   ├── middleware/          # auth, validate, error handling, locale,
 │   │   │   │                        # responds (declares + enforces a response shape),
 │   │   │   │                        # rate-limit (the buckets, Redis and Express)
 │   │   │   │                        #   + rate-limit-policy (the pure decisions:
 │   │   │   │                        #   keys, trust-proxy parse, fallback budget),
-│   │   │   │                        # request-timeout (the 503 backstop, M-4)
+│   │   │   │                        # request-timeout (the 503 backstop, M-4),
+│   │   │   │                        # metrics (route-pattern-labelled HTTP timing)
 │   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
 │   │   │   │                        # JSON Schema), document.ts (-> the spec),
 │   │   │   │                        # service-responses.ts (/health, /openapi.json)
@@ -830,7 +832,14 @@ D:\finance_app
 │   │                                # out of this file
 │   ├── decisions.md                 # decision log (see section 6)
 │   └── finance_management_project_prompt.md   # original brief
-├── infra/postgres/init/             # container init SQL
+├── infra/
+│   ├── postgres/init/                # container init SQL
+│   └── prometheus/alerts.example.yml # example alert rules for GET /metrics (P-2);
+│                                      # not wired into anything — no Prometheus
+│                                      # deployment exists in this repo to wire it into
+├── scripts/                          # backup.sh / restore.sh (P-3) — `npm run backup` /
+│                                      # `npm run restore`; both run pg_dump/pg_restore
+│                                      # through the running container, nothing to install
 ├── .github/workflows/ci.yml         # typecheck, builds, generated-file and
 │                                    # i18n checks, unit tests, both images +
 │                                    # what they refuse to boot on, the deploy
@@ -943,10 +952,21 @@ changes.
 **Demo accounts** (after `npm run seed`): `ana@demo.local` and
 `bruno@demo.local`, password `Demo1234567` for both.
 
+**Backups** (section 5q):
+
+```bash
+npm run backup                       # dev stack -> ./backups/finance-<timestamp>.dump
+npm run restore backups/finance-<timestamp>.dump --yes   # DESTRUCTIVE, see the script's own guard
+```
+
+Point `COMPOSE_FILE=docker-compose.deploy.yml` (plus `POSTGRES_USER`/`POSTGRES_DB` if they differ
+from the defaults) at either command to operate on the deployed stack instead. `backups/` is
+gitignored — a database dump must never reach a public repository.
+
 ### Tests
 
 ```bash
-npm test                 # all 389 — needs Postgres, and only Postgres
+npm test                 # all 390 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -2501,6 +2521,60 @@ currently listed there by name — add it if you pick it up).
 
 ---
 
+## 5q. Backups, metrics, and a delivery failure that used to vanish silently
+
+The last three items of Phase 2. Full reasoning for each is in `docs/decisions.md`. What you need
+in order not to break any of them:
+
+**Backups (P-3) are `scripts/backup.sh` and `scripts/restore.sh`** (`npm run backup` /
+`npm run restore`), a `pg_dump`/`pg_restore` pair run *through* the Postgres container
+(`docker compose exec`) rather than against a host-installed client — nothing needs installing on
+whatever machine or CI runner ends up running these. Both take `COMPOSE_FILE`,
+`POSTGRES_SERVICE`, `POSTGRES_USER` and `POSTGRES_DB` as overrides, defaulting to the dev stack;
+point `COMPOSE_FILE=docker-compose.deploy.yml` at the deployed one. **`restore.sh` is genuinely
+destructive** (`pg_restore --clean --if-exists`) and refuses to run without a trailing `--yes`,
+printing exactly what it is about to overwrite first — the same shape `npm run seed`'s
+production guard (M-10, section 5n) uses for the opposite mistake. `backups/` is gitignored; a
+database dump must never reach a public repository. This is a **logical backup, not PITR** — see
+`docs/decisions.md` for why that gap is named rather than silently accepted, and what actually
+closes it (a managed Postgres with continuous backup, once real production volume makes a
+`pg_dump` window too coarse for the RPO a financial ledger needs).
+
+**`GET /metrics` (P-2) is `lib/metrics.ts` + `middleware/metrics.ts`, using `prom-client`.**
+Unauthenticated and outside the rate limiter, the same reasoning `/health`/`/health/ready` already
+use — and in the deployed composition the API publishes no port at all, so this is unreachable
+from outside the compose network regardless (section 5n). **The HTTP histogram/counter label by
+route *pattern*, read from `req.route` inside a `res.on('finish', …)` callback — never by raw
+path.** `req.route` is not populated yet at the point the middleware itself runs (mounted before
+routing happens); reading it from the `finish` event works because that fires after routing has
+resolved. Labelling by raw path would mint a fresh Prometheus time series per workspace or
+transaction ID, which is the cardinality explosion Prometheus's own docs warn against — an
+unmatched route (a 404, a scanner) is bucketed under the fixed label `'unmatched'` for the same
+reason. **`redis_connected` doubles as the alert hook the "rate limiting is running on the
+per-process fallback" log warning never had** (`middleware/rate-limit.ts`) — both are
+`redis.status !== 'ready'`, so a metrics-based alert on this gauge is an alert on that warning.
+`infra/prometheus/alerts.example.yml` is the alert rules an operator would actually point at these
+metrics; it is not wired into anything, because there is no Prometheus deployment in this
+repository to wire it into. **An error tracker and distributed tracing are deliberately not
+built** — see `docs/decisions.md`'s "deliberately not built" note for why a client with no
+subscription behind it is worse than not having one.
+
+**Invitation email failures are surfaced, not swallowed (P-5).** `createInvitation` now reads
+`sendEmail`'s return value and the response carries `emailDelivered: boolean` — the seat is
+reserved either way, `sendEmail` still swallows its own failure so an unreachable SMTP host cannot
+fail the request, but the caller now finds out. `InvitationsSection.tsx` shows a distinct warning
+toast when it is `false`, because unlike a notification (which retries via `processDeliveries`)
+there is no second chance at an invitation email: the token exists in exactly one place. **"Use a
+real SMTP provider" was already handled before this entry** — `.env.deploy.example` requires
+`SMTP_HOST` with no default and production already refuses a development mail sink at boot
+(section 5k) — so this closes the half of P-5 that was actually missing.
+
+**Source maps (M-8) are off in production**: `apps/web/vite.config.ts`'s `sourcemap: false`. Pairs
+with the observability entry above — `'hidden'` would have been the better choice once something
+uploads the maps to an error tracker, and nothing here does that yet.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -2596,6 +2670,27 @@ existing 10-second ceiling still bounding the wait — before closing the
 database and Redis connections, rather than doing both in parallel the way it
 used to. A request still writing to the database when the pool vanished out
 from under it was a 500 on every rolling deploy. See the M-5 checklist entry.
+
+**A backup that has not been restored is a promise, not a backup.** `scripts/backup.sh` /
+`restore.sh` run `pg_dump`/`pg_restore` through the running Postgres container rather than a
+host-installed client, so nothing needs installing wherever they run. The restore was actually
+performed against real seeded data — every row count and a four-table join came back identical —
+not merely asserted to work. It is a logical backup, not PITR; see section 5q for the honest
+version of what that gap still leaves open at real production volume.
+
+**Metrics are labelled by route pattern, never by raw path.** `GET /metrics`
+(`prom-client`) reads `req.route` from inside a `res.on('finish', …)` callback — the only point
+routing has actually resolved — specifically to avoid minting a fresh Prometheus time series per
+workspace or transaction ID. `redis_connected` is the same fact
+`middleware/rate-limit.ts`'s degraded-fallback warning already logs, turned into something an
+alert rule can actually key on. See section 5q; an error tracker and tracing are deliberately not
+built, for the same reason a Sentry client with nowhere to send events would be dead code.
+
+**An invitation's email failure is answered to the caller, not swallowed.** `createInvitation`
+still never fails the request over a mail outage — `sendEmail` already absorbs that — but the
+response now says `emailDelivered: false` when it happens, and the client shows a distinct warning
+rather than a false success, because an invitation link exists in exactly one email with no retry
+behind it. See section 5q.
 
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See
@@ -2867,11 +2962,17 @@ entry below.
 per-request 503 backstop (M-4), and a shutdown sequence that actually waits
 for `server.close()` before tearing down the pools (M-5), verified in a real
 container since Windows cannot deliver a real SIGTERM to test it directly.
-What remains of Phase 2 is P-3 (backups), P-2/M-8 (observability) and P-5
-(real SMTP) — all three are more "provision a real external thing" than "fix
-code," so read each one in `AUDIT_REPORT.md` before starting; there may be
-nothing to build in this environment beyond documenting the plan. Or pick up
-M-9.
+
+**Phase 2 is now complete.** P-3, P-2, M-8 and P-5 all turned out to have a
+real, buildable-in-this-repo half after all — see section 5q. What each did
+*not* get is the part that genuinely needs external infrastructure this
+environment cannot provision: true PITR (P-3 got a tested logical backup
+instead), an error tracker and tracing (P-2 got metrics and example alert
+rules instead), and an actual SMTP account (P-5 got the failure surfaced
+instead of silently swallowed — the account itself was already correctly
+gated in section 5k). **Only M-9 is left un-started**, moved to Phase 3
+deliberately when H-1 shipped (section 5o) — pick it up next, or start
+Phase 3 from the top.
 
 Three things a fresh agent should know before touching what is left of Phase 2:
 
@@ -2944,7 +3045,7 @@ audit checklist below outranks it.
       `DATABASE_URL` whose host is not local, which is the check that actually
       catches the mistake people make.
 
-### Phase 2 — before real users
+### Phase 2 — before real users  ✅ complete
 
 - [x] **[H-1] Build password reset and email verification.** **Done** — see
       section 5o. `POST /auth/forgot-password` always answers 204, behind
@@ -3010,15 +3111,62 @@ audit checklist below outranks it.
       then `"HTTP server closed"` — the in-flight request finished before the
       server considered itself closed, which is exactly what the old code did
       not guarantee.
-- [ ] **[P-3] Backups.** No dumps, no PITR, no tested restore, no RPO/RTO — for
-      a financial ledger. An untested backup is not a backup.
-- [ ] **[P-2, M-8] Observability.** No error tracker, no metrics, no tracing, and
-      nothing alerting on the degraded-rate-limiter warning that
-      `middleware/rate-limit.ts` exists to emit. Set `sourcemap: 'hidden'` and
-      upload the maps rather than serving them.
-- [ ] **[P-5] Real SMTP.** `sendEmail` swallows failures and `createInvitation`
-      ignores its return value, so an invitation that never left the building
-      reports success.
+- [x] **[P-3] Backups.** **Done, as a logical (`pg_dump`) backup rather than
+      true PITR/WAL archiving** — see section 5q. `scripts/backup.sh` /
+      `scripts/restore.sh` (`npm run backup` / `npm run restore`) run through
+      the running Postgres container, so nothing needs installing on whatever
+      runs them. **The restore was actually performed**, against real seeded
+      data (74 users, 70 workspaces, 226 transactions, 3,920 categories): a
+      backup taken, restored into a throwaway database, and every row count
+      *and* a join across four foreign keys came back byte-for-byte identical
+      to the source. Measured, not estimated: a 300 KB dump in 1.6s, a full
+      restore in 21s — see section 5q for what that implies about RPO/RTO at
+      this data volume, and for why a real production deployment should still
+      prefer a managed Postgres with continuous backup once the volume grows
+      past what a `pg_dump` window can comfortably cover.
+- [x] **[M-8] Stop shipping production source maps.** **Done.**
+      `apps/web/vite.config.ts`'s `sourcemap: true` → `false`. `'hidden'` was
+      the audit's other option, paired with uploading the maps to an error
+      tracker — not taken, since nothing here has one to upload to (see the
+      P-2 entry immediately below), and generating maps nobody consumes is
+      just as much dead weight as serving them. Verified: `find dist -name
+      '*.map'` is empty after a production build.
+- [x] **[P-2] Observability.** **Done for the half that does not need a real
+      external account.** A new `GET /metrics` (`lib/metrics.ts`,
+      `middleware/metrics.ts`, the `prom-client` dependency) publishes
+      standard Prometheus text-format metrics: default Node/process metrics,
+      an HTTP request duration histogram and counter labelled by *route
+      pattern* (never a raw path — that would mint a fresh time series per
+      workspace ID), Postgres pool saturation (`pg_pool_total_connections` /
+      `_idle_connections` / `_waiting_requests`), and `redis_connected` —
+      which doubles as the alert hook the degraded-rate-limiter warning never
+      had, since it is the same underlying fact
+      (`redis.status !== 'ready'`) `middleware/rate-limit.ts`'s log line
+      already keys on. `infra/prometheus/alerts.example.yml` gives the actual
+      alert rules an operator would wire to these — error rate, readiness
+      failures, pool saturation, the degraded limiter, p99 latency — since a
+      metric nobody alerts on is the M-2 warning's own problem restated.
+      **Not built, deliberately: an error tracker (Sentry or similar) and
+      distributed tracing.** Both need a real subscription to be worth
+      anything; wiring a client with nowhere to send events is dead code that
+      looks like a finished feature. See "deliberately not built" in
+      `docs/decisions.md`.
+- [x] **[P-5] Real SMTP.** **Done for the half this repository can fix.**
+      `createInvitation` now reads `sendEmail`'s return value: the seat is
+      still reserved either way (an unreachable SMTP host must not fail the
+      request that reserved it), but the response now carries
+      `emailDelivered: boolean`, the client shows a distinct warning toast
+      when it is `false` (there is no retry and no "resend" for invitations,
+      unlike notifications — the token only ever exists in that one email),
+      and a `logger.warn` line names the failure distinctly from the generic
+      one `sendEmail` already logs. Verified against the real dev stack with
+      MailHog stopped and restarted: `emailDelivered: false` while it was
+      down, `true` once it came back, both against the same endpoint.
+      **"A real SMTP provider with credentials from a secret store" is a
+      deployment-time action**, not something to build — and it was already
+      correctly gated before this: `.env.deploy.example` requires `SMTP_HOST`
+      with no default, and `production-policy.ts` already refuses a
+      development mail sink at boot (section 5k).
 
 ### Phase 3 — hardening
 

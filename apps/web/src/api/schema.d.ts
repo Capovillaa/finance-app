@@ -27,6 +27,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/ready": {
         parameters: {
             query?: never;
@@ -2077,6 +2093,28 @@ export interface operations {
             503: components["responses"]["ServiceUnavailable"];
         };
     };
+    getMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Prometheus text-format metrics. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain; version=0.0.4; charset=utf-8": string;
+                };
+            };
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     getHealthReady: {
         parameters: {
             query?: never;
@@ -3204,6 +3242,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         invitation: components["schemas"]["WorkspaceInvitation"];
+                        /** @description Whether the invitation email actually left the building. The seat is reserved either way — the token is not returned — but `false` means the invitee will not have received a link and needs to be reached another way. */
+                        emailDelivered: boolean;
                     };
                 };
             };

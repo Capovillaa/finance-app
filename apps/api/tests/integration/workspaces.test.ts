@@ -73,6 +73,10 @@ describe('invitations and roles', () => {
       .set(owner.auth)
       .send({ email: invitee.email, role });
     expect(invitation.status).toBe(201);
+    // Under NODE_ENV=test, `sendEmail` always resolves true — see lib/email.ts
+    // — so this is the happy path for P-5's `emailDelivered` signal; the
+    // failure branch is not reachable from this suite by design.
+    expect(invitation.body.emailDelivered).toBe(true);
 
     // The token only exists in the email; that is what makes the link a secret.
     const email = sentInTests.at(-1);

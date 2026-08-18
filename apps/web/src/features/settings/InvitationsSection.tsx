@@ -27,6 +27,7 @@ import {
   useRevokeInvitationMutation,
 } from '../../api/endpoints/workspaces';
 import type { WorkspaceInvitation } from '../../api/types';
+import { useToast } from '../../components/Toast';
 import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { formatDate } from '../../lib/format';
@@ -60,6 +61,7 @@ function isRevocable(invitation: WorkspaceInvitation): boolean {
  */
 export default function InvitationsSection({ workspaceId }: InvitationsSectionProps): ReactElement {
   const { t } = useTranslation();
+  const { showToast } = useToast();
   const { data, isLoading, error: listError } = useListInvitationsQuery(workspaceId);
   const [createInvitation, createState] = useCreateInvitationMutation();
   const [revokeInvitation, revokeState] = useRevokeInvitationMutation();
@@ -88,6 +90,16 @@ export default function InvitationsSection({ workspaceId }: InvitationsSectionPr
       .catch(() => null);
 
     if (!result) return;
+
+    // The seat is reserved either way — only the email may not have gone
+    // out, and that is worth a distinct warning rather than a silent success,
+    // since there is no retry and no "resend" for a link that only ever
+    // exists in that one email (see P-5 in AUDIT_REPORT.md).
+    showToast(
+      result.emailDelivered
+        ? { message: t('settings.inviteSent'), severity: 'success' }
+        : { message: t('settings.inviteEmailFailed'), severity: 'warning', duration: 8000 },
+    );
     reset(EMPTY);
   });
 

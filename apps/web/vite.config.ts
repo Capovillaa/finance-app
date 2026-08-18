@@ -20,6 +20,15 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // M-8 in AUDIT_REPORT.md: `true` shipped full readable source maps in the
+    // production bundle — a pre-indexed map of the client for free, and dead
+    // weight in the deployed image either way. `'hidden'` (maps built but not
+    // referenced from the served JS) is the audit's other suggested option and
+    // is right once something uploads them to an error tracker; nothing here
+    // does that yet — see the deliberately-not-built note in
+    // `docs/decisions.md` for why — so shipping the maps at all would just be
+    // unused files with no consumer. `false` is what actually matches what
+    // this deployment does today.
+    sourcemap: false,
   },
 });

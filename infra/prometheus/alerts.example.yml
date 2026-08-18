@@ -1,0 +1,72 @@
+# Example Prometheus alerting rules for the metrics `GET /metrics` exposes
+# (apps/api/src/lib/metrics.ts). This is not wired into anything — there is
+# no Prometheus/Alertmanager deployment in this repository, and provisioning
+# one is out of scope for what a single application repo can commit to. What
+# this file is: the concrete rules an operator who does run Prometheus would
+# point at these metrics, so "add alerting" (finding P-2 in AUDIT_REPORT.md)
+# has a real, reviewable answer instead of a paragraph of prose.
+#
+# Copy into your Prometheus rule_files, or use as the starting point for
+# whatever alerting stack you actually run (Datadog, Grafana Alerting, …
+# the metric names and the thresholds are the transferable part).
+
+groups:
+  - name: finance-api
+    rules:
+      - alert: FinanceApiHighErrorRate
+        # 5xx only: a 4xx is a caller's mistake, not this service's.
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 'More than 5% of requests are failing with a 5xx'
+
+      - alert: FinanceApiReadinessFailing
+        # Scrape /health/ready directly with the blackbox exporter, or have
+        # the API export it as a gauge — this line assumes the latter; adapt
+        # to whichever probe method you actually run.
+        expr: probe_success{job="finance-api-readiness"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: '/health/ready has been failing for 2 minutes'
+
+      - alert: FinanceApiPoolSaturated
+        # See M-4 in AUDIT_REPORT.md and pg_pool_waiting_requests' own help
+        # text: this is the leading indicator, not the outage itself — by the
+        # time requests are timing out, this has already been non-zero for a
+        # while.
+        expr: pg_pool_waiting_requests > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Requests are queued waiting for a Postgres connection'
+
+      - alert: FinanceApiRateLimiterDegraded
+        # The exact condition middleware/rate-limit.ts's "running on the
+        # per-process fallback" log warning describes — this is what turns
+        # that warning into something that pages instead of scrolling past.
+        expr: redis_connected == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Redis is unreachable: rate limiting has fallen back to a per-process budget'
+
+      - alert: FinanceApiSlowRequests
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'p99 request latency has been over 5s for 5 minutes'

@@ -652,4 +652,19 @@ describe('the service routes', () => {
     expect(document.status).toBe(200);
     expect(document.body.openapi).toBe('3.1.0');
   });
+
+  it('exposes Prometheus metrics, including a route this same request just recorded', async () => {
+    await api().get('/health');
+    const metrics = await api().get('/metrics');
+
+    expect(metrics.status).toBe(200);
+    expect(metrics.headers['content-type']).toContain('text/plain');
+    expect(metrics.text).toContain('http_requests_total');
+    expect(metrics.text).toContain('pg_pool_total_connections');
+    expect(metrics.text).toContain('redis_connected');
+    // The /health call above should already have posted a series for its own
+    // route — proving the middleware's route-pattern label actually fires,
+    // not just that the registry exists.
+    expect(metrics.text).toMatch(/http_requests_total\{[^}]*route="\/health"/);
+  });
 });

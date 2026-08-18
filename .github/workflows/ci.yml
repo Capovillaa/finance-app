@@ -227,6 +227,17 @@ jobs:
           SMTP_HOST=smtp.invalid \
           PUBLIC_URL=https://finance.invalid \
             docker compose -f docker-compose.deploy.yml --env-file /dev/null config --quiet
+
+      # Cheap and worth having: a syntax error here would otherwise only be
+      # found the day someone actually needs a restore, which is the worst
+      # possible day to find one. `bash -n` parses without running anything —
+      # no Postgres needed for that half. The real end-to-end proof (a backup
+      # taken, corrupted on purpose, and restored byte-for-byte) is manual and
+      # documented in docs/decisions.md, since it means dropping a database.
+      - name: The backup and restore scripts parse
+        run: |
+          bash -n scripts/backup.sh
+          bash -n scripts/restore.sh
           echo "deployment composition ok"
           echo "refused, as it should"
 

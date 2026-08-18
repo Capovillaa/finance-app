@@ -695,6 +695,8 @@
     "invitations": "Convites",
     "inviteExplainer": "A pessoa convidada recebe um e-mail com um link que expira. Ela entra com o papel escolhido aqui.",
     "inviteFailed": "Não foi possível enviar o convite.",
+    "inviteSent": "Convite enviado.",
+    "inviteEmailFailed": "A vaga foi reservada, mas o e-mail do convite falhou ao enviar. Entre em contato com essa pessoa por outro meio.",
     "emailAddress": "Endereço de e-mail",
     "invite": "Convidar",
     "sending": "Enviando…",

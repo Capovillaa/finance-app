@@ -29,6 +29,9 @@
     "infra:up": "docker compose up -d postgres redis mailhog",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v && docker compose up -d postgres redis mailhog",
+    "//backup": "See docs/decisions.md, 'A tested restore, not a promise of one'. COMPOSE_FILE=docker-compose.deploy.yml for the deployed stack.",
+    "backup": "bash scripts/backup.sh",
+    "restore": "bash scripts/restore.sh",
     "//openapi": "The contract chain: the API generates docs/openapi.json from the router, and the client generates its response types from that file. Both steps run together so the two can never be regenerated apart."
   }
 }

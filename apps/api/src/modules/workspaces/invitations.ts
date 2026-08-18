@@ -5,6 +5,7 @@ import type { MemberRole } from '../../db/types.js';
 import { invitationEmail, sendEmail } from '../../lib/email.js';
 import { conflict, notFound, unprocessable } from '../../lib/errors.js';
 import type { Locale } from '../../lib/i18n.js';
+import { logger } from '../../lib/logger.js';
 import { recordActivity } from '../activity/service.js';
 import { addMember } from './service.js';
 
@@ -38,7 +39,7 @@ export interface CreateInvitationInput {
 
 export async function createInvitation(
   input: CreateInvitationInput,
-): Promise<{ invitation: InvitationRecord; acceptUrl: string }> {
+): Promise<{ invitation: InvitationRecord; acceptUrl: string; emailDelivered: boolean }> {
   const email = input.email.trim().toLowerCase();
 
   const existingMember = await db
@@ -79,7 +80,12 @@ export async function createInvitation(
 
   const acceptUrl = `${env.WEB_BASE_URL}/invitations/accept?token=${token}`;
 
-  await sendEmail(
+  // `sendEmail` already logs and swallows its own failure — that stays true,
+  // an unreachable SMTP host must not fail the request that reserved the
+  // seat. What used to be missing (P-5 in AUDIT_REPORT.md) is telling the
+  // admin who sent it: the seat is real either way, but if the mail never
+  // left the building they need to know to reach the invitee another way.
+  const emailDelivered = await sendEmail(
     invitationEmail({
       to: email,
       inviterName: input.inviterName,
@@ -90,6 +96,13 @@ export async function createInvitation(
       locale: input.inviterLocale,
     }),
   );
+
+  if (!emailDelivered) {
+    logger.warn(
+      { workspaceId: input.workspaceId, invitationId: row.id, email },
+      'Invitation created but its email failed to send',
+    );
+  }
 
   await recordActivity({
     workspaceId: input.workspaceId,
@@ -111,6 +124,7 @@ export async function createInvitation(
       createdAt: row.created_at,
     },
     acceptUrl,
+    emailDelivered,
   };
 }
 

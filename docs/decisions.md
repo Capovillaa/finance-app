@@ -2045,3 +2045,127 @@ timeout options are actually on it, and `tests/unit/request-timeout.test.ts` dri
 with fake timers and a bare `EventEmitter` standing in for `res`, covering the ordinary pass-through
 path, the 503-on-deadline path, and the two ways the timer must *not* fire — response already
 finished, and headers already sent by something else.
+
+---
+
+### A tested restore, not a promise of one — and the rest of Phase 2
+
+Findings **P-3**, **P-2**, **M-8** and **P-5** close out Phase 2. Grouped here because each one
+turned out to split cleanly into a half this repository can actually build and prove, and a half
+that only means anything with a real external account or a production data volume neither of
+which exist in this environment — and the discipline that matters across all four is naming that
+split explicitly rather than either skipping the finding or faking the missing half.
+
+**P-3: backups.** The honest starting point is that `pg_dump`/`pg_restore` is a *logical* backup,
+not the point-in-time recovery a financial ledger's own RPO probably wants once it holds real
+money rather than seed data — continuous WAL archiving needs a place to archive to, and true PITR
+needs either a managed Postgres or a hand-rolled `pgbackrest`/`wal-g` setup, neither of which
+belongs in an application repository's own commit. What a `pg_dump` *does* buy, honestly stated
+rather than oversold, is a real, restorable, tested point-in-time copy on whatever schedule an
+operator's cron or systemd timer calls `scripts/backup.sh` — which is strictly more than the
+nothing that existed before it, and the audit's own fallback option for exactly this reason
+("scheduled base backups... and a documented restore that has actually been performed once").
+
+`backup.sh` and `restore.sh` both run through the *running Postgres container*
+(`docker compose exec -T postgres pg_dump/pg_restore …`) rather than assuming a host-installed
+client. That was not a stylistic choice — it is what makes the same script correct on a Windows
+dev machine, a Linux CI runner and a Linux deploy host without three different install steps, and
+it guarantees the dump/restore tools are always the exact version paired with the database being
+backed up, never whatever happens to be on `$PATH`.
+
+**`restore.sh` is genuinely destructive** — `pg_restore --clean --if-exists` drops every object
+already in the target database before recreating it — so it always names exactly what it is about
+to overwrite and refuses to proceed without a trailing `--yes`. That is the mirror image of
+`npm run seed`'s `--i-know-this-is-not-a-demo-database` guard (M-10, section 5n): seed's guard
+protects a real database from a *destructive write it should never receive*; restore's guard
+exists because restore's whole *purpose* is a destructive write to a database that, in a genuine
+disaster-recovery moment, is very likely the production one — so the guard cannot refuse the
+target the way seed's does, only make certain the operator has actually looked at what they typed.
+
+**The restore was performed, not asserted.** Against the real dev stack, seeded with
+`npm run seed` plus several sessions' worth of accumulated demo accounts (74 users, 70 workspaces,
+38 accounts, 226 transactions, 3,920 categories): `npm run backup` produced a 300 KB dump in 1.6
+seconds; that dump was restored into a throwaway `finance_restore_test` database (never the real
+one) in 21 seconds; every row count matched exactly, and a four-table join (`users` →
+`workspaces` → `accounts` → `transactions`, grouped and counted) returned byte-for-byte identical
+rows against both databases. At this data volume that implies an RPO bounded only by how often the
+job runs (hourly is cheap at 300 KB and 1.6s) and an RTO around half a minute including the
+container round trip — numbers that will not hold at real production scale, where a `pg_dump` of
+a genuinely large ledger can run for hours and a restore longer still, which is precisely the
+point at which "logical backup on a cron job" stops being sufficient and PITR stops being
+optional. That ceiling is exactly why this entry keeps saying "logical, not PITR" rather than
+"backups: done."
+
+**P-2: observability.** Splits the same way. `GET /metrics` in the standard Prometheus text
+format — default Node/process metrics, an HTTP request duration histogram and counter, Postgres
+pool saturation, and a `redis_connected` gauge — is genuinely useful today, needs no account
+anywhere, and is exercised by a real integration test
+(`response-contracts.test.ts`'s "exposes Prometheus metrics" case, which makes a `/health`
+request and then asserts `/metrics` actually recorded a `route="/health"` series — proving the
+label logic fires, not just that the registry exists). An error tracker and distributed tracing
+are the other half, and neither was built: a Sentry client with `SENTRY_DSN` unset, or an
+OpenTelemetry exporter with nowhere to export to, is not a smaller version of the feature — it is
+dead code shaped like a finished one, which is worse than an honestly-empty gap because it reads
+as "handled" on a diff. **This is the entry `docs/decisions.md`'s other "deliberately not built"
+notes point at**: the same reasoning that kept OAuth login and push notifications out of session
+one applies here — building the *provider-agnostic* shape of a thing nobody can turn on yet is
+effort spent on a feature that does not exist until someone supplies the missing account, at which
+point it is a day of real work either way.
+
+**The HTTP metrics label by route *pattern*, deliberately, never by raw path.**
+`middleware/metrics.ts` reads `req.route` from inside a `res.on('finish', …)` handler rather than
+where the middleware itself runs — Express has not matched a route yet at that point, since this
+middleware sits ahead of the router in the stack, and `req.route` is only populated once dispatch
+actually reaches a handler. The `finish` event fires after the whole cycle, routing included, so
+by then it is set for anything that matched. Labelling by `req.path` instead would have looked
+identical in every test and then quietly minted one Prometheus time series per workspace ID (or
+transaction ID, or any other UUID segment) in production — the exact cardinality explosion
+Prometheus's own documentation warns is the most common way to make a metrics backend fall over.
+An unmatched request (a 404, a scanner probing random paths) is bucketed under the fixed label
+`'unmatched'` for the identical reason.
+
+**`redis_connected` was written to double as an existing gap's answer, not as a new metric for
+its own sake.** `middleware/rate-limit.ts` already logs "Rate limiting is running on the
+per-process fallback" once a minute when Redis is unreachable — precisely the warning P-2 named as
+having nothing to alert on. That warning's condition is `redis.status !== 'ready'`, which is also
+exactly what the gauge reports, so an alert on `redis_connected == 0` *is* an alert on that
+warning; no second code path was needed. `infra/prometheus/alerts.example.yml` writes that rule
+out explicitly, alongside error rate, readiness failures, pool saturation and p99 latency — not
+wired into anything, since there is no Prometheus deployment in this repository to wire it into,
+but a concrete answer to "what would you alert on" rather than a paragraph promising one exists.
+
+**M-8: source maps.** The smallest of the four and the one place a real choice had to be made
+between the audit's two suggested fixes. `sourcemap: 'hidden'` — maps built but not linked from
+the served JS — is the better answer *once something uploads them to an error tracker*, which is
+exactly the P-2 half that was not built. Shipping `'hidden'` maps with no upload step would just
+be unused files sitting in the image with no consumer, which is not meaningfully different from
+the `true` this replaces. `sourcemap: false` is what actually matches what this deployment does
+today; revisit it together with wiring a real error tracker, not before.
+
+**P-5: invitation delivery failures.** `createInvitation` always called `sendEmail` and never read
+what it returned — `sendEmail` itself already swallows a failure (an unreachable SMTP host must
+never fail the request that reserved the seat), so the previous behaviour was silently correct
+about not breaking anything and silently wrong about telling anyone. The fix reads the boolean,
+folds it into the response as `emailDelivered`, and logs a line — `"Invitation created but its
+email failed to send"` — distinct from `sendEmail`'s own generic `"Email delivery failed"`, so an
+operator grepping logs can tell an invitation-shaped failure from a notification-shaped one.
+`InvitationsSection.tsx` shows a warning toast rather than the ordinary success one when
+`emailDelivered` is `false`. **Deliberately not built: retrying the send.** The audit's own
+phrasing — "the notification path already retries via `processDeliveries`" — is context for why
+invitations do not need the same machinery, not an instruction to add it: a notification is a
+convenience copy of something already visible in-app, so a queued retry costs nothing if it lands
+late; an invitation *is* the only way the invitee can join at all, so what actually matters is the
+admin knowing immediately that it needs a manual follow-up, which is what surfacing the failure
+provides directly.
+
+Verified against the real dev stack, not stubbed: MailHog stopped, an invitation created —
+`emailDelivered: false` in the response, both log lines present; MailHog restarted, another
+invitation created against the same workspace — `emailDelivered: true`, real mail landing in
+MailHog same as before this change.
+
+**What P-2 and P-5 have in common with M-9 (section 5o) is worth naming.** All three are cases
+where the honest scope of "done" is narrower than the finding's title, and the discipline that
+mattered was writing down the narrower scope rather than either overclaiming or leaving the
+finding half-addressed with no note explaining why. A future session picking up an error tracker,
+real tracing, or PITR is not fixing something broken here — it is doing the part that was always
+going to need infrastructure this repository cannot provision on its own.
