@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-352; see section 4 for the current command. The compiled `dist/server.js`
+354; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -880,25 +880,28 @@ The worker is a separate process too:
 npm run dev:worker --workspace=@finance/api
 ```
 
-To run the **built** system instead of the dev servers — the same image the
-deployment uses, with migrations gating startup — see section 5g. It runs as
-`NODE_ENV=production`, so it needs **real** JWT secrets: the profile requires
-them explicitly and the API refuses to boot on the published `.env.example`
-placeholders (section 5j).
+To run the **built** system instead of the dev servers — the same image a
+deployment uses, with migrations gating startup — it is a **separate compose
+file**, not a profile of this one (section 5k). It runs as `NODE_ENV=production`
+and brings up its own Postgres and Redis, so it shares nothing with the
+development stack above, including the demo data:
 
 ```bash
-export JWT_ACCESS_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")
-export JWT_REFRESH_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")
-docker compose --profile app up -d --build
+cp .env.deploy.example .env.deploy   # then fill in every REQUIRED value
+docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
 ```
 
 | What | Where |
 | --- | --- |
 | API | http://localhost:4000 (`/health`, `/health/ready`, `/openapi.json`) |
 | Web client | http://localhost:5173 |
-| Postgres | localhost:5432, db `finance` / `finance_test`, user+pass `finance` |
-| Redis | localhost:6379 |
+| Postgres | 127.0.0.1:5432, db `finance` / `finance_test`, user+pass `finance` |
+| Redis | 127.0.0.1:6379 |
 | MailHog UI | http://localhost:8025 (SMTP on 1025) |
+
+Those three now publish on **`127.0.0.1` explicitly** rather than on every
+interface — see section 5k. Nothing about connecting to them from this machine
+changes.
 
 **Demo accounts** (after `npm run seed`): `ana@demo.local` and
 `bruno@demo.local`, password `Demo1234567` for both.
@@ -906,8 +909,8 @@ docker compose --profile app up -d --build
 ### Tests
 
 ```bash
-npm test                 # all 352 — needs Postgres, and only Postgres
-npm run test:unit        # 206 pure units, no infrastructure at all
+npm test                 # all 354 — needs Postgres, and only Postgres
+npm run test:unit        # 208 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -1823,10 +1826,15 @@ entrypoints, and a migration that gates the rollout". What you need in order not
 to break it:
 
 ```bash
-docker compose --profile app up -d --build   # migrate, then api + worker
-docker compose --profile app logs -f api
-docker compose --profile app down
+# `--env-file .env.deploy` for a real one; see section 5k
+docker compose -f docker-compose.deploy.yml up -d --build   # migrate, then api + worker
+docker compose -f docker-compose.deploy.yml logs -f api
+docker compose -f docker-compose.deploy.yml down
 ```
+
+**These commands used to be `docker compose --profile app …` against
+`docker-compose.yml`.** The deployed stack is now its own file — section 5k has
+the reasoning; everything else in this section is unchanged by that move.
 
 **`apps/api/Dockerfile` builds from the repository root**, never from its own
 directory — the API depends on the `@finance/schemas` workspace, so the context
@@ -1834,17 +1842,16 @@ has to contain both packages. The old file copied only `apps/api` and could
 neither install nor compile; it had been broken for several sessions because
 nothing ever built it.
 
-**The `app` compose profile is the deployed shape**: `migrate` runs to
+**`docker-compose.deploy.yml` is the deployed shape**: `migrate` runs to
 completion, then `api` and `worker` start behind
 `depends_on: service_completed_successfully`. A failed migration stops the
 rollout instead of leaving a new binary talking to an old schema.
 
-**The three `app` services no longer read `env_file: .env`** — see section 5j.
-They take the shared `x-app-environment` block at the top of
-`docker-compose.yml`, where `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` are
-required compose variables and everything else defaults to what `config/env.ts`
-would default to anyway. If you add a variable the deployed API needs, add it
-there; `.env` will not carry it any more.
+**None of the three reads `env_file: .env`** — see sections 5j and 5k. They take
+the shared `x-app-environment` block at the top of that file, where every
+credential is a required compose variable and everything else defaults to what
+`config/env.ts` would default to anyway. If you add a variable the deployed API
+needs, add it there; no `.env` will carry it.
 
 Five things that will bite, all of them found by building and running rather
 than by reading:
@@ -2053,7 +2060,7 @@ Finding **C-1** of `AUDIT_REPORT.md`, the first Phase 1 task. Full reasoning is 
 `docs/decisions.md`, "A published secret is refused at boot, not documented as
 something to change". What you need in order not to undo it:
 
-**`apps/api/src/config/secret-policy.ts` is the whole rule, and it imports
+**`apps/api/src/config/production-policy.ts` is the whole rule, and it imports
 nothing.** Same constraint as `middleware/rate-limit-policy.ts` and
 `modules/currencies/providers.ts` — no `config/env`, no database, no Express —
 which is what lets `tests/unit/secret-policy.test.ts` run in the unit lane.
@@ -2100,11 +2107,84 @@ the two published pairs (refused), production with one real secret in both
 variables (refused), production with two generated secrets (boots), and
 development with the placeholders (boots).
 
-Two things this task did **not** do, both still open: `.env.example` and the
-default compose profile still publish Postgres, Redis and MailHog with default
-credentials (**C-2**, the next task), and `JWT_REFRESH_SECRET` still signs both
+One thing this task did **not** do, still open: `JWT_REFRESH_SECRET` signs both
 refresh tokens and invitation tokens (**M-11**) — the "must not be the same
 value" check is only half of that finding.
+
+**The module is `production-policy.ts`, not `secret-policy.ts`.** It was renamed
+when C-2 (section 5k) added the second boot-time refusal, the mail host. If you
+add a third — a cookie-topology rule for H-4, say — it belongs here rather than
+inline in `env.ts`, for the same reason the first two do: the decision is the
+part that can be quietly wrong.
+
+---
+
+## 5k. Development and deployment are two compose files
+
+Finding **C-2** of `AUDIT_REPORT.md`, the second Phase 1 task. Full reasoning is
+in `docs/decisions.md`, "Development and deployment are two files, because a
+profile was never a boundary". What you need in order not to undo it:
+
+**A compose service without a `profiles:` key is in the *default* profile and
+starts unconditionally.** That one fact is the whole finding. `--profile app`
+therefore never selected a deployed stack — it *added* `migrate`, `api` and
+`worker` to the development one, so the "deployment" also brought up Postgres on
+5432 with the password `finance`, Redis on 6379 with no password at all, and
+**MailHog's unauthenticated UI on 8025** with the API and worker both pointed at
+it. Every workspace invitation link is a bearer token granting membership, and
+that UI displays them all.
+
+| File | What it is |
+| --- | --- |
+| `docker-compose.yml` | development infrastructure only: postgres, redis, mailhog |
+| `docker-compose.deploy.yml` | the deployed shape: postgres, redis, migrate, api, worker |
+| `.env.example` | development configuration; public secrets, well-known password |
+| `.env.deploy.example` | deployment configuration; nothing that is a credential has a default |
+
+Six things that are deliberate:
+
+1. **The deploy file publishes no database or cache port at all.** Not a
+   different binding — none. Reach them with `docker compose exec` or a tunnel.
+   `docker inspect` shows `map[5432/tcp:[]]`, which is what "exposed to the
+   compose network and nowhere else" looks like.
+2. **The development file binds to `127.0.0.1` explicitly.** Docker's `"5432:5432"`
+   means `0.0.0.0:5432` — on a laptop joining a café network, that is a Postgres
+   with the password `finance` on the local WiFi. Keep the prefix on any port
+   added there.
+3. **Redis takes `--requirepass` and the password rides in `REDIS_URL`.** The
+   healthcheck authenticates through `REDISCLI_AUTH`, which `redis-cli` reads on
+   its own, so the password never lands on a command line inside the container.
+   Both passwords are interpolated into URLs, so **generate them from base64url
+   or hex** — an `@` or a `/` breaks the URL rather than the password.
+4. **`name: finance_app` is pinned in the development file.** Compose derived
+   that from the directory before anyone wrote it down, and it is what prefixes
+   the volumes; changing it points the file at fresh empty ones and abandons the
+   local database. The deploy file is `finance-deploy` and has its own volumes on
+   purpose — it is not a way to run the built image against your demo data.
+5. **`SMTP_HOST` has no safe default in production**, so there is none:
+   `production-policy.ts`'s `isDevelopmentMailHost` refuses `localhost`,
+   `mailhog`, `127.0.0.1` and friends at boot. Mail carries invitations,
+   `sendEmail` logs its failures rather than raising them, and
+   `createInvitation` never reads the result — so a deployment left on the
+   default posts invitations into a socket that is not listening and reports
+   success. The check is on the **resolved value**, not on whether the variable
+   was set, because `env.ts` loads `.env` through dotenv *into* `process.env`
+   and the two are indistinguishable afterwards.
+6. **The worker's healthcheck is disabled rather than faked.** The image's
+   `HEALTHCHECK` probes the HTTP port, which the worker never opens, so
+   inheriting it marks a healthy worker unhealthy forever. A real liveness
+   signal is **P-6** and is not built.
+
+Verified by running the whole thing, not by reading it: the deploy stack brought
+up on generated credentials — all 9 migrations applied to a fresh volume,
+`migrate` exited 0, the API answered `/health/ready` on `127.0.0.1:4100` and the
+worker ran; `redis-cli ping` with the password cleared returned `NOAUTH
+Authentication required`; both data stores showed no host binding; and the image
+refused `SMTP_HOST=mailhog` under `NODE_ENV=production`.
+
+Still open from C-2's fix list: nothing requires **TLS** to Postgres or Redis
+(**L-5**), and the deployed composition has no web client to serve (**P-1**,
+which is also where CSP and HSTS will live).
 
 ---
 
@@ -2186,13 +2266,24 @@ a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
 token issued just before a revocation from one issued just after — which would
 make either the stale token or the user's fresh sign-in wrong. See section 5i.
 
+**Development and deployment are two compose files, because a profile was never
+a boundary.** A service without a `profiles:` key starts unconditionally, so
+`--profile app` added the deployed containers to the development stack instead
+of replacing it — publishing Postgres with a default password, unauthenticated
+Redis, and MailHog's open UI showing every invitation token, all wired into the
+"production" API. `docker-compose.deploy.yml` publishes no data-store port,
+requires a password for each, and has no mail sink; `docker-compose.yml` keeps
+the convenient defaults and binds them to `127.0.0.1`. Production also refuses
+to boot pointed at a development mail host, because a lost invitation is logged
+rather than raised. See section 5k and `docs/decisions.md`.
+
 **A signing secret that has been published is refused at boot, not documented as
 something to change.** This repository is public, the documented setup is `cp
 .env.example .env`, and the deploy profile used to load that same file into
 containers running as `NODE_ENV=production` — so the documented path from a
 fresh clone to a running production stack carried public JWT keys end to end,
 and a stack running on them looked exactly like one that was not.
-`config/secret-policy.ts` (pure, no imports, unit-tested) now rejects a
+`config/production-policy.ts` (pure, no imports, unit-tested) now rejects a
 production secret that is short, published, still placeholder-shaped, low in
 distinct characters, or shared between the two variables; the `app` compose
 services require both explicitly instead of inheriting `.env`; and CI proves
@@ -2375,7 +2466,7 @@ and does not* (see the first item of Phase 2).
 ### Phase 1 — blocks any deploy
 
 - [x] **[C-1] Refuse the published JWT secrets in production.** **Done** — see
-      section 5j. `config/secret-policy.ts` rejects a short, published,
+      section 5j. `config/production-policy.ts` rejects a short, published,
       placeholder-shaped, low-entropy or shared secret when
       `NODE_ENV=production`; the `app` compose services require both secrets
       explicitly instead of loading `.env`; CI checks both that a generated
@@ -2383,13 +2474,14 @@ and does not* (see the first item of Phase 2).
       were *not* made non-bootable outright, on purpose — they still work in
       development and are on the denylist, which is where the reasoning differs
       from the audit's suggestion.
-- [ ] **[C-2] Stop publishing the data stores.** Services with no `profiles:`
-      key start unconditionally, so the deploy profile also brings up Postgres
-      on 5432 with the default password `finance`, Redis on 6379 with no
-      password at all, and **MailHog's unauthenticated UI on 8025**, which the
-      API and worker are both pointed at — every invitation link readable by
-      anyone who reaches the port. Split development and deployment
-      compositions.
+- [x] **[C-2] Stop publishing the data stores.** **Done** — see section 5k.
+      `docker-compose.deploy.yml` is a separate file: no MailHog, no published
+      Postgres or Redis port, a required password for each, and the API bound to
+      `127.0.0.1` by default. `docker-compose.yml` is development only and binds
+      its ports to the loopback interface explicitly. Production additionally
+      refuses to boot with `SMTP_HOST` pointing at a development mail sink.
+      **L-5 (TLS to Postgres and Redis) is still open** and was the one item on
+      C-2's fix list not taken.
 - [ ] **[H-3] Stop reflecting Postgres `detail` to clients.** `lib/errors.ts`
       copies it into `rawMessage`, and `expose` is `status < 500`, so a 409
       returns `Key (email)=(someone@example.com) already exists.` — table names,

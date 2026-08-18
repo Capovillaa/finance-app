@@ -1506,7 +1506,7 @@ control**, and this one had the additional problem that nothing anywhere would t
 been forgotten — a stack running on the published key looks exactly like a stack running on a real
 one.
 
-So production now refuses to start. `config/secret-policy.ts` judges each secret on four counts:
+So production now refuses to start. `config/production-policy.ts` judges each secret on four counts:
 at least 32 characters; not one of the exact values this repository has ever published (the two
 `.env.example` pairs, the CI throwaways, the OpenAPI generator's stub); not still *shaped* like a
 placeholder (`change-me`, `placeholder`, a leading `dev-`); and at least ten distinct characters,
@@ -1548,6 +1548,75 @@ CI gates both directions. The existing "the image can load the whole app graph" 
 a fresh random secret per run — the image sets `NODE_ENV=production`, so the throwaways it used
 before are exactly what is now refused — and a new step runs the same image with a published
 placeholder and **fails if it boots**. A refusal that nothing exercises is a refusal that rots.
+
+---
+
+### Development and deployment are two files, because a profile was never a boundary
+
+The audit's second critical finding rested on one fact about compose that is easy to read past: a
+service declared **without** a `profiles:` key belongs to the *default* profile and starts
+unconditionally. `docker compose --profile app up -d` therefore never selected the deployed stack.
+It **added** `migrate`, `api` and `worker` to the development one.
+
+So the command documented as "the deployed shape of the system" brought up, every time: Postgres
+on 5432 with the password `finance`, Redis on 6379 with no password, no ACL and no TLS, and
+MailHog — a mail sink whose whole purpose is to display messages to anyone who opens
+`localhost:8025`, with no authentication — with both the API and the worker pointed at it. Every
+workspace invitation link is a bearer token that grants membership to a workspace, and that UI
+lists them.
+
+The intent had been right and the mechanism could not express it. A profile is a *filter over one
+composition*: it can add services to a run, and it has no way to say "and not those". The two
+compositions do not differ by a few services either — they differ on whether a credential may have
+a default at all, which is a property of the whole file. So they are two files:
+`docker-compose.yml` for development, `docker-compose.deploy.yml` for a deployment, sharing
+nothing but the repository.
+
+**What the deployment file refuses to do.** No MailHog. No `ports:` on Postgres or Redis at all —
+not a narrower binding, none, so they are reachable on the compose network and nowhere else, and
+maintenance goes through `docker compose exec` or a tunnel. Redis takes `--requirepass`, and its
+healthcheck authenticates through `REDISCLI_AUTH`, which `redis-cli` reads by itself, so the
+password never appears on a command line inside the container. `POSTGRES_PASSWORD`,
+`REDIS_PASSWORD`, both JWT secrets, `SMTP_HOST`, `API_BASE_URL` and `WEB_BASE_URL` are required
+compose variables — `${VAR:?message}` stops the command before it starts a container — and the API
+binds to `127.0.0.1` unless `API_BIND_ADDRESS` says otherwise, on the assumption that a reverse
+proxy terminating TLS is what faces the internet.
+
+**What the development file keeps, and what changed in it.** The well-known password and the open
+mail sink stay: it is a database of demo data on a developer's machine, and the friction of a
+generated password there buys nothing. What changed is that every published port now names
+`127.0.0.1` explicitly, because Docker's `"5432:5432"` means `0.0.0.0:5432` — a laptop on a café
+network was offering Postgres with the password `finance` to that network, and nothing in the file
+said so.
+
+**One rule crossed from compose into the application, and it is the more interesting half.**
+`SMTP_HOST` defaults to `localhost` for MailHog. In production that default is not merely wrong, it
+is *invisible*: `sendEmail` catches its own failures and returns `false` so that a mail outage
+cannot fail the request that triggered it, and `createInvitation` does not read the return value.
+A deployment left on the default therefore posts every invitation into a socket that refuses the
+connection, and tells the admin who sent it that it worked. So production refuses to start with
+`SMTP_HOST` naming a development sink.
+
+That check is written against the **resolved value**, not against whether the variable was
+present, and the first version got it wrong: `config/env.ts` loads `.env` through dotenv *into*
+`process.env`, so by the time anything can look, "the operator never set it" and "the operator set
+it to the development default" are the same state. `env -u SMTP_HOST` in the shell proved nothing;
+the module booted happily on the `localhost` that dotenv had just put back.
+
+`config/secret-policy.ts` became **`config/production-policy.ts`** in the same pass, since it now
+holds two rules rather than one and the concept it names is "what production refuses to boot on".
+The next one — H-4's cookie topology, most likely — has a home rather than an inline `if` in
+`env.ts`.
+
+**Verified by running it.** The deploy stack came up on generated credentials: all nine migrations
+applied to a fresh volume, `migrate` exited 0, the API answered `/health/ready` on
+`127.0.0.1:4100`, the worker ran. `redis-cli ping` with `REDISCLI_AUTH` cleared answered `NOAUTH
+Authentication required`. `docker inspect` reported `map[5432/tcp:[]]` for both data stores — the
+shape of "exposed, not published". And the image refused `SMTP_HOST=mailhog` under
+`NODE_ENV=production`.
+
+**Not taken from C-2's fix list:** TLS to Postgres and Redis (L-5) is still unconfigured, and a
+managed database will want `sslmode=require`.
 
 ---
 

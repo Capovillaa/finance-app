@@ -5,13 +5,14 @@ import {
   checkProductionSecrets,
   formatSecretIssues,
   GENERATE_SECRET_COMMAND,
+  isDevelopmentMailHost,
   MIN_PRODUCTION_SECRET_LENGTH,
-} from '../../src/config/secret-policy.js';
+} from '../../src/config/production-policy.js';
 
 /**
- * The rule that keeps a public placeholder from signing a real access token,
- * tested without an environment to stub — `secret-policy.ts` imports nothing for
- * exactly that reason. What matters here is both halves: that a published or
+ * The rules that keep a development configuration from serving production,
+ * tested without an environment to stub — `production-policy.ts` imports nothing
+ * for exactly that reason. What matters here is both halves: that a published or
  * padded value is refused, and that a genuinely generated one is not, because a
  * check with a false positive is a check somebody deletes.
  */
@@ -126,6 +127,28 @@ describe('checkProductionSecrets', () => {
     expect(new Set(issues.map((issue) => issue.variable))).toEqual(
       new Set(['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET']),
     );
+  });
+});
+
+describe('isDevelopmentMailHost', () => {
+  it('recognises the sinks a developer runs, in any spelling', () => {
+    for (const host of ['localhost', 'LOCALHOST', ' localhost ', '127.0.0.1', '::1', 'mailhog', '0.0.0.0']) {
+      expect(isDevelopmentMailHost(host)).toBe(true);
+    }
+  });
+
+  it('leaves a real provider alone', () => {
+    for (const host of [
+      'smtp.sendgrid.net',
+      'email-smtp.eu-west-1.amazonaws.com',
+      'smtp.mailgun.org',
+      'mail.example.com',
+      // Not a sink: the name only *contains* one of them.
+      'mailhog.example.com',
+      'localhost.example.com',
+    ]) {
+      expect(isDevelopmentMailHost(host)).toBe(false);
+    }
   });
 });
 

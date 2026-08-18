@@ -1,5 +1,11 @@
 /**
- * Whether a signing secret is fit to sign anything in production.
+ * What production refuses to boot on.
+ *
+ * Every rule here has the same shape: a value that is *correct for development*
+ * would be a security or correctness failure in production, and taking it
+ * silently is worse than not starting — a deployment signing tokens with a
+ * published key, or posting invitations to a mail sink that is not there, looks
+ * exactly like one that is working.
  *
  * Nothing in this file imports `config/env`, the database or Express — the same
  * rule `middleware/rate-limit-policy.ts` and `modules/currencies/providers.ts`
@@ -7,13 +13,12 @@
  * testable without an environment to stub. `config/env.ts` supplies the values;
  * this module only judges them.
  *
- * The judgement exists because a length check alone cannot tell a real secret
- * from a published one. This repository is public, so the placeholders in
+ * The signing-secret half exists because a length check cannot tell a real
+ * secret from a published one. This repository is public, so the placeholders in
  * `.env.example` and the throwaways in the CI workflow are known bytes: anyone
  * holding `JWT_ACCESS_SECRET` can forge an access token for any user, and anyone
  * holding `JWT_REFRESH_SECRET` can compute the HMAC of any refresh or invitation
- * token. A deployment that boots with one of them has no authentication at all,
- * so production refuses to start rather than starting insecurely.
+ * token. That is total authentication bypass, from a copied file.
  */
 
 export interface SecretIssue {
@@ -138,6 +143,26 @@ export function checkProductionSecrets(secrets: Record<string, string>): SecretI
   }
 
   return issues;
+}
+
+/**
+ * Hosts that mean "there is no mail server here".
+ *
+ * `SMTP_HOST` defaults to `localhost` for MailHog, and the deployed composition
+ * has no mail sink at all. The failure this guards is quiet by construction:
+ * `sendEmail` catches and logs, `createInvitation` does not read its result, so
+ * a production deployment left on the default posts every workspace invitation
+ * into a socket that refuses the connection and tells the admin it worked.
+ *
+ * Checked on the resolved value rather than on the presence of the environment
+ * variable, because `config/env.ts` loads `.env` through dotenv *into*
+ * `process.env` — so "the operator did not set it" and "the operator set it to
+ * the development default" are indistinguishable by the time anything can look.
+ */
+const DEVELOPMENT_MAIL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', 'mailhog', '0.0.0.0']);
+
+export function isDevelopmentMailHost(host: string): boolean {
+  return DEVELOPMENT_MAIL_HOSTS.has(host.trim().toLowerCase());
 }
 
 /** The message `config/env.ts` throws. Names the variables, never the values. */

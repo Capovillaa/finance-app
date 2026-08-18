@@ -1,0 +1,173 @@
+# The deployed shape of the system. `docker-compose.yml` is development only.
+#
+#     docker compose -f docker-compose.deploy.yml up -d --build
+#
+# The two files are separate because they answer to different rules, and one
+# file trying to answer to both is how the audit's C-2 happened: services
+# declared without a `profiles:` key are in the *default* profile and start
+# unconditionally, so `--profile app` did not select the deployed stack — it
+# added three containers to the development one. The result published Postgres
+# with the password `finance`, Redis with no password at all, and MailHog's
+# unauthenticated web UI on 8025, with the API and worker both pointed at it:
+# every workspace invitation link — a bearer token granting membership —
+# readable by anyone who could reach the port.
+#
+# So this file: no MailHog, no published database or cache ports, and no
+# defaults for anything that is a credential. `${VAR:?message}` makes compose
+# refuse to start rather than substitute something convenient.
+#
+# Copy `.env.deploy.example`, fill it in, and pass it explicitly:
+#
+#     docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d
+#
+# It is a separate file from `.env` on purpose. `.env` is what
+# `cp .env.example .env` produces, and compose reads it automatically — which is
+# exactly how a development configuration used to reach a production container.
+name: finance-deploy
+
+# What the three application containers run with. Every credential is required;
+# everything else defaults to what `apps/api/src/config/env.ts` would default to
+# anyway, so this block stays a list of deployment decisions rather than a copy
+# of the schema.
+x-app-environment: &app-environment
+  NODE_ENV: production
+  # Passwords go into a URL here, so keep them to characters that survive one:
+  # base64url or hex, no `@`, `:` or `/`. See `.env.deploy.example`.
+  DATABASE_URL: postgres://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:?set a database password - see .env.deploy.example}@postgres:5432/${POSTGRES_DB:-finance}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?set a redis password - see .env.deploy.example}@redis:6379
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?generate one - node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"}
+  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?generate a second, different one the same way}
+  # There is no development mail sink here, and `config/env.ts` refuses to boot
+  # in production without an explicit host rather than quietly falling back to
+  # localhost and dropping every invitation on the floor.
+  SMTP_HOST: ${SMTP_HOST:?point this at a real SMTP provider}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  MAIL_FROM: ${MAIL_FROM:-Finance App <no-reply@finance.local>}
+  API_BASE_URL: ${API_BASE_URL:?the public URL of this API}
+  WEB_BASE_URL: ${WEB_BASE_URL:?the public URL of the web client - it is what invitation and reset links point at}
+  CORS_ORIGINS: ${CORS_ORIGINS:-}
+  # `req.ip` is read out of `X-Forwarded-For`, which the client sends. Set this
+  # to the number of proxy hops actually in front of the API — trusting a header
+  # nobody rewrites hands every caller a fresh rate-limit bucket per request.
+  TRUST_PROXY: ${TRUST_PROXY:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+  REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+  RATE_LIMIT_INSTANCES: ${RATE_LIMIT_INSTANCES:-1}
+  BASE_CURRENCY: ${BASE_CURRENCY:-BRL}
+  EXCHANGE_RATE_PROVIDER: ${EXCHANGE_RATE_PROVIDER:-static}
+  EXCHANGE_RATE_API_URL: ${EXCHANGE_RATE_API_URL:-}
+  EXCHANGE_RATE_API_KEY: ${EXCHANGE_RATE_API_KEY:-}
+
+x-app-build: &app-build
+  # From the repository root: the API depends on the `@finance/schemas`
+  # workspace, so the context has to contain both packages.
+  context: .
+  dockerfile: apps/api/Dockerfile
+
+services:
+  postgres:
+    # Debian-based rather than -alpine, matching development: the musl build
+    # fails to exec its own entrypoint under Docker Desktop/WSL2.
+    image: postgres:16
+    container_name: finance_deploy_postgres
+    restart: unless-stopped
+    # No `ports:`. The database is reachable from the compose network and from
+    # nowhere else. Reach it for maintenance with `docker compose exec`, or an
+    # SSH tunnel, rather than by opening 5432 to the host's interfaces.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a database password - see .env.deploy.example}
+      POSTGRES_DB: ${POSTGRES_DB:-finance}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finance} -d ${POSTGRES_DB:-finance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: finance_deploy_redis
+    restart: unless-stopped
+    # Unauthenticated Redis holds the rate-limiter state and the read-through
+    # workspace cache, so anyone who reaches it can read cached financial data
+    # and FLUSHALL the limiter. Both halves of the fix matter: a password, and
+    # no published port.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set a redis password - see .env.deploy.example}
+    environment:
+      # redis-cli picks this up on its own, so the healthcheck authenticates
+      # without putting the password on a command line inside the container.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set a redis password - see .env.deploy.example}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One image, three entrypoints. `migrate` runs to completion and the other two
+  # start behind `service_completed_successfully`, so a failed migration stops
+  # the rollout instead of leaving a new binary talking to an old schema.
+  migrate:
+    build: *app-build
+    image: finance-api
+    container_name: finance_deploy_migrate
+    # A job, not a service: one that succeeded should stay exited.
+    restart: "no"
+    command: ["node", "apps/api/dist/db/migrate.js", "up"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: *app-build
+    image: finance-api
+    container_name: finance_deploy_api
+    restart: unless-stopped
+    environment: *app-environment
+    ports:
+      # Bound to the loopback interface by default, on the assumption that a
+      # reverse proxy terminating TLS is what faces the internet. Set
+      # API_BIND_ADDRESS=0.0.0.0 only if you mean it.
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${PORT:-4000}:4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: *app-build
+    image: finance-api
+    container_name: finance_deploy_worker
+    restart: unless-stopped
+    command: ["node", "apps/api/dist/worker.js"]
+    environment: *app-environment
+    # The image's HEALTHCHECK probes the HTTP port, which the worker never
+    # opens — so inheriting it reports a healthy worker as unhealthy forever.
+    # Disabled rather than faked. A real liveness signal for the worker is P-6
+    # in AUDIT_REPORT.md and is not built yet.
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -283,12 +283,19 @@ this document: `dist/server.js`, `dist/worker.js` and `dist/db/migrate.js`. It i
 repository root, because the API consumes `@finance/schemas` as a workspace — the build compiles
 the shared package first, then the API, then prunes to production dependencies.
 
-`docker compose --profile app up -d` is the deployment in miniature:
+`docker compose -f docker-compose.deploy.yml up -d` is the deployment in miniature:
 
 ```
 postgres (healthy) ──▶ migrate (runs to completion) ──┬──▶ api
                                                       └──▶ worker
 ```
+
+That is a **separate file** from `docker-compose.yml`, which holds development infrastructure and
+nothing else. It used to be a `profiles: ["app"]` section of the same file, which did not work as a
+boundary: a service without a `profiles:` key starts unconditionally, so selecting the profile
+added the application containers to the development stack — MailHog's open UI, unauthenticated
+Redis and a default-password Postgres included. The deployment file publishes no data-store port
+and defaults no credential; see `decisions.md`, "Development and deployment are two files".
 
 `api` and `worker` wait on `service_completed_successfully`, so the schema is always current before
 anything serves traffic or picks up a job, and a failed migration stops the rollout instead of

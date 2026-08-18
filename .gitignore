@@ -5,11 +5,15 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Environment. `.env.example` is committed and is the documented starting point;
-# a real `.env` holds this machine's database password and JWT secrets.
+# Environment. The two `*.example` files are committed and are the documented
+# starting points — `.env.example` for development, `.env.deploy.example` for
+# `docker-compose.deploy.yml`. Everything else in this family holds real
+# credentials: this machine's database password and JWT secrets in `.env`, and a
+# deployment's whole secret set in `.env.deploy`.
 .env
 .env.*
 !.env.example
+!.env.deploy.example
 
 # Local Postgres data, if a bind mount is ever used instead of a named volume
 infra/postgres/data/

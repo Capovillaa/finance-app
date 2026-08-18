@@ -1,39 +1,27 @@
-# The configuration the `app` profile runs with.
+# Local development infrastructure, and nothing else.
 #
-# It is spelled out here rather than inherited from `.env` with `env_file`,
-# because `.env` is a development file: it is what `cp .env.example .env`
-# produces, and the placeholder JWT secrets in it are published in a public
-# repository. Loading it wholesale into containers that run as
-# `NODE_ENV=production` is what made "the documented path from a fresh clone to a
-# running production stack" carry public signing keys end to end.
+#     npm run infra:up      # postgres + redis + mailhog
 #
-# So the secrets are *required* here — `${VAR:?message}` stops compose before it
-# starts anything — and everything else has a default matching
-# `apps/api/src/config/env.ts`. Compose still interpolates from `.env` if one is
-# present, which keeps local overrides working; what it can no longer do is pass
-# a value nobody named. A placeholder that slips through anyway is refused a
-# second time by the API itself, at boot, in `config/secret-policy.ts`.
-x-app-environment: &app-environment
-  # `.env` would otherwise put a production container into development mode,
-  # which among other things asks pino for the `pino-pretty` transport a pruned
-  # production image does not contain.
-  NODE_ENV: production
-  DATABASE_URL: postgres://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance}
-  REDIS_URL: redis://redis:6379
-  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?generate one - node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"}
-  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?generate a second, different one the same way}
-  ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
-  REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
-  LOG_LEVEL: ${LOG_LEVEL:-info}
-  API_BASE_URL: ${API_BASE_URL:-http://localhost:4000}
-  WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:5173}
-  CORS_ORIGINS: ${CORS_ORIGINS:-}
-  TRUST_PROXY: ${TRUST_PROXY:-false}
-  BASE_CURRENCY: ${BASE_CURRENCY:-BRL}
-  EXCHANGE_RATE_PROVIDER: ${EXCHANGE_RATE_PROVIDER:-static}
-  EXCHANGE_RATE_API_URL: ${EXCHANGE_RATE_API_URL:-}
-  EXCHANGE_RATE_API_KEY: ${EXCHANGE_RATE_API_KEY:-}
-  MAIL_FROM: ${MAIL_FROM:-Finance App <no-reply@finance.local>}
+# The API, the worker and the migration runner used to live here too, behind a
+# `profiles: ["app"]` key, and that was the shape of audit finding C-2: a
+# service without a `profiles:` key is in the *default* profile and starts
+# unconditionally, so `--profile app` never selected a deployed stack — it added
+# three production containers to the development one, MailHog and default
+# database credentials included. The deployed shape is now its own file,
+# `docker-compose.deploy.yml`, which shares nothing with this one.
+#
+# Everything below is therefore free to be convenient: the passwords are
+# well-known, the mail sink has no authentication, and that is fine for a
+# database of demo data on a developer's machine. What it must not be is
+# *reachable*, so every published port binds to the loopback interface
+# explicitly rather than to all of them — Docker's default `"5432:5432"` means
+# `0.0.0.0:5432`, which on a laptop joining an untrusted network is a Postgres
+# with the password `finance` on the local WiFi.
+#
+# The project name is pinned to what compose derived from the directory before
+# it was ever written down. It is what prefixes the volumes — changing it points
+# this file at fresh, empty ones and abandons the local database.
+name: finance_app
 
 services:
   postgres:
@@ -47,7 +35,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finance}
       POSTGRES_DB: ${POSTGRES_DB:-finance}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -63,7 +51,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -72,80 +60,18 @@ services:
       timeout: 3s
       retries: 10
 
+  # A mail sink, not a mail server: it accepts everything, delivers nothing, and
+  # shows it all at http://localhost:8025 with no authentication whatsoever.
+  # That is the point in development and unacceptable anywhere else — every
+  # workspace invitation link is a bearer token granting membership, and this UI
+  # displays them. It has no counterpart in docker-compose.deploy.yml.
   mailhog:
     image: mailhog/mailhog:latest
     container_name: finance_mailhog
     restart: unless-stopped
     ports:
-      - "${MAILHOG_SMTP_PORT:-1025}:1025"
-      - "${MAILHOG_UI_PORT:-8025}:8025"
-
-  # The `app` profile is the deployed shape of the system: one image, three
-  # entrypoints. `docker compose --profile app up -d` brings it up in the right
-  # order, because the schema has to be current before anything serves traffic.
-  #
-  #   migrate  runs to completion, then exits
-  #   api      starts only once migrate succeeded
-  #   worker   likewise
-  #
-  # A failed migration therefore stops the rollout instead of leaving a new
-  # binary talking to an old schema.
-  migrate:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    image: finance-api
-    container_name: finance_migrate
-    profiles: ["app"]
-    # Not `unless-stopped`: this is a job, and a job that succeeded should stay
-    # exited rather than being restarted forever.
-    restart: "no"
-    command: ["node", "apps/api/dist/db/migrate.js", "up"]
-    environment: *app-environment
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    image: finance-api
-    container_name: finance_api
-    profiles: ["app"]
-    restart: unless-stopped
-    environment:
-      <<: *app-environment
-      # Development mail sink. C-2 in AUDIT_REPORT.md is the task that takes
-      # MailHog out of the deployed composition entirely.
-      SMTP_HOST: mailhog
-      SMTP_PORT: "1025"
-    ports:
-      - "${PORT:-4000}:4000"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-
-  worker:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    image: finance-api
-    container_name: finance_worker
-    profiles: ["app"]
-    restart: unless-stopped
-    command: ["node", "apps/api/dist/worker.js"]
-    environment:
-      <<: *app-environment
-      SMTP_HOST: mailhog
-      SMTP_PORT: "1025"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
+      - "127.0.0.1:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILHOG_UI_PORT:-8025}:8025"
 
 volumes:
   postgres_data:

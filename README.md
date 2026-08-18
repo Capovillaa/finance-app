@@ -65,11 +65,19 @@ curl http://localhost:4000/health/ready
 `npm run seed` creates two demo logins, `ana@demo.local` and `bruno@demo.local`, both with the
 password `Demo1234567`.
 
-### Running everything in Docker
+### Running the built system
+
+`docker-compose.yml` is development infrastructure only — Postgres, Redis and MailHog, each
+published on `127.0.0.1`. The API, the worker and the migration runner live in
+`docker-compose.deploy.yml`, which is the deployed shape: no mail sink, no published database or
+cache ports, and no default for anything that is a credential.
 
 ```bash
-docker compose --profile app up --build
+cp .env.deploy.example .env.deploy   # then fill in every REQUIRED value
+docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
 ```
+
+It brings up its own Postgres and Redis, so it does not share the development database.
 
 ---
 
@@ -167,8 +175,9 @@ docs/              architecture, API reference, decision log
 
 ## Configuration
 
-Every variable is documented in `.env.example` and validated at boot — the process refuses to
-start on a bad configuration rather than failing later under load.
+Every variable is documented — `.env.example` for development, `.env.deploy.example` for a
+deployment — and validated at boot, so the process refuses to start on a bad configuration rather
+than failing later under load.
 
 **The JWT secrets in `.env.example` are public** — this repository is public, so those exact bytes
 are known to everyone, and anyone holding them can forge an access token for any user. They exist
@@ -176,15 +185,16 @@ so a fresh clone runs locally and for nothing else.
 
 `NODE_ENV=production` therefore refuses to boot on them, on anything under 32 characters, on
 anything that still looks like a placeholder, and on one value used for both variables
-(`apps/api/src/config/secret-policy.ts`). Generate a separate secret per variable and supply it
+(`apps/api/src/config/production-policy.ts`). Generate a separate secret per variable and supply it
 through the deployment environment or a secret store — not through a copy of `.env.example`:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-The `app` compose profile requires both to be set explicitly and stops before starting anything if
-they are not.
+`docker-compose.deploy.yml` requires both to be set explicitly and stops before starting anything
+if they are not — along with `POSTGRES_PASSWORD`, `REDIS_PASSWORD` and a real `SMTP_HOST`, which
+production also refuses to substitute a development default for.
 
 ---
 

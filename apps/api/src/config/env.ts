@@ -6,7 +6,11 @@ import { z } from 'zod/v4';
 // what it imports must not reach Redis, Express or the database — which is
 // exactly the constraint `rate-limit-policy.ts` is written to satisfy.
 import { parseTrustProxy } from '../middleware/rate-limit-policy.js';
-import { checkProductionSecrets, formatSecretIssues } from './secret-policy.js';
+import {
+  checkProductionSecrets,
+  formatSecretIssues,
+  isDevelopmentMailHost,
+} from './production-policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // src/config -> src -> apps/api -> apps -> repo root
@@ -53,13 +57,18 @@ const schema = z.object({
   // 16 is the floor for development and the test suite, which sign nothing that
   // outlives the process. Production is held to a much higher bar — length,
   // entropy, and not being one of the placeholders this public repository
-  // publishes — by `secret-policy.ts`, applied after this parse.
+  // publishes — by `production-policy.ts`, applied after this parse.
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().regex(durationPattern).default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(12),
 
+  // The default is the local MailHog sink, which is right in development and
+  // silently wrong in production — an unreachable host makes `sendEmail` log a
+  // failure and return false, and `createInvitation` does not read the result,
+  // so an invitation that never left the building reports success. Production
+  // therefore has to name its host explicitly; see the check after the parse.
   SMTP_HOST: z.string().default('localhost'),
   SMTP_PORT: z.coerce.number().int().positive().default(1025),
   SMTP_USER: z.string().optional(),
@@ -140,6 +149,20 @@ if (raw.NODE_ENV === 'production') {
 
   if (secretIssues.length > 0) {
     throw new Error(formatSecretIssues(secretIssues));
+  }
+
+  // Mail is not optional here: it carries workspace invitations, and the
+  // delivery path swallows its own failures by design so that a mail outage
+  // cannot fail the request that triggered the message. Left on the development
+  // default, a deployment therefore posts every invitation into a socket that
+  // is not listening and reports success to the admin who sent it.
+  if (isDevelopmentMailHost(raw.SMTP_HOST)) {
+    throw new Error(
+      `Refusing to start in production with SMTP_HOST=${raw.SMTP_HOST}: that is a development\n` +
+        'mail sink, and the deployed composition has none. Mail carries workspace invitations, and\n' +
+        'a failed delivery is logged rather than raised — so this would lose them silently. Point\n' +
+        'SMTP_HOST at a real provider (see .env.deploy.example).',
+    );
   }
 }
 

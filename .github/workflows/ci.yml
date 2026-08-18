@@ -107,37 +107,74 @@ jobs:
       # that package under `apps/api/node_modules` and only the root tree had
       # been copied.
       #
-      # The secrets are generated per run rather than reused from the `test` job:
-      # the image sets `NODE_ENV=production`, and production now refuses to boot
-      # on a published placeholder (`config/secret-policy.ts`), which those
-      # throwaways deliberately are. Nothing here signs anything that outlives
-      # the container, so a fresh random value costs nothing.
+      # The environment is what `config/production-policy.ts` demands of a
+      # production boot, which the image is: secrets generated per run rather
+      # than reused from the `test` job, because those throwaways are published
+      # and are exactly what is now refused; and an SMTP host that is not a
+      # development sink. Nothing here signs or sends anything.
       - name: The image can load the whole app graph
         run: |
           docker run --rm \
             -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
             -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
             -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e SMTP_HOST=smtp.invalid \
             -e LOG_LEVEL=silent \
             finance-api:ci \
             node --input-type=module -e "await import('/app/apps/api/dist/app.js'); console.log('app graph loaded')"
 
       # The other half of that gate: the same image, the same production mode,
-      # and one of the secrets this repository publishes. It must *fail*, and the
-      # failure is the check — C-1 in AUDIT_REPORT.md is precisely the path where
-      # a copied `.env` reached a production container and nothing objected.
-      - name: The image refuses to boot on a published secret
+      # and a configuration this repository publishes. Each must *fail*, and the
+      # failure is the check — C-1 and C-2 in AUDIT_REPORT.md are both paths
+      # where a development configuration reached a production container and
+      # nothing objected.
+      - name: The image refuses a published secret and a development mail sink
         run: |
-          if docker run --rm \
-            -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
+          refuses() {
+            local label="$1"; shift
+            if docker run --rm \
+              -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
+              -e LOG_LEVEL=silent \
+              "$@" \
+              finance-api:ci \
+              node --input-type=module -e "await import('/app/apps/api/dist/app.js')"; then
+              echo "::error::the production image booted with $label"
+              exit 1
+            fi
+            echo "refused: $label"
+          }
+
+          refuses "a published JWT secret" \
             -e JWT_ACCESS_SECRET=dev-only-insecure-access-secret-change-me \
             -e JWT_REFRESH_SECRET=dev-only-insecure-refresh-secret-change-me \
-            -e LOG_LEVEL=silent \
-            finance-api:ci \
-            node --input-type=module -e "await import('/app/apps/api/dist/app.js')"; then
-            echo "::error::the production image booted with a published placeholder secret"
+            -e SMTP_HOST=smtp.invalid
+
+          refuses "a development mail sink" \
+            -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
+            -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            -e SMTP_HOST=mailhog
+
+      # The deployment composition is not exercised by anything else here, and a
+      # broken anchor or a mistyped `${VAR:?}` only shows up at deploy time.
+      # Both directions matter: it renders when the credentials are supplied, and
+      # it refuses to render when they are not — the latter is the whole point of
+      # a file that defaults no credential.
+      - name: The deployment composition is valid, and requires its credentials
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          if docker compose -f docker-compose.deploy.yml --env-file /dev/null config --quiet 2>/dev/null; then
+            echo "::error::docker-compose.deploy.yml rendered with no credentials supplied"
             exit 1
           fi
+          JWT_ACCESS_SECRET=$(openssl rand -hex 32) \
+          JWT_REFRESH_SECRET=$(openssl rand -hex 32) \
+          POSTGRES_PASSWORD=$(openssl rand -hex 16) \
+          REDIS_PASSWORD=$(openssl rand -hex 16) \
+          SMTP_HOST=smtp.invalid \
+          API_BASE_URL=https://api.invalid \
+          WEB_BASE_URL=https://app.invalid \
+            docker compose -f docker-compose.deploy.yml --env-file /dev/null config --quiet
+          echo "deployment composition ok"
           echo "refused, as it should"
 
   test:
