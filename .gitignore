@@ -17,6 +17,13 @@ infra/postgres/data/
 # Ad-hoc scratch from load-testing sessions; not part of the project
 .tmp/
 
+# The pre-deployment security audit and the working task list. Deliberately
+# untracked while findings are still open: the report names every unfixed one,
+# with a file and a line, and this repository is public. CLAUDE.md section 7
+# carries the checklist, which is the half that is safe to publish.
+AUDIT_REPORT.md
+to_do.txt
+
 # A dump of every Phosphor export, generated while migrating the icon set.
 # Regenerable from the package; not source.
 apps/web/.phosphor-names.txt

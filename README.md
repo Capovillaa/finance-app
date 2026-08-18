@@ -170,11 +170,21 @@ docs/              architecture, API reference, decision log
 Every variable is documented in `.env.example` and validated at boot — the process refuses to
 start on a bad configuration rather than failing later under load.
 
-Before deploying anywhere real, replace `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`:
+**The JWT secrets in `.env.example` are public** — this repository is public, so those exact bytes
+are known to everyone, and anyone holding them can forge an access token for any user. They exist
+so a fresh clone runs locally and for nothing else.
+
+`NODE_ENV=production` therefore refuses to boot on them, on anything under 32 characters, on
+anything that still looks like a placeholder, and on one value used for both variables
+(`apps/api/src/config/secret-policy.ts`). Generate a separate secret per variable and supply it
+through the deployment environment or a secret store — not through a copy of `.env.example`:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
+
+The `app` compose profile requires both to be set explicitly and stops before starting anything if
+they are not.
 
 ---
 

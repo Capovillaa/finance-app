@@ -1487,6 +1487,70 @@ pattern — the render site owes it a `t()`, and nothing in CI will tell you whe
 
 ---
 
+### A published secret is refused at boot, not documented as something to change
+
+The pre-deployment audit's first critical finding was not a bug in any code path — every piece of
+the token machinery it inspected was sound. It was that the machinery could be handed a key
+everybody already has. `config/env.ts` accepted any `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`
+of sixteen characters or more; the placeholders in `.env.example` are longer than that; the
+repository is **public**; the documented setup is `cp .env.example .env`; and the `app` compose
+profile — the shape section "One image, three entrypoints" calls the deployed one — loaded that
+same file with `env_file: .env` while forcing `NODE_ENV=production`. Every step of that path is
+individually reasonable and the end of it is total authentication bypass: with the access secret
+known, anyone forges a token for any `sub`, and `requireAuth` verifies the signature and then
+trusts it completely.
+
+The old mitigation was a sentence in `README.md` asking the operator to replace both values before
+deploying anywhere real. **A security control that consists of remembering something is not a
+control**, and this one had the additional problem that nothing anywhere would tell you it had
+been forgotten — a stack running on the published key looks exactly like a stack running on a real
+one.
+
+So production now refuses to start. `config/secret-policy.ts` judges each secret on four counts:
+at least 32 characters; not one of the exact values this repository has ever published (the two
+`.env.example` pairs, the CI throwaways, the OpenAPI generator's stub); not still *shaped* like a
+placeholder (`change-me`, `placeholder`, a leading `dev-`); and at least ten distinct characters,
+because `aaaa…` clears any length bar. The pair is judged together as well, since one value used
+for both roles means a leak in either context is a leak in both — which is also half of M-11, the
+finding about `JWT_REFRESH_SECRET` signing invitation tokens too. Development and the test suite
+keep the sixteen-character floor: nothing they sign outlives the process.
+
+Three things about the shape of that are deliberate.
+
+**The check lives in its own module and imports nothing.** Same rule as
+`middleware/rate-limit-policy.ts` and `modules/currencies/providers.ts`: the decision is the part
+that can be quietly wrong, and it should be testable without an environment to stub.
+`tests/unit/secret-policy.test.ts` runs in the unit lane with no infrastructure at all.
+
+**Half of that test file is about false positives**, and that is the half that took the thought.
+The patterns run against values that are legitimately random, so an anchored two-letter marker
+like `^ci-` would fire on roughly one generated secret in 130,000 — which sounds like nothing
+until it is the boot of a production deploy, and a check that cries wolf is a check somebody
+turns off at the worst possible moment. The short markers were dropped in favour of the exact
+list, and the test asserts 200 freshly generated secrets pass.
+
+**`.env.example` still carries working values rather than `CHANGE_ME`.** The audit suggested
+making them non-bootable outright; that would break `cp .env.example .env && npm run dev`, which
+is the documented first five minutes of this repository, in order to defend a case the boot check
+already covers. The values instead say what they are — `dev-only-insecure-access-secret-change-me`
+— and are on the denylist, so they work in development and cannot reach production. The comment
+above them states plainly that they are public knowledge.
+
+The deploy profile stopped reading `.env` at the same time, because that was the pipe the secret
+travelled down. The three `app` services now take an explicit `x-app-environment` block where the
+two secrets are **required** compose variables (`${JWT_ACCESS_SECRET:?…}`, which stops the command
+before it starts a container) and everything else carries a default matching `config/env.ts`.
+Compose still interpolates from a local `.env` if one exists, so local overrides keep working;
+what it can no longer do is silently pass a whole development configuration into a production
+container. A placeholder that slips through anyway is refused a second time, by the API, at boot.
+
+CI gates both directions. The existing "the image can load the whole app graph" step now generates
+a fresh random secret per run — the image sets `NODE_ENV=production`, so the throwaways it used
+before are exactly what is now refused — and a new step runs the same image with a published
+placeholder and **fails if it boots**. A refusal that nothing exercises is a refusal that rots.
+
+---
+
 ### Deliberately not built in this phase
 
 - **OAuth login.** The `user_identities` table exists; no provider flow is wired up.

@@ -39,7 +39,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-340; see section 4 for the current command. The compiled `dist/server.js`
+352; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -881,9 +881,14 @@ npm run dev:worker --workspace=@finance/api
 ```
 
 To run the **built** system instead of the dev servers — the same image the
-deployment uses, with migrations gating startup — see section 5g:
+deployment uses, with migrations gating startup — see section 5g. It runs as
+`NODE_ENV=production`, so it needs **real** JWT secrets: the profile requires
+them explicitly and the API refuses to boot on the published `.env.example`
+placeholders (section 5j).
 
 ```bash
+export JWT_ACCESS_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")
+export JWT_REFRESH_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")
 docker compose --profile app up -d --build
 ```
 
@@ -901,8 +906,8 @@ docker compose --profile app up -d --build
 ### Tests
 
 ```bash
-npm test                 # all 340 — needs Postgres, and only Postgres
-npm run test:unit        # 194 pure units, no infrastructure at all
+npm test                 # all 352 — needs Postgres, and only Postgres
+npm run test:unit        # 206 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -1834,6 +1839,13 @@ completion, then `api` and `worker` start behind
 `depends_on: service_completed_successfully`. A failed migration stops the
 rollout instead of leaving a new binary talking to an old schema.
 
+**The three `app` services no longer read `env_file: .env`** — see section 5j.
+They take the shared `x-app-environment` block at the top of
+`docker-compose.yml`, where `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` are
+required compose variables and everything else defaults to what `config/env.ts`
+would default to anyway. If you add a variable the deployed API needs, add it
+there; `.env` will not carry it any more.
+
 Five things that will bite, all of them found by building and running rather
 than by reading:
 
@@ -2035,6 +2047,67 @@ instances with small budgets and real Redis:
 
 ---
 
+## 5j. Production refuses a published signing secret
+
+Finding **C-1** of `AUDIT_REPORT.md`, the first Phase 1 task. Full reasoning is in
+`docs/decisions.md`, "A published secret is refused at boot, not documented as
+something to change". What you need in order not to undo it:
+
+**`apps/api/src/config/secret-policy.ts` is the whole rule, and it imports
+nothing.** Same constraint as `middleware/rate-limit-policy.ts` and
+`modules/currencies/providers.ts` — no `config/env`, no database, no Express —
+which is what lets `tests/unit/secret-policy.test.ts` run in the unit lane.
+`config/env.ts` calls it after the Zod parse, and only when
+`NODE_ENV=production`. **Keep it that way.**
+
+Under `NODE_ENV=production` a JWT secret is rejected when it is shorter than 32
+characters, is one of the values this repository has published, still *looks*
+like a placeholder (`change-me`, `placeholder`, a leading `dev-`), has fewer
+than ten distinct characters, or is the same value as the other secret.
+Development and tests keep the old 16-character floor: nothing they sign
+outlives the process.
+
+Four things that are deliberate:
+
+1. **`.env.example` still boots in development.** The audit suggested replacing
+   the values with `CHANGE_ME`, which would break `cp .env.example .env && npm
+   run dev` — the documented first five minutes here — to defend a case the boot
+   check already covers. They now read `dev-only-insecure-access-secret-change-me`
+   and are on the denylist, so they work locally and cannot reach production.
+2. **A new placeholder pattern must be improbable in 64 random characters.**
+   These regexes run against values that are legitimately random. An anchored
+   `^ci-` would fire on about one generated secret in 130,000, which is a
+   false refusal at the boot of a deploy; the published `ci-…` throwaways are
+   caught by the exact list instead. The unit test asserts 200 freshly generated
+   secrets pass, and that half is the one that matters.
+3. **If you ever publish a new placeholder — in `.env.example`, in the CI
+   workflow, in a script — add it to `PUBLISHED_SECRETS`.** The exact list is
+   what makes "this value is public knowledge" a fact rather than a guess.
+4. **The `app` compose services no longer load `.env`.** That was the pipe the
+   placeholder travelled down: a development file, loaded wholesale, into
+   containers forced to `NODE_ENV=production`. They take `x-app-environment` at
+   the top of `docker-compose.yml`, where the two secrets are required
+   (`${JWT_ACCESS_SECRET:?…}` stops compose before it starts anything).
+
+**CI gates it in both directions**, in the `check` job: the existing "load the
+whole app graph" step now generates a fresh `openssl rand -hex 32` per run,
+because the image is `NODE_ENV=production` and the old throwaways are exactly
+what is now refused — and a new step runs the same image on a published
+placeholder and fails if it *boots*.
+
+Verified by running the real `config/env.ts` five ways: production plus each of
+the two published pairs (refused), production with one real secret in both
+variables (refused), production with two generated secrets (boots), and
+development with the placeholders (boots).
+
+Two things this task did **not** do, both still open: `.env.example` and the
+default compose profile still publish Postgres, Redis and MailHog with default
+credentials (**C-2**, the next task), and `JWT_REFRESH_SECRET` still signs both
+refresh tokens and invitation tokens (**M-11**) — the "must not be the same
+value" check is only half of that finding.
+
+---
+
 ## 6. Architectural decisions
 
 The full log with reasoning lives in `docs/decisions.md`. The ones that most
@@ -2112,6 +2185,20 @@ everywhere" is immediate rather than "within fifteen minutes". The token carries
 a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
 token issued just before a revocation from one issued just after — which would
 make either the stale token or the user's fresh sign-in wrong. See section 5i.
+
+**A signing secret that has been published is refused at boot, not documented as
+something to change.** This repository is public, the documented setup is `cp
+.env.example .env`, and the deploy profile used to load that same file into
+containers running as `NODE_ENV=production` — so the documented path from a
+fresh clone to a running production stack carried public JWT keys end to end,
+and a stack running on them looked exactly like one that was not.
+`config/secret-policy.ts` (pure, no imports, unit-tested) now rejects a
+production secret that is short, published, still placeholder-shaped, low in
+distinct characters, or shared between the two variables; the `app` compose
+services require both explicitly instead of inheriting `.env`; and CI proves
+both that a generated secret boots and that a published one does not. The
+`.env.example` values still work in development on purpose. See section 5j and
+`docs/decisions.md`.
 
 **A rate limit is only as real as `req.ip`, and `req.ip` comes from a header the
 client sends.** `TRUST_PROXY` defaults to trusting nothing; a deployment behind
@@ -2260,3 +2347,127 @@ which stay exactly as flat as the paragraph above says. The permanent nav
 floating one; the floating drawer's glass is applied locally instead. See
 section 2f and `docs/decisions.md` ("Glass on floating surfaces, not on the
 flat language").
+
+---
+
+## 7. Tasks para Deploy
+
+A pre-deployment audit ran against commit `0d40c70`. The full reasoning, with a
+file and line for every item, is in **`AUDIT_REPORT.md`** at the repository
+root — this section is only the checklist, in priority order. The identifiers
+in brackets are that report's finding ids, so `C-1`, `H-3` and so on can be
+looked up there.
+
+**`AUDIT_REPORT.md` is deliberately untracked** (it is in `.gitignore`) while
+findings are still open: this repository is public, and the report names every
+unfixed one with a file and a line. The checklist below is the half that is safe
+to publish. Track the report once Phase 1 and Phase 2 are closed, or keep it out
+permanently — either is fine, but do not commit it by accident.
+
+Two things the audit found that are worth stating up front, because they change
+how the list below should be read. **No secret has ever been committed** — all
+17 commits are clean, `npm audit` reports zero advisories, no SQL injection is
+reachable, no XSS sink exists in the client, and no IDOR was found. The
+application logic is in good shape. Almost everything below is either
+*deployment and configuration surface* or *a feature this file claimed existed
+and does not* (see the first item of Phase 2).
+
+### Phase 1 — blocks any deploy
+
+- [x] **[C-1] Refuse the published JWT secrets in production.** **Done** — see
+      section 5j. `config/secret-policy.ts` rejects a short, published,
+      placeholder-shaped, low-entropy or shared secret when
+      `NODE_ENV=production`; the `app` compose services require both secrets
+      explicitly instead of loading `.env`; CI checks both that a generated
+      secret boots and that a published one does not. The `.env.example` values
+      were *not* made non-bootable outright, on purpose — they still work in
+      development and are on the denylist, which is where the reasoning differs
+      from the audit's suggestion.
+- [ ] **[C-2] Stop publishing the data stores.** Services with no `profiles:`
+      key start unconditionally, so the deploy profile also brings up Postgres
+      on 5432 with the default password `finance`, Redis on 6379 with no
+      password at all, and **MailHog's unauthenticated UI on 8025**, which the
+      API and worker are both pointed at — every invitation link readable by
+      anyone who reaches the port. Split development and deployment
+      compositions.
+- [ ] **[H-3] Stop reflecting Postgres `detail` to clients.** `lib/errors.ts`
+      copies it into `rawMessage`, and `expose` is `status < 500`, so a 409
+      returns `Key (email)=(someone@example.com) already exists.` — table names,
+      column names and another row's values. Keep it in the log only.
+- [ ] **[H-2] Re-authenticate before `DELETE /users/me`.** It hard-deletes every
+      solely-owned workspace and all its financial history, behind a bearer
+      token and `{confirm: true}`. Require the current password, mount
+      `authRateLimit`, and consider a soft-delete grace period.
+- [ ] **[H-4] Decide the production origin topology and fix the refresh cookie.**
+      `sameSite: 'lax'` is never sent on a cross-site fetch, and
+      `apps/web/.env.example` documents the API on a *different* host — so every
+      session would die at the first token expiry. Either enforce same-origin,
+      or move to `SameSite=None; Secure` with a CSRF token on `/auth/refresh`.
+- [ ] **[H-5, P-1] Ship a way to serve the web client.** There is no Dockerfile,
+      no static server and no compose service for `apps/web`; `dist/` is built
+      and nothing consumes it. This is also the only place CSP, HSTS and
+      `frame-ancestors` can be set — `helmet` has `contentSecurityPolicy: false`
+      and `index.html` has no meta policy.
+- [ ] **[M-1] Never send `stack` in an error response.** The log already has it,
+      correlated by `requestId`.
+- [ ] **[M-10] Guard `npm run seed` against production.** It hardcodes a
+      published demo password and its reset step deletes from `users`, with no
+      `NODE_ENV` check anywhere.
+
+### Phase 2 — before real users
+
+- [ ] **[H-1] Build password reset and email verification.** Neither exists.
+      Section 1 of this file says both were delivered; that is wrong and should
+      be corrected as part of this work. Consequences today: a forgotten
+      password is permanent lockout, and because `acceptInvitation` authorises
+      on an unverified email string, someone can register a victim's address to
+      intercept a workspace invitation. Reuse the token machinery
+      `workspaces/invitations.ts` already demonstrates.
+- [ ] **[M-2] Restrict `urlField` to `https:`.** Zod's `.url()` accepts
+      `javascript:`, `data:` and `file:` — verified by running it. It backs
+      `avatarUrl`, which every other workspace member's browser then fetches.
+- [ ] **[M-4] Add timeouts.** No `statement_timeout`, no `query_timeout`, no
+      `idle_in_transaction_session_timeout`, no per-request timeout — ten slow
+      queries exhaust a pool of ten.
+- [ ] **[M-5] Fix graceful shutdown.** `server.ts` destroys the pools in
+      parallel with `server.close()` rather than after it, so in-flight requests
+      lose their connection. The comment says the opposite of what the code does.
+- [ ] **[P-3] Backups.** No dumps, no PITR, no tested restore, no RPO/RTO — for
+      a financial ledger. An untested backup is not a backup.
+- [ ] **[P-2, M-8] Observability.** No error tracker, no metrics, no tracing, and
+      nothing alerting on the degraded-rate-limiter warning that
+      `middleware/rate-limit.ts` exists to emit. Set `sourcemap: 'hidden'` and
+      upload the maps rather than serving them.
+- [ ] **[P-5] Real SMTP.** `sendEmail` swallows failures and `createInvitation`
+      ignores its return value, so an invitation that never left the building
+      reports success.
+
+### Phase 3 — hardening
+
+- [ ] **[M-7] A table-driven RBAC test.** Across 104 operations only two
+      integration files assert a 403 at all. Walk `walkRoutes()`, sign in as a
+      viewer, assert 403 on everything that requires more.
+- [ ] **[M-3] Type the alert-rule `config`.** It is an open
+      `z.record(z.string(), z.unknown())` whose values drive lookback windows and
+      `Decimal` parsing on the **shared** worker, with no bounds.
+- [ ] **[M-6] Rate-limit `/imports/preview` on its own**, and put a `.max()` on
+      `content` so an oversized body is rejected by the schema rather than after
+      `express.json` has parsed a megabyte.
+- [ ] **[M-11] Derive per-purpose subkeys.** `JWT_REFRESH_SECRET` currently
+      signs both refresh tokens and invitation tokens.
+- [ ] **[L-6] Secret scanning and SAST in CI.** `npm audit` is there; gitleaks
+      and CodeQL are not.
+- [ ] **[L-5] Require TLS to Postgres and Redis.**
+- [ ] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
+      worker — its container inherits an HTTP healthcheck against a port it
+      never opens.
+
+### Phase 4 — polish
+
+- [ ] **[L-1]** Constrain the client-supplied `x-request-id` to a safe charset.
+- [ ] **[L-3, L-8]** Cap `csvUuidArray` length; bound `page`.
+- [ ] **[L-4]** Hash the email in the credential limiter's Redis key.
+- [ ] **[L-7]** Breached-password check (HIBP k-anonymity).
+- [ ] **[L-2]** Record the public `/openapi.json` as a deliberate decision in
+      `docs/decisions.md`.
+- [ ] **[L-9]** Delete the `.tmp/` load-testing scratch from the working tree.

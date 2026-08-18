@@ -6,6 +6,7 @@ import { z } from 'zod/v4';
 // what it imports must not reach Redis, Express or the database — which is
 // exactly the constraint `rate-limit-policy.ts` is written to satisfy.
 import { parseTrustProxy } from '../middleware/rate-limit-policy.js';
+import { checkProductionSecrets, formatSecretIssues } from './secret-policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // src/config -> src -> apps/api -> apps -> repo root
@@ -49,6 +50,10 @@ const schema = z.object({
 
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
 
+  // 16 is the floor for development and the test suite, which sign nothing that
+  // outlives the process. Production is held to a much higher bar — length,
+  // entropy, and not being one of the placeholders this public repository
+  // publishes — by `secret-policy.ts`, applied after this parse.
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().regex(durationPattern).default('15m'),
@@ -120,6 +125,23 @@ if (!parsed.success) {
 }
 
 const raw = parsed.data;
+
+// A signing secret that anyone can read is not a secret, and the shape of this
+// repository makes that a live risk rather than a theoretical one: it is public,
+// the documented setup is `cp .env.example .env`, and the deployed compose
+// profile runs with `NODE_ENV=production`. So production refuses to boot on a
+// published, weak or shared secret instead of serving traffic anyone can forge a
+// token against. Development and tests keep the 16-character floor above.
+if (raw.NODE_ENV === 'production') {
+  const secretIssues = checkProductionSecrets({
+    JWT_ACCESS_SECRET: raw.JWT_ACCESS_SECRET,
+    JWT_REFRESH_SECRET: raw.JWT_REFRESH_SECRET,
+  });
+
+  if (secretIssues.length > 0) {
+    throw new Error(formatSecretIssues(secretIssues));
+  }
+}
 
 const isTest = raw.NODE_ENV === 'test';
 

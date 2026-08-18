@@ -105,16 +105,40 @@ jobs:
       # check that a file-existence pass fails: an image that built cleanly still
       # died on boot with `ERR_MODULE_NOT_FOUND: i18next`, because npm had nested
       # that package under `apps/api/node_modules` and only the root tree had
-      # been copied. The env values are the same throwaways the `test` job uses.
+      # been copied.
+      #
+      # The secrets are generated per run rather than reused from the `test` job:
+      # the image sets `NODE_ENV=production`, and production now refuses to boot
+      # on a published placeholder (`config/secret-policy.ts`), which those
+      # throwaways deliberately are. Nothing here signs anything that outlives
+      # the container, so a fresh random value costs nothing.
       - name: The image can load the whole app graph
         run: |
           docker run --rm \
             -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
-            -e JWT_ACCESS_SECRET=ci-access-secret-not-a-real-key-000000 \
-            -e JWT_REFRESH_SECRET=ci-refresh-secret-not-a-real-key-00000 \
+            -e JWT_ACCESS_SECRET="$(openssl rand -hex 32)" \
+            -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
             -e LOG_LEVEL=silent \
             finance-api:ci \
             node --input-type=module -e "await import('/app/apps/api/dist/app.js'); console.log('app graph loaded')"
+
+      # The other half of that gate: the same image, the same production mode,
+      # and one of the secrets this repository publishes. It must *fail*, and the
+      # failure is the check — C-1 in AUDIT_REPORT.md is precisely the path where
+      # a copied `.env` reached a production container and nothing objected.
+      - name: The image refuses to boot on a published secret
+        run: |
+          if docker run --rm \
+            -e DATABASE_URL=postgres://finance:finance@127.0.0.1:5432/finance \
+            -e JWT_ACCESS_SECRET=dev-only-insecure-access-secret-change-me \
+            -e JWT_REFRESH_SECRET=dev-only-insecure-refresh-secret-change-me \
+            -e LOG_LEVEL=silent \
+            finance-api:ci \
+            node --input-type=module -e "await import('/app/apps/api/dist/app.js')"; then
+            echo "::error::the production image booted with a published placeholder secret"
+            exit 1
+          fi
+          echo "refused, as it should"
 
   test:
     name: Full suite (real Postgres)
