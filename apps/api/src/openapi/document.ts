@@ -39,6 +39,7 @@ const ERROR_RESPONSE_NAMES: Partial<Record<ErrorCode, string>> = {
   validation_failed: 'ValidationFailed',
   rate_limited: 'RateLimited',
   internal_error: 'InternalError',
+  service_unavailable: 'ServiceUnavailable',
 };
 
 const ERROR_DESCRIPTIONS: Record<string, string> = {
@@ -52,6 +53,7 @@ const ERROR_DESCRIPTIONS: Record<string, string> = {
     'language resolved for the request.',
   RateLimited: 'Too many requests; the caller has exceeded the rate limit for this window.',
   InternalError: 'Something failed inside the API. The message is fixed and the detail stays in the logs.',
+  ServiceUnavailable: 'The request took too long and was abandoned before a response was ready.',
 };
 
 function errorSchema(): JsonSchema {
@@ -237,6 +239,10 @@ function descriptionOf(schema: ZodType): string | undefined {
 
 function responsesFor(route: RouteRecord, components: Record<string, JsonSchema>): Record<string, JsonSchema> {
   const named = ['InternalError'];
+  // Every route can time out under `requestTimeout` — but `/health/ready`
+  // already declares its own real 503 schema (`readinessResponse`), and the
+  // generic component would silently overwrite it below.
+  if (!route.responses?.[503]) named.push('ServiceUnavailable');
   if (route.rateLimited) named.push('RateLimited');
   if (route.authenticated) named.push('Unauthorized');
   if (route.role) named.push('Forbidden');

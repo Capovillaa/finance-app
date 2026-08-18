@@ -27,7 +27,20 @@ export const notFoundHandler: RequestHandler = (req, _res, next) => {
  * structure), and no text written by Postgres or by a trigger. All of it is in
  * the log line below, correlated by the same `requestId` the caller can quote.
  */
-export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
+export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
+  // A response can legitimately already be underway: `requestTimeout` answers
+  // 503 and gives up *waiting*, but it cannot cancel the handler still running
+  // behind it, so that handler can still reach `res.json(...)` afterwards. Node
+  // throws on a second write to an ended response, which lands right back here
+  // as `err` — and trying to send a second body would throw again, the same
+  // way twice. Delegating to Express's own default handler is what actually
+  // stops there: it recognises `headersSent` and destroys the connection
+  // instead of writing to it.
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
   const appError = normalize(err);
   const locale = req.locale ?? DEFAULT_LOCALE;
 

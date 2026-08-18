@@ -52,6 +52,24 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   TEST_DATABASE_URL: z.string().optional(),
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(10),
+  /**
+   * Sent as a Postgres session parameter on every pooled connection, so a
+   * runaway query is killed by the server rather than holding a connection —
+   * and, with the pool exhausted, everyone else's request — forever. Ten slow
+   * analytics or report-export queries otherwise exhaust a pool of ten with
+   * nothing to reclaim it.
+   */
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  /** Same mechanism, for a connection left idle inside an open transaction. */
+  DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * How long a request may run before the client is given up on and answered
+   * 503. Deliberately looser than `DATABASE_STATEMENT_TIMEOUT_MS`, so an
+   * ordinary slow query times out at the database first; this is the backstop
+   * for a slow path that is not database-bound at all. See
+   * `middleware/request-timeout.ts`.
+   */
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
 
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
 

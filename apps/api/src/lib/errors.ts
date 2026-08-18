@@ -127,6 +127,8 @@ export const unprocessable = (key: string, params?: Record<string, unknown>, det
   new AppError('unprocessable', key, params, details);
 export const rateLimited = (key = 'common.rateLimited', params?: Record<string, unknown>) =>
   new AppError('rate_limited', key, params);
+export const serviceUnavailable = (key = 'common.requestTimeout', params?: Record<string, unknown>) =>
+  new AppError('service_unavailable', key, params);
 
 export function isAppError(err: unknown): err is AppError {
   return err instanceof AppError;

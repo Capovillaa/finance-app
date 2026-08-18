@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-383; see section 4 for the current command. The compiled `dist/server.js`
+389; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -712,7 +712,8 @@ D:\finance_app
 │   │   │   │                        # responds (declares + enforces a response shape),
 │   │   │   │                        # rate-limit (the buckets, Redis and Express)
 │   │   │   │                        #   + rate-limit-policy (the pure decisions:
-│   │   │   │                        #   keys, trust-proxy parse, fallback budget)
+│   │   │   │                        #   keys, trust-proxy parse, fallback budget),
+│   │   │   │                        # request-timeout (the 503 backstop, M-4)
 │   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
 │   │   │   │                        # JSON Schema), document.ts (-> the spec),
 │   │   │   │                        # service-responses.ts (/health, /openapi.json)
@@ -739,7 +740,8 @@ D:\finance_app
 │   │       ├── unit/                # money, dates, recurrence, detectors, csv,
 │   │       │                        # import-mapping, openapi, exchange-rates,
 │   │       │                        # rate-limit-policy, production-policy,
-│   │       │                        # errors (what a failure tells a client)
+│   │       │                        # errors (what a failure tells a client),
+│   │       │                        # request-timeout, db-client (M-4's timeouts)
 │   │       └── integration/         # auth, auth-recovery (reset + verification),
 │   │                                # workspaces, transactions, imports,
 │   │                                # budgets-analytics, recurring-alerts,
@@ -944,7 +946,7 @@ changes.
 ### Tests
 
 ```bash
-npm test                 # all 383 — needs Postgres, and only Postgres
+npm test                 # all 389 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -2575,6 +2577,26 @@ which environment is asking and a shared dev environment carries the same
 tracking-beacon risk a `javascript:`/`data:`/`file:` avatar link poses in
 production. See the Phase 2 checklist's M-2 entry and `docs/decisions.md`.
 
+**A connection is reclaimed by the database, not just given up on by the
+client.** Every pooled connection carries a `statement_timeout` and an
+`idle_in_transaction_session_timeout` (`db/client.ts`), sent as Postgres
+session parameters at connection time, so a runaway or forgotten-in-a-
+transaction query is killed server-side rather than holding — and, once the
+pool of ten is exhausted, blocking everyone else's request behind — a
+connection forever. `middleware/request-timeout.ts` is the client-facing
+backstop for a slow path that is not database-bound at all, deliberately
+looser than the statement timeout so the database times out first on an
+ordinary slow query; it cannot cancel the handler still running behind it, so
+`errorHandler`'s `res.headersSent` guard is what stops that handler's late
+write from trying to send a second response body. See the M-4 checklist entry.
+
+**Shutdown waits for in-flight requests before it touches anything they
+depend on.** `server.ts` promisifies `server.close()` and awaits it — with the
+existing 10-second ceiling still bounding the wait — before closing the
+database and Redis connections, rather than doing both in parallel the way it
+used to. A request still writing to the database when the pool vanished out
+from under it was a 500 on every rolling deploy. See the M-5 checklist entry.
+
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See
 the bug in section 1 — the revocation must outlive the rejection. Revocation
@@ -2838,8 +2860,18 @@ treats as a decision worth taking on its own.
 
 **M-2 is also done** — `urlField` now refuses anything but `https:`, closing
 the `avatarUrl` tracking-beacon/stored-XSS surface described in its checklist
-entry below. Pick a next item from what remains of Phase 2 (M-4, M-5, P-3,
-P-2/M-8, P-5), or M-9.
+entry below.
+
+**M-4 and M-5 are done too** — a `statement_timeout` /
+`idle_in_transaction_session_timeout` on every pooled connection plus a
+per-request 503 backstop (M-4), and a shutdown sequence that actually waits
+for `server.close()` before tearing down the pools (M-5), verified in a real
+container since Windows cannot deliver a real SIGTERM to test it directly.
+What remains of Phase 2 is P-3 (backups), P-2/M-8 (observability) and P-5
+(real SMTP) — all three are more "provision a real external thing" than "fix
+code," so read each one in `AUDIT_REPORT.md` before starting; there may be
+nothing to build in this environment beyond documenting the plan. Or pick up
+M-9.
 
 Three things a fresh agent should know before touching what is left of Phase 2:
 
@@ -2940,12 +2972,44 @@ audit checklist below outranks it.
       agrees with it. `avatarUrl`'s `.meta()` now publishes the `^https://`
       pattern too, so the generated spec stops looking more permissive than
       the API actually is.
-- [ ] **[M-4] Add timeouts.** No `statement_timeout`, no `query_timeout`, no
-      `idle_in_transaction_session_timeout`, no per-request timeout — ten slow
-      queries exhaust a pool of ten.
-- [ ] **[M-5] Fix graceful shutdown.** `server.ts` destroys the pools in
-      parallel with `server.close()` rather than after it, so in-flight requests
-      lose their connection. The comment says the opposite of what the code does.
+- [x] **[M-4] Add timeouts.** **Done.** `createPool` (`db/client.ts`) now passes
+      `statement_timeout` and `idle_in_transaction_session_timeout` — `pg` sends
+      both as Postgres session parameters at connection time, so no `SET`
+      statement was needed. `middleware/request-timeout.ts` adds the per-request
+      backstop: mounted on `/api/v1` alongside `globalRateLimit`, it gives up
+      *waiting* on a slow handler and answers 503 (a new `ServiceUnavailable`
+      component, published on every operation except `/health/ready`, which
+      already declares its own real 503 schema — `document.ts`'s
+      `responsesFor` checks for that before adding the generic one, or it would
+      silently overwrite it). It cannot cancel the handler itself — Node has no
+      general way to abort an arbitrary async function — so `errorHandler` grew
+      a `res.headersSent` guard: if that original handler later finishes and
+      tries to write a response that already went out as a 503, the write fails
+      and is now routed to Express's default handler (which just destroys the
+      connection) instead of trying to send a second body. New env vars:
+      `DATABASE_STATEMENT_TIMEOUT_MS` (15s), `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS`
+      (30s), `REQUEST_TIMEOUT_MS` (20s, deliberately looser than the statement
+      timeout so the database times out first on an ordinary slow query).
+      Verified against real Postgres: a 300ms `statement_timeout` cancelled a
+      `pg_sleep(2)` with `57014`, and a 300ms idle-in-transaction timeout
+      terminated a connection left open mid-transaction.
+- [x] **[M-5] Fix graceful shutdown.** **Done.** `server.ts` used to destroy the
+      pools in parallel with `server.close()` rather than after it — the comment
+      said the opposite of what the code did. `closeServer()` now promisifies
+      `server.close` and is `await`ed before `closeDatabase`/`closeRedis` run,
+      with the existing 10-second ceiling still bounding the whole sequence (an
+      idle keep-alive socket can otherwise leave `close()`'s callback waiting
+      indefinitely). **Verified in a real container, not by reading the code**:
+      Windows has no reliable way to deliver a real SIGTERM/SIGINT to an
+      external process (`process.kill()` on Windows unconditionally terminates
+      rather than invoking the JS signal handler), so this needed the actual
+      Linux image — built, run against the dev Postgres/Redis network, sent a
+      slow (bcrypt-heavy) `POST /auth/register` and `docker stop` concurrently.
+      The log line order confirms the fix: `"Shutting down"` (SIGTERM
+      received), then the register request completing `201` a moment later,
+      then `"HTTP server closed"` — the in-flight request finished before the
+      server considered itself closed, which is exactly what the old code did
+      not guarantee.
 - [ ] **[P-3] Backups.** No dumps, no PITR, no tested restore, no RPO/RTO — for
       a financial ledger. An untested backup is not a backup.
 - [ ] **[P-2, M-8] Observability.** No error tracker, no metrics, no tracing, and

@@ -5,6 +5,7 @@
     "notFound": "{{resource}} no encontrado(a)",
     "routeNotFound": "Ruta {{method}} {{path}} no encontrada",
     "rateLimited": "Demasiadas solicitudes",
+    "requestTimeout": "La solicitud tardó demasiado y fue abandonada",
     "internal": "Ocurrió un error inesperado",
     "validationFailed": "Error de validación de la solicitud",
     "malformedJson": "Cuerpo JSON con formato incorrecto",

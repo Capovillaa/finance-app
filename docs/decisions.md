@@ -1964,3 +1964,84 @@ API: a registered account's `PATCH /users/me` was sent `javascript:alert(1)`, a 
 `http://example.com/a.png`, each answering 422 with `validation.urlProtocol` — rendered in pt-BR,
 the account's default locale, without anything in this fix touching translation — while
 `https://example.com/a.png` on the same account answered 200.
+
+---
+
+### A connection is reclaimed by the server, and a shutdown waits for what it owes
+
+Findings **M-4** and **M-5**, taken together because they are two failure modes of the same
+resource — a database connection held longer than it should be — one at the query level and one at
+the process level.
+
+**M-4: nothing stopped a slow query from running forever, or a request from waiting forever for
+one.** `createPool` set a pool size, an idle timeout and a connection timeout, but nothing bounded
+how long a *query* — or a transaction left open mid-request — could hold the connection it had
+already acquired. Ten concurrent slow analytics queries or report exports were enough to exhaust a
+pool of ten with nothing available to reclaim it, at which point the process stops serving anything
+at all, not just the slow endpoint.
+
+The fix is two settings passed straight into `pg.Pool`'s config — `statement_timeout` and
+`idle_in_transaction_session_timeout` — which `pg` sends as Postgres session parameters at
+connection time. No `SET` statement anywhere in this codebase; every pooled connection carries both
+from the moment it is established. `DATABASE_STATEMENT_TIMEOUT_MS` defaults to 15s,
+`DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` to 30s — generous for this app's own query shapes (nothing
+here is an OLAP workload), tight enough that a genuinely runaway query cannot sit on a connection
+indefinitely.
+
+That closes the database side. It does not close the *client-facing* side: a handler doing real work
+that is not database-bound at all — CPU-heavy formatting, a stuck call to an external service —
+could still hang a request past any reasonable wait. `middleware/request-timeout.ts` is the
+backstop: mounted on `/api/v1` alongside `globalRateLimit`, it starts a timer per request and answers
+503 if nothing has responded by `REQUEST_TIMEOUT_MS` (20s, deliberately looser than the statement
+timeout so an ordinary slow query times out at the database first and this only fires for something
+else).
+
+**It cannot cancel the handler still running behind it.** Node has no general mechanism to abort an
+arbitrary in-flight async function, so the original work keeps running after the client has already
+been told 503 — and if it eventually finishes and calls `res.json(...)`, that is a second write to a
+response that already ended. `errorHandler` had no guard for this because nothing before this could
+put it in that state: every existing error occurred *before* any response was written. It now checks
+`res.headersSent` first and, when true, calls Express's own default error handler via a bare
+`next(err)` instead of trying to render a body — which is what actually stops there, by destroying
+the connection rather than throwing a second `ERR_HTTP_HEADERS_SENT` at the same problem.
+
+`/health/ready` already declares its own real 503 (`readinessResponse` — `status`, `database`,
+`redis`), and the generated document has to keep that: `responsesFor` in `openapi/document.ts` now
+adds the generic `ServiceUnavailable` component to every route *except* one that already declared a
+503 of its own, or the generic component would silently overwrite the specific one on exactly the
+route where a probe most needs the real answer.
+
+**M-5: shutdown destroyed the pools before waiting for `server.close()` to actually finish.** The
+comment above the old code said "release the pools so in-flight requests get a chance to finish";
+the code did the opposite — `server.close(callback)` is asynchronous and fire-and-forget unless
+awaited, and `Promise.allSettled([closeDatabase(), closeRedis()])` ran immediately, in parallel with
+it. A request still executing when the pools vanished lost its database connection mid-query. On a
+rolling deploy that is a 500 for whoever's request landed in that window, and for a multi-statement
+handler outside a transaction, partial work.
+
+The fix is `closeServer()`, a one-line promisification of `server.close`, `await`ed before the pools
+are touched — with the existing 10-second `setTimeout` ceiling left exactly where it was, still
+bounding the *whole* sequence rather than just the pool teardown. That ceiling still matters even
+with the fix: an idle keep-alive socket can leave `server.close()`'s callback waiting indefinitely
+for a client that never disconnects, and the timeout is what stops that from hanging a shutdown
+forever.
+
+**Verified in a real Linux container, not by reading the code — Windows could not reproduce this at
+all.** `process.kill(pid, 'SIGTERM')` and `'SIGINT'` sent from an external process on Windows
+terminate the target unconditionally; they do not invoke the JS `process.on('SIGTERM', …)` handler
+the way a POSIX signal does. A first attempt against a `tsx watch`-run dev server confirmed exactly
+that: the process vanished with no shutdown log line at all. The only environment this fix actually
+runs in is Linux — the deployed image — so that is what was tested: `docker build`, run against the
+existing dev Postgres/Redis network, `BCRYPT_ROUNDS` raised to widen the race window, a slow
+`POST /auth/register` fired and `docker stop` (real SIGTERM, real 10s grace period, the same
+mechanism `docker compose down` uses) sent a moment later. The log line order is the proof:
+`"Shutting down"` (SIGTERM received) came first, then the register request completed `201` a beat
+later, and only then `"HTTP server closed"`. The old code, run the same way, would have raced the
+pool teardown against that still-executing request instead of waiting for it.
+
+Both findings picked up their own test coverage: `tests/unit/db-client.test.ts` builds a pool against
+an unreachable address (the pool is lazy — nothing dials until a query runs) and asserts the two
+timeout options are actually on it, and `tests/unit/request-timeout.test.ts` drives the middleware
+with fake timers and a bare `EventEmitter` standing in for `res`, covering the ordinary pass-through
+path, the 503-on-deadline path, and the two ways the timer must *not* fire — response already
+finished, and headers already sent by something else.

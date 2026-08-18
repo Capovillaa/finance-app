@@ -22,6 +22,13 @@ export function createPool(connectionString = env.DATABASE_URL): pg.Pool {
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
     application_name: `finance-api-${env.NODE_ENV}`,
+    // Sent as Postgres session parameters at connection time, so every pooled
+    // client enforces them without a `SET` statement anywhere in this codebase.
+    // Without these, a runaway or forgotten-in-a-transaction query holds its
+    // connection — and, once the pool is exhausted, everyone else's request —
+    // indefinitely. See M-4 in AUDIT_REPORT.md.
+    statement_timeout: env.DATABASE_STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_session_timeout: env.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
   });
 }
 

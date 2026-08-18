@@ -13,6 +13,7 @@ import { responds } from './middleware/responds.js';
 import { resolveRequestLocale } from './middleware/locale.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
 import { httpLogger, requestId } from './middleware/request-context.js';
+import { requestTimeout } from './middleware/request-timeout.js';
 import { buildDocument } from './openapi/document.js';
 import { healthResponse, openApiDocumentResponse, readinessResponse } from './openapi/service-responses.js';
 import { apiRouter } from './routes.js';
@@ -105,7 +106,7 @@ export function createApp(): Express {
     }),
   );
 
-  mount(app, '/api/v1', globalRateLimit, apiRouter);
+  mount(app, '/api/v1', requestTimeout(env.REQUEST_TIMEOUT_MS), globalRateLimit, apiRouter);
 
   // Served from the app it describes, so what a caller reads is what this
   // process enforces. `docs/openapi.json` is the same document, committed so a

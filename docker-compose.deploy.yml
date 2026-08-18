@@ -67,6 +67,14 @@ x-app-environment: &app-environment
   ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
   REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
   RATE_LIMIT_INSTANCES: ${RATE_LIMIT_INSTANCES:-1}
+  # A runaway or forgotten-in-a-transaction query otherwise holds its
+  # connection — and, once the pool is exhausted, everyone else's request —
+  # forever. REQUEST_TIMEOUT_MS is the client-facing backstop and is
+  # deliberately looser, so an ordinary slow query times out at the database
+  # first. See M-4 in AUDIT_REPORT.md.
+  DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-15000}
+  DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: ${DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS:-30000}
+  REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-20000}
   BASE_CURRENCY: ${BASE_CURRENCY:-BRL}
   EXCHANGE_RATE_PROVIDER: ${EXCHANGE_RATE_PROVIDER:-static}
   EXCHANGE_RATE_API_URL: ${EXCHANGE_RATE_API_URL:-}

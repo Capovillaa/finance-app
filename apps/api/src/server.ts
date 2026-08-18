@@ -28,6 +28,13 @@ async function start(): Promise<void> {
   installShutdownHandlers(server);
 }
 
+/** Promisifies `server.close`, so shutdown can genuinely wait for it. */
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
 function installShutdownHandlers(server: Server): void {
   let shuttingDown = false;
 
@@ -37,10 +44,9 @@ function installShutdownHandlers(server: Server): void {
       shuttingDown = true;
       logger.info({ signal }, 'Shutting down');
 
-      // Stop accepting new connections, then release the pools so in-flight
-      // requests get a chance to finish.
-      server.close(() => logger.info('HTTP server closed'));
-
+      // The 10-second ceiling still applies to the whole sequence — an idle
+      // keep-alive socket can leave `server.close`'s callback waiting
+      // indefinitely, which is exactly the case this exists to bound.
       const timeout = setTimeout(() => {
         logger.warn('Forcing exit after shutdown timeout');
         process.exit(1);
@@ -48,7 +54,17 @@ function installShutdownHandlers(server: Server): void {
       timeout.unref();
 
       try {
+        // Stop accepting new connections and *wait* for in-flight ones to
+        // finish before touching the pools. `server.close()` on its own is
+        // fire-and-forget: destroying the database and Redis connections in
+        // parallel with it, as this used to, dropped the connection out from
+        // under any request still executing — a 500, mid-query, on every
+        // rolling deploy — despite the comment here claiming the opposite.
+        await closeServer(server);
+        logger.info('HTTP server closed');
         await Promise.allSettled([closeDatabase(), closeRedis()]);
+      } catch (err) {
+        logger.error({ err }, 'Error during shutdown');
       } finally {
         clearTimeout(timeout);
         process.exit(0);
