@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   accountKey,
@@ -8,6 +9,8 @@ import {
   parseTrustProxy,
   userKey,
 } from '../../src/middleware/rate-limit-policy.js';
+
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
 /**
  * The rate limiter's policy, tested without Redis, Express or an environment.
@@ -104,8 +107,14 @@ describe('credential buckets', () => {
     expect(ipKey('203.0.113.9')).not.toBe(ipKey('198.51.100.4'));
   });
 
-  it('normalises an account the way the login path does', () => {
-    expect(accountKey('  Victim@Example.COM ')).toBe('account:victim@example.com');
+  it('normalises an account the way the login path does, then hashes it', () => {
+    // L-4 in AUDIT_REPORT.md: a raw address in the key was one `KEYS
+    // account:*` or one rate-limiter log line away from leaking who had
+    // attempted to sign in. The key must still be a pure function of the
+    // normalised address — same email, same key — or the budget it names
+    // stops meaning anything.
+    expect(accountKey('  Victim@Example.COM ')).toBe(`account:${hash('victim@example.com')}`);
+    expect(accountKey('Victim@Example.COM')).not.toContain('Victim');
   });
 
   it('has no account bucket when the request carries no usable email', () => {

@@ -141,6 +141,14 @@ const schema = z.object({
    */
   AUTH_RATE_LIMIT_MAX_PER_ACCOUNT: z.coerce.number().int().positive().default(20),
   AUTH_RATE_LIMIT_ACCOUNT_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
+  /**
+   * `POST /imports/preview` per user, per window. Full CSV parsing,
+   * three-language header inference, date-layout inference and per-row
+   * duplicate detection against the ledger is real work behind an endpoint
+   * the general per-user budget (`RATE_LIMIT_MAX_REQUESTS`, 300/min) never
+   * treated as different from a cheap `GET`. See M-6 in AUDIT_REPORT.md.
+   */
+  IMPORT_PREVIEW_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(5),
 
   BASE_CURRENCY: z
     .string()

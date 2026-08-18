@@ -61,6 +61,11 @@ const authAccountLimiter = createLimiter(
   env.AUTH_RATE_LIMIT_MAX_PER_ACCOUNT,
   env.AUTH_RATE_LIMIT_ACCOUNT_WINDOW_SECONDS,
 );
+const importPreviewLimiter = createLimiter(
+  'rl_import_preview',
+  env.IMPORT_PREVIEW_RATE_LIMIT_MAX_REQUESTS,
+  window,
+);
 
 /**
  * Says once a minute that limiting has degraded to the per-process fallback.
@@ -246,4 +251,24 @@ export const authRateLimit = limiterMiddleware(
     return charges;
   },
   { failOpen: false, name: 'credentials' },
+);
+
+/**
+ * `/imports/preview` on its own budget, per signed-in user (M-6 in
+ * AUDIT_REPORT.md). Mounted after `requireAuth` has already run for every
+ * route it guards, so `req.user` is always set here — unlike `globalRateLimit`,
+ * which sits *above* `requireAuth` and has to verify the token itself.
+ * Fails open, the same as the general budget: a store outage should not turn
+ * into every import blocked, only into the per-endpoint throttle going away
+ * for as long as the incident lasts.
+ */
+export const importPreviewRateLimit = limiterMiddleware(
+  (req) => [
+    {
+      limiter: importPreviewLimiter,
+      points: env.IMPORT_PREVIEW_RATE_LIMIT_MAX_REQUESTS,
+      key: userKey(req.user!.id),
+    },
+  ],
+  { failOpen: true, name: 'import-preview' },
 );

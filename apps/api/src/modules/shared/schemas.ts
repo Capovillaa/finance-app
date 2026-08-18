@@ -51,6 +51,14 @@ export const dateRangeSchema = z
     path: ['from'],
   });
 
+/**
+ * A workspace's own accounts, categories or tags — the three things this is
+ * used to filter by — number in the dozens at most. 100 is generous headroom
+ * over any legitimate use and still stops `?accountIds=<10k uuids>` from
+ * becoming a single enormous `IN` clause (L-3 in AUDIT_REPORT.md).
+ */
+const MAX_CSV_ARRAY_LENGTH = 100;
+
 /** Accepts `a,b,c` or repeated query params and normalises to an array. */
 export const csvUuidArray = z
   .union([z.string(), z.array(z.string())])
@@ -60,12 +68,15 @@ export const csvUuidArray = z
     const list = Array.isArray(value) ? value : value.split(',');
     return list.map((item) => item.trim()).filter((item) => item.length > 0);
   })
+  .refine((value) => value === undefined || value.length <= MAX_CSV_ARRAY_LENGTH, 'validation.uuidList')
   .refine(
     (value) => value === undefined || value.every((item) => UUID_PATTERN.test(item)),
     'validation.uuidList',
   )
   .meta({
-    description: 'UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID.',
+    description:
+      `UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be ` +
+      `a UUID, and there may be at most ${MAX_CSV_ARRAY_LENGTH}.`,
   });
 
 export const csvStringArray = z

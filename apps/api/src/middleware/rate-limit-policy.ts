@@ -3,8 +3,10 @@
  * with. Nothing in this file imports `config/env`, `lib/redis` or Express, which
  * is what lets every rule below be unit-tested with no infrastructure at all —
  * the same rule `modules/currencies/providers.ts` follows, and for the same
- * reason: the hard part is the policy, not the plumbing.
+ * reason: the hard part is the policy, not the plumbing. `node:crypto` is a
+ * built-in with no I/O of its own, so importing it does not compromise that.
  */
+import { createHash } from 'node:crypto';
 
 /**
  * What Express should be told about proxies in front of it.
@@ -89,8 +91,21 @@ export const userKey = (userId: string): string => `user:${userId}`;
  * each one against the same account. The account has to be its own bucket for
  * the rotation to cost the attacker anything.
  */
+/**
+ * Hashed rather than embedded: a Redis key is not a secret store, and
+ * `rate-limiter-flexible` logs its keys on some code paths, so a raw address
+ * in the key was one log line or one `KEYS account:*` away from leaking who
+ * had attempted to sign in (L-4 in AUDIT_REPORT.md). SHA-256 rather than an
+ * HMAC — nothing here needs to be unforgeable, only to not be the address
+ * itself, and every request for the same address must still hash to the same
+ * key for the budget to mean anything.
+ */
+function hashAccountEmail(normalised: string): string {
+  return createHash('sha256').update(normalised).digest('hex');
+}
+
 export function accountKey(email: unknown): string | null {
   if (typeof email !== 'string') return null;
   const normalised = email.trim().toLowerCase();
-  return normalised ? `account:${normalised}` : null;
+  return normalised ? `account:${hashAccountEmail(normalised)}` : null;
 }

@@ -2169,3 +2169,109 @@ mattered was writing down the narrower scope rather than either overclaiming or 
 finding half-addressed with no note explaining why. A future session picking up an error tracker,
 real tracing, or PITR is not fixing something broken here — it is doing the part that was always
 going to need infrastructure this repository cannot provision on its own.
+
+---
+
+### Six small findings, each closed in the file it lives in
+
+Findings **L-1, L-3, L-4, L-8, L-9 and M-6** — grouped because each is a self-contained bound or
+guard rather than a design question, and none needed anything this repository cannot already
+provide.
+
+**L-1: `x-request-id` is adopted, not merely capped.** A 128-character length limit alone still let
+a client hand the process a newline or a control character, which then went verbatim into every
+log line for the request and into the echoed response header — log injection and correlation-id
+poisoning. `middleware/request-context.ts` now matches the incoming value against
+`/^[A-Za-z0-9_-]{1,128}$/`, the same charset every real generator of one of these (a UUID, a ULID,
+a trace id) actually emits, and falls back to a fresh `randomUUID()` for anything else — including
+an empty string or one over the length cap, which fall out of the regex without a separate check.
+There is no attempt to *sanitise* a bad value into something safe; a string that needed sanitising
+already proves the caller sent something the id was never meant to carry, so it is simpler and
+safer to treat it exactly like a missing header.
+
+**L-3: `csvUuidArray` gained an element-count cap.** `?accountIds=<10k uuids>` was a single
+enormous `IN` clause away, because the schema accepted a comma-separated list of any length before
+`UUID_PATTERN` even started checking individual entries. A workspace's own accounts, categories or
+tags — the three things this filters — number in the dozens at most, so 100 is generous headroom
+that stops the attack without narrowing any real use. `csvStringArray`, the unused sibling two
+lines below it in the same file with the identical shape, was left alone: fixing a bug in code
+nothing calls yet is not the same as leaving one live, and it can pick up the same cap the day it
+gets a caller.
+
+**L-4: the credential limiter's account bucket is keyed by a hash, not the address.** A Redis key
+is not a secret store, and `rate-limiter-flexible` logs its own keys on some code paths — so
+`account:someone@example.com` was one `KEYS account:*` or one log line away from telling anyone who
+had attempted to sign in. `accountKey` now normalises the address exactly as before and then runs
+it through SHA-256; an HMAC was considered and rejected, because nothing about this key needs to be
+unforgeable, only to not *be* the address — every request for the same account still has to hash to
+the same key or the budget it names stops meaning anything, which a keyed HMAC would not have
+bought anything extra for.
+
+**L-8: `page` has an upper bound.** `pageSize`'s own 200-row cap already bounded the *width* of a
+requested page, but nothing bounded how deep `?page=` could ask an `OFFSET` to scan — a caller could
+name page 999,999,999 and make Postgres walk that far into a result set before returning nothing.
+100,000 pages is a ceiling nothing in this application's own lists could reach honestly, so nothing
+real is lost by refusing anything past it.
+
+**L-9: the `.tmp/` load-testing scratch is gone from the working tree.** It was already gitignored
+— never a repository-history problem — but a stray `token.txt` holding a real (if demo-account)
+JWT and a handful of one-off `loadtest*.mjs` scripts sitting in the tree is exactly the kind of
+thing a future session mistakes for something that matters. Deleted outright rather than archived;
+nothing in it was load-testing infrastructure worth keeping, only its output.
+
+**M-6: `/imports/preview` has its own rate-limit budget, and an oversized body is rejected before
+any database work.** The general per-user budget (300/min) never distinguished a CSV import — full
+parsing, three-language header inference, date-layout inference and per-row duplicate detection
+against the ledger — from a cheap `GET`. `importPreviewRateLimit` (`middleware/rate-limit.ts`) is a
+fifth independent budget, 5/minute per signed-in user, mounted only on this one route; it can be
+keyed on `req.user!.id` directly rather than verifying a bearer token itself, unlike
+`globalRateLimit`, because everything under `/workspaces` already sits behind `requireAuth`.
+
+The size check is the more interesting half. The audit's own suggested fix — add `.max()` to the
+Zod schema — turns out not to compose cleanly with this codebase's translation machinery: a Zod
+`.refine()` failure only auto-translates when its message is a `validation.*` key from
+`@finance/schemas`, and this bound (`MAX_IMPORT_BYTES`, 512 KB) is API-only — the web client never
+independently declares it. Reusing the exact `AppError` `previewImport` already threw for the same
+condition, in a small dedicated middleware (`rejectOversizedImportBody`) that runs *before*
+`requireEditor` and `validate()`, was more correct than inventing a second, differently-worded way
+to say the same thing: same params, same localisation, and now it also runs before `getAccount`'s
+database round trip instead of after it — which is the actual cost the audit's finding was about,
+since `express.json`'s existing 1 MB body limit already bounded the memory cost regardless of where
+in the pipeline the rejection happens.
+
+Verified against the real dev stack, not only the integration suite: with
+`IMPORT_PREVIEW_RATE_LIMIT_MAX_REQUESTS=2`, two previews against a real account succeeded and a
+third answered 429; a 600 KB body against a *nonexistent* account answered 400 (not the 404
+`getAccount` would have produced had it been reached), rendered in the account's default
+locale — proof the size check runs first and reuses real localisation, not a stub.
+
+---
+
+### `/openapi.json` is public on purpose (L-2)
+
+Finding **L-2**: the specification is served unauthenticated at `GET /openapi.json`, publishing
+every path, every request shape and which role each one requires — admin-only routes included —
+to anyone who asks. The audit's own framing is right: this is defensible, but it had never been a
+decision anyone wrote down, only a default nobody revisited.
+
+**The decision is to keep it public.** Three reasons, each sufficient on its own:
+
+1. **It describes shapes, not data.** The document is generated by walking the Express router and
+   converting Zod schemas (`openapi/document.ts`) — it contains no row, no credential, and no
+   information about which *workspaces* or *users* exist. Everything in it is already implied by
+   reading this repository, which is itself public.
+2. **The alternative degrades the one thing that makes the document trustworthy.** Its entire value
+   — see "The OpenAPI document is generated from the app that boots" earlier in this file — is that
+   it cannot drift from the code, because CI regenerates and diffs it on every change. Gating it
+   behind auth would not remove that property, but it would remove the property that lets a
+   prospective integrator, a security researcher, or a new contributor read the API's real shape
+   without first obtaining a token — which is a real cost for a public repository whose whole
+   premise is that the code is already the documentation.
+3. **Knowing a route exists and requires `admin` is not the same as being able to call it.** RBAC is
+   enforced server-side on every request (`withWorkspace` + `requireRole`, section 6), independent
+   of who has read the specification. Publishing "this route requires admin" does not weaken the
+   check that actually requires admin.
+
+Nothing changed in the code for this finding — `/openapi.json` remains exactly as unauthenticated
+as `/health`. What changed is that the choice now has a name and a place a future session can find
+it, instead of looking like an oversight the next time an audit runs.

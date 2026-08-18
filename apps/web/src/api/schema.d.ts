@@ -3809,11 +3809,11 @@ export interface operations {
             query?: {
                 page?: number;
                 pageSize?: number;
-                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID. */
+                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100. */
                 accountIds?: string | string[];
-                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID. */
+                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100. */
                 categoryIds?: string | string[];
-                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID. */
+                /** @description UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100. */
                 tagIds?: string | string[];
                 /** @description A boolean written into a query string. `true`, `1` and `yes` are true; anything else listed is false. */
                 includeSubcategories?: boolean | ("0" | "1" | "true" | "false" | "yes" | "no");

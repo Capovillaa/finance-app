@@ -3923,7 +3923,7 @@
               "default": 1,
               "type": "integer",
               "minimum": 1,
-              "maximum": 9007199254740991
+              "maximum": 100000
             }
           },
           {
@@ -5314,7 +5314,7 @@
               "default": 1,
               "type": "integer",
               "minimum": 1,
-              "maximum": 9007199254740991
+              "maximum": 100000
             }
           },
           {
@@ -6909,7 +6909,7 @@
               "default": 1,
               "type": "integer",
               "minimum": 1,
-              "maximum": 9007199254740991
+              "maximum": 100000
             }
           },
           {
@@ -6927,7 +6927,7 @@
             "name": "accountIds",
             "in": "query",
             "required": false,
-            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID.",
+            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100.",
             "schema": {
               "anyOf": [
                 {
@@ -6946,7 +6946,7 @@
             "name": "categoryIds",
             "in": "query",
             "required": false,
-            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID.",
+            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100.",
             "schema": {
               "anyOf": [
                 {
@@ -6965,7 +6965,7 @@
             "name": "tagIds",
             "in": "query",
             "required": false,
-            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID.",
+            "description": "UUIDs, either comma-separated in one parameter or repeated across several. Every entry must be a UUID, and there may be at most 100.",
             "schema": {
               "anyOf": [
                 {

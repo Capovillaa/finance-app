@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-390; see section 4 for the current command. The compiled `dist/server.js`
+402; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -966,7 +966,7 @@ gitignored — a database dump must never reach a public repository.
 ### Tests
 
 ```bash
-npm test                 # all 390 — needs Postgres, and only Postgres
+npm test                 # all 402 — needs Postgres, and only Postgres
 npm run test:unit        # 215 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
@@ -2692,6 +2692,14 @@ response now says `emailDelivered: false` when it happens, and the client shows 
 rather than a false success, because an invitation link exists in exactly one email with no retry
 behind it. See section 5q.
 
+**A handful of small findings share one lesson: a bound stated once is a bound that cannot quietly
+stop applying.** `x-request-id` is matched against a safe charset, not just a length (L-1);
+`csvUuidArray` and `page` both have an upper bound now (L-3, L-8); the credential limiter's account
+bucket is keyed by a SHA-256 hash of the address rather than the address itself (L-4); and
+`/imports/preview` has its own rate budget plus a size check that runs before any database work,
+reusing the exact error the service already threw rather than a second differently-worded one
+(M-6). See `docs/decisions.md`, "Six small findings...".
+
 **Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
 tracked in families.** Replaying a rotated token revokes the whole family. See
 the bug in section 1 — the revocation must outlive the rejection. Revocation
@@ -3184,9 +3192,19 @@ audit checklist below outranks it.
 - [ ] **[M-3] Type the alert-rule `config`.** It is an open
       `z.record(z.string(), z.unknown())` whose values drive lookback windows and
       `Decimal` parsing on the **shared** worker, with no bounds.
-- [ ] **[M-6] Rate-limit `/imports/preview` on its own**, and put a `.max()` on
-      `content` so an oversized body is rejected by the schema rather than after
-      `express.json` has parsed a megabyte.
+- [x] **[M-6] Rate-limit `/imports/preview` on its own**, and reject an
+      oversized body before any database work. **Done** — see
+      `docs/decisions.md`, "Six small findings...". `importPreviewRateLimit`
+      (`middleware/rate-limit.ts`) is a fifth independent budget, 5/min per
+      user. The audit's own suggested `.max()` on `content` does not compose
+      with this codebase's translation machinery (a Zod `.refine()` only
+      auto-translates a `validation.*` key, and this bound is API-only) — a
+      dedicated `rejectOversizedImportBody` middleware reuses the exact
+      `AppError` `previewImport` already threw instead, running before
+      `getAccount`'s database round trip rather than after it. Verified live:
+      2 previews allowed then a 429 with the budget lowered to 2, and a 600 KB
+      body against a nonexistent account answered 400 — not the 404
+      `getAccount` would give — proving the size check runs first.
 - [ ] **[M-11] Derive per-purpose subkeys.** `JWT_REFRESH_SECRET` currently
       signs both refresh tokens and invitation tokens.
 - [ ] **[L-6] Secret scanning and SAST in CI.** `npm audit` is there; gitleaks
@@ -3201,10 +3219,20 @@ audit checklist below outranks it.
 
 ### Phase 4 — polish
 
-- [ ] **[L-1]** Constrain the client-supplied `x-request-id` to a safe charset.
-- [ ] **[L-3, L-8]** Cap `csvUuidArray` length; bound `page`.
-- [ ] **[L-4]** Hash the email in the credential limiter's Redis key.
+- [x] **[L-1]** Constrain the client-supplied `x-request-id` to a safe
+      charset. **Done** — `middleware/request-context.ts` matches against
+      `/^[A-Za-z0-9_-]{1,128}$/` and falls back to a fresh id for anything
+      else, rather than only capping length. See `docs/decisions.md`.
+- [x] **[L-3, L-8]** Cap `csvUuidArray` length; bound `page`. **Done** — 100
+      entries and 100,000 pages respectively. See `docs/decisions.md`.
+- [x] **[L-4]** Hash the email in the credential limiter's Redis key. **Done**
+      — `accountKey` now hashes with SHA-256 after normalising, so the key
+      itself never carries the address. See `docs/decisions.md`.
 - [ ] **[L-7]** Breached-password check (HIBP k-anonymity).
-- [ ] **[L-2]** Record the public `/openapi.json` as a deliberate decision in
-      `docs/decisions.md`.
-- [ ] **[L-9]** Delete the `.tmp/` load-testing scratch from the working tree.
+- [x] **[L-2]** Record the public `/openapi.json` as a deliberate decision in
+      `docs/decisions.md`. **Done** — kept public: it describes shapes, not
+      data, and gating it would cost the "cannot drift from the code" property
+      that is the whole reason to trust it, for no reduction in what RBAC
+      already enforces server-side regardless of who can read the spec.
+- [x] **[L-9]** Delete the `.tmp/` load-testing scratch from the working tree.
+      **Done.**

@@ -1,9 +1,11 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod/v4';
 import { CSV_DELIMITERS } from '../../lib/csv.js';
+import { badRequest } from '../../lib/errors.js';
 import { asyncHandler } from '../../lib/http.js';
 import { t } from '../../lib/i18n.js';
 import { requireEditor, requireViewer, workspaceContext } from '../../middleware/auth.js';
+import { importPreviewRateLimit } from '../../middleware/rate-limit.js';
 import { responds } from '../../middleware/responds.js';
 import { body, params, query, uuidSchema, validate } from '../../middleware/validate.js';
 import { IMPORT_COLUMNS } from './mapping.js';
@@ -40,6 +42,26 @@ const previewSchema = optionsSchema.extend({
   // other call the client makes.
   content: z.string().min(1),
 });
+
+/**
+ * The same 512 KB check `previewImport` already makes, run before anything
+ * else — M-6 in AUDIT_REPORT.md. Without this, an oversized-but-under-1MB
+ * body reached `getAccount`'s database round trip before ever being
+ * rejected. A `.max()` on `content` in the Zod schema was the audit's own
+ * suggestion, but a Zod `.refine()` failure only auto-translates when its
+ * message is a `validation.*` key from `@finance/schemas` — this bound is
+ * API-only, so reusing the exact `AppError` `previewImport` already throws
+ * (params, localization and all) is more correct than inventing a second,
+ * differently-translated way to say the same thing.
+ */
+function rejectOversizedImportBody(req: Request, _res: Response, next: NextFunction): void {
+  const content = (req.body as { content?: unknown } | undefined)?.content;
+  if (typeof content === 'string' && Buffer.byteLength(content, 'utf8') > importService.MAX_IMPORT_BYTES) {
+    next(badRequest('imports.fileTooLarge', { limit: Math.floor(importService.MAX_IMPORT_BYTES / 1000) }));
+    return;
+  }
+  next();
+}
 
 const commitSchema = z.object({
   rows: z
@@ -86,6 +108,8 @@ importRouter.get(
 
 importRouter.post(
   '/preview',
+  rejectOversizedImportBody,
+  importPreviewRateLimit,
   requireEditor,
   validate({ body: previewSchema }),
   responds({ 201: importPreviewResponse }),

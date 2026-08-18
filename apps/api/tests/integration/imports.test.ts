@@ -95,6 +95,25 @@ describe('import preview', () => {
     expect(result.rows[1].occurredOn).toBe('2026-03-15');
   });
 
+  it('rejects an oversized body before ever looking up the account (M-6)', async () => {
+    const user = await registerUser();
+    // Over the 512 KB limit, but comfortably under express.json's 1 MB cap —
+    // exactly the gap the old code let straight through to `getAccount`'s
+    // database round trip before rejecting it.
+    const oversized = 'a'.repeat(600_000);
+
+    const response = await api()
+      .post(`/api/v1/workspaces/${user.workspaceId}/imports/preview`)
+      .set(user.auth)
+      // A bogus account id: if this reached the service at all, it would
+      // answer 404 (unknown account), not 400 — so a 400 here is the proof
+      // the size check ran first.
+      .send({ accountId: '00000000-0000-0000-0000-000000000000', content: oversized });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('bad_request');
+  });
+
   it('flags an ambiguous date layout instead of guessing silently', async () => {
     const user = await registerUser();
     const account = await createAccount(user);

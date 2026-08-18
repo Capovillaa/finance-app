@@ -23,7 +23,12 @@ export interface Page<T> {
 }
 
 export const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  // Unbounded, `?page=999999999` was a deep-`OFFSET` scan available to anyone
+  // who could call a list endpoint (L-8 in AUDIT_REPORT.md). Bounded in impact
+  // even so — `pageSize`'s own cap of 200 means a full sweep of the ceiling
+  // below is still finite work — but there is no legitimate reason this app's
+  // own lists need more than 100,000 pages, so nothing real is lost by capping it.
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
 
