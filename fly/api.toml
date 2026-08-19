@@ -1,0 +1,173 @@
+# The API and the worker, as one Fly app with two process groups.
+#
+#     fly deploy --config fly/api.toml
+#
+# Run it from the repository root, always: both Dockerfiles need the root as
+# their build context, because the API imports `@finance/schemas` as a compiled
+# workspace and the context has to contain both packages.
+#
+# ---- Why one app and not two ----------------------------------------------
+#
+# The API and the worker are the same image with a different command — the
+# "one image, three entrypoints" shape `docker-compose.deploy.yml` uses, and
+# Fly's process groups are the same idea: each group runs its own command from
+# the one image that was built. Splitting them into two Fly apps would build
+# and push that image twice and let the two halves drift to different versions
+# between deploys, which is exactly what the single image exists to prevent.
+#
+# The third entrypoint, the migration, is `release_command` below.
+#
+# ---- Why this app has no public address ------------------------------------
+#
+# It is reached only by the `web` app's nginx, over the private network, at
+# `finance-api.flycast`. That is not a preference: the refresh token is an
+# HttpOnly `SameSite=Lax` cookie, so the browser must see the client and the
+# API on one origin, and `config/production-policy.ts` refuses to boot if
+# API_BASE_URL and WEB_BASE_URL disagree. A public address on this app would be
+# a second origin that half-works — every session dying at the first token
+# refresh — so after the first deploy:
+#
+#     fly ips list --app finance-api          # expect nothing public
+#     fly ips allocate-v6 --private --app finance-api
+#
+# `--private` is the whole point. Allocating an ordinary v6 address here
+# publishes the API to the internet, and `[[services]]` below is what it would
+# publish.
+app = "finance-api"
+# São Paulo. Put the database in the same region: every request pays this
+# round trip several times over, and a cross-continent hop to Postgres is felt
+# on every screen in the app.
+primary_region = "gru"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[deploy]
+  # The migration, run once per deploy in a temporary machine built from the
+  # new image, *before* any machine running the old one is replaced. A non-zero
+  # exit stops the deploy — which is the same gate
+  # `service_completed_successfully` gives the compose file, and it matters for
+  # the same reason: the alternative is a new binary talking to an old schema.
+  release_command = "node apps/api/dist/db/migrate.js up"
+  # One machine at a time, so the old version keeps serving while the new one
+  # comes up and fails its health check if it is going to.
+  strategy = "rolling"
+
+[processes]
+  # `app` is the name the `[[services]]` block below attaches to. The worker
+  # deliberately has no services: it opens no port, and a health check against
+  # a port it does not listen on would restart a perfectly healthy process
+  # forever. Its liveness is the heartbeat file `worker.js` writes, checked by
+  # `worker-healthcheck.js` — see the `[checks]` note at the bottom.
+  app = "node apps/api/dist/server.js"
+  worker = "node apps/api/dist/worker.js"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4000"
+  LOG_LEVEL = "info"
+
+  # Both point at the public URL of the `web` app, never at this one. See the
+  # header above.
+  API_BASE_URL = "https://finance-web.fly.dev"
+  WEB_BASE_URL = "https://finance-web.fly.dev"
+
+  # ---- Read this before trusting it -----------------------------------------
+  #
+  # `req.ip` is read out of `X-Forwarded-For`, a header the *client* sends, and
+  # this number decides how much of it is believed. Too low and every request
+  # appears to come from the nginx container, collapsing the per-address rate
+  # limit into one bucket shared by the whole internet. Too high and a client
+  # can invent addresses to defeat it.
+  #
+  # There are two hops in front of this process here — Fly's proxy, then the
+  # `web` app's nginx — so `2` is the number this composition expects, against
+  # `1` for the compose file where nginx is the only one.
+  #
+  # **Verify it rather than trusting this comment.** Fly's proxy also sits on
+  # the private hop to `.flycast`, and whether that adds a third entry is a
+  # property of their infrastructure, not of this repository. Signing in writes
+  # `clientIp(req)` to the session row, so: sign in from a machine whose public
+  # address you know, open the active-sessions list, and read what it recorded.
+  # Your own address means this is right. An address belonging to Fly or to the
+  # nginx container means raise it by one and deploy again. `docs/runbook.md`
+  # has the procedure.
+  TRUST_PROXY = "2"
+
+  ACCESS_TOKEN_TTL = "15m"
+  REFRESH_TOKEN_TTL_DAYS = "30"
+  ACCOUNT_DELETION_GRACE_DAYS = "7"
+
+  # Divides the per-process rate-limit budget when Redis is unreachable, so
+  # losing Redis does not multiply the advertised limit by the number of
+  # machines. Keep it equal to the machine count of the `app` group.
+  RATE_LIMIT_INSTANCES = "1"
+
+  DATABASE_STATEMENT_TIMEOUT_MS = "15000"
+  DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS = "30000"
+  REQUEST_TIMEOUT_MS = "20000"
+
+  BASE_CURRENCY = "BRL"
+  EXCHANGE_RATE_PROVIDER = "frankfurter"
+
+  SMTP_PORT = "587"
+  SMTP_SECURE = "false"
+  MAIL_FROM = "Finance App <no-reply@example.com>"
+
+# ---- What is NOT in this file ----------------------------------------------
+#
+# Every credential, set once with `fly secrets set` and stored encrypted. They
+# are not here because this file is committed to a public repository, and
+# `config/production-policy.ts` refuses to boot on any secret this repository
+# has ever printed — including, deliberately, anything that merely looks like a
+# placeholder.
+#
+#     fly secrets set --app finance-api \
+#       JWT_ACCESS_SECRET=... \
+#       JWT_REFRESH_SECRET=... \
+#       EMAIL_TOKEN_SECRET=... \
+#       DATABASE_URL='postgres://user:pass@host/db?sslmode=verify-full' \
+#       REDIS_URL='rediss://default:pass@host:6379' \
+#       SMTP_HOST=... SMTP_USER=... SMTP_PASSWORD=...
+#
+# Three different secrets, each generated separately:
+#     node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+#
+# `sslmode=verify-full` on DATABASE_URL, not `require`: `pg` verifies the
+# certificate chain *and* the hostname at `verify-full` and nothing else is
+# guaranteed to — `require` is currently an alias for it but is documented to
+# take libpq's weaker meaning in pg v9. `rediss://` is the TLS scheme; both
+# clients speak TLS with no code change.
+
+[[services]]
+  processes = ["app"]
+  internal_port = 4000
+  protocol = "tcp"
+  # Never scale this to zero. The app is not the only thing that reaches it,
+  # and a cold start inside a request that is already through nginx reads as a
+  # timeout rather than a wait.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 4000
+    handlers = ["http"]
+
+  # `/health` and not `/health/ready`: this decides whether to keep the machine,
+  # and `/health/ready` fails when Postgres or Redis is having a moment. A
+  # container is not unhealthy because a database it does not own is down —
+  # restarting it then makes an outage worse. Same reasoning as the Dockerfile's
+  # own HEALTHCHECK.
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "get"
+    path = "/health"
+
+# The worker gets no check here. Fly's checks are HTTP or TCP against a port,
+# and the worker opens none by design — its liveness signal is the heartbeat
+# file, which only `worker-healthcheck.js` inside the machine can read. Watch it
+# with `fly logs --app finance-api --process-group worker`; the job it runs is
+# scheduled and idempotent, so a restart costs nothing.

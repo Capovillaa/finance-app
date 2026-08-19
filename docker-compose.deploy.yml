@@ -156,10 +156,17 @@ services:
     container_name: finance_deploy_api
     restart: unless-stopped
     environment: *app-environment
-    # No `ports:` by default. The browser reaches the API through `web`, on the
-    # same origin, which is what the SameSite=Lax refresh cookie requires — so
-    # publishing this one as well would only create a second origin nobody
-    # should use. Set API_BIND_ADDRESS and API_PORT to expose it for debugging.
+    # Published nowhere by default. The browser reaches the API through `web`,
+    # on the same origin, which is what the SameSite=Lax refresh cookie
+    # requires — so publishing this as well would only create a second origin
+    # nobody should use.
+    #
+    # To reach it directly for debugging, add `docker-compose.debug.yml` to the
+    # command rather than editing this file — a published port is then
+    # something a command line says out loud and a stopped stack forgets, not a
+    # line someone leaves behind. There is deliberately no variable here that
+    # could do it: compose refuses a `ports:` entry that expands to the empty
+    # string, so "off" is not a value a variable can hold.
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -172,7 +179,7 @@ services:
   # build produced `apps/web/dist` and nothing consumed it. It is also the only
   # place the document's security headers can live — a Content-Security-Policy,
   # `frame-ancestors` and HSTS mean nothing on a JSON response, and the HTML was
-  # not being served by anything. See `apps/web/nginx.conf`.
+  # not being served by anything. See `apps/web/nginx.conf.template`.
   web:
     build:
       context: .

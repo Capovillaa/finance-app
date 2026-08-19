@@ -12,9 +12,8 @@ export interface NavItem {
 }
 
 /**
- * Sidebar navigation. The order follows the build order in CLAUDE.md's task
- * list, because each screen depends on the data model the one before it
- * establishes.
+ * Sidebar navigation. The order follows the order the screens were built in,
+ * because each one depends on the data model the one before it establishes.
  */
 export const NAV_ITEMS: NavItem[] = [
   { labelKey: 'nav.dashboard', to: '/', icon: DashboardIcon },

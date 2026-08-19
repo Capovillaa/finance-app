@@ -3,8 +3,9 @@
 Finding **P-4** in `AUDIT_REPORT.md`: CI tests a migration up/down round-trip, which is more than
 most projects have, but nothing documented *where* `npm run migrate` runs in a real release, *who*
 runs it, how to roll back, or the rule a migration has to follow for the length of a rolling
-deploy. This is that document. It assumes the deployment described in `CLAUDE.md` sections 5g and
-5k — one image, three entrypoints, `docker-compose.deploy.yml`.
+deploy. This is that document. It assumes the deployment `docker-compose.deploy.yml` describes —
+one image, three entrypoints — written up in `decisions.md` under "One image, three entrypoints,
+and a migration that gates the rollout" and "Development and deployment are two files".
 
 ## The single-instance release (what this repository's own compose file does)
 
@@ -16,7 +17,7 @@ docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
 ```
 
 `migrate` runs to completion first; `api` and `worker` start only once it exits 0
-(`depends_on: service_completed_successfully`, section 5g). A failed migration stops the release
+(`depends_on: service_completed_successfully`). A failed migration stops the release
 here — neither `api` nor `worker` starts against a schema they do not match. **There is no
 separate "who runs it": the same person (or the same CI job) that runs the command above is who
 runs the migration, because it is one command.**
@@ -30,6 +31,134 @@ docker compose -f docker-compose.deploy.yml ps
 
 A `migrate` container that exited non-zero and `api`/`worker` that never started (still `created`,
 not `running`) is the failure mode working as intended — see "If a migration fails" below.
+
+## The Fly release (two apps, a managed Postgres)
+
+The hosted deployment, described by `fly/api.toml` and `fly/web.toml` and reasoned about in
+`decisions.md` under "Two apps on Fly, a managed Postgres, and a promise the compose file was not
+keeping". **Every command runs from the repository root**, because both Dockerfiles need it as
+their build context.
+
+### First deploy only
+
+```bash
+fly apps create finance-api
+fly apps create finance-web
+
+# The API is private. This is the step that keeps it that way: a plain
+# `allocate-v6` would publish it, and `[[services]]` in api.toml is what it
+# would publish.
+fly ips allocate-v6 --private --app finance-api
+
+fly secrets set --app finance-api \
+  JWT_ACCESS_SECRET=... JWT_REFRESH_SECRET=... EMAIL_TOKEN_SECRET=... \
+  DATABASE_URL='postgres://user:pass@host/db?sslmode=verify-full' \
+  REDIS_URL='rediss://default:pass@host:6379' \
+  SMTP_HOST=... SMTP_USER=... SMTP_PASSWORD=...
+```
+
+Three separately generated secrets — `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` —
+because `config/production-policy.ts` refuses to boot on a repeated value, on anything this public
+repository has ever printed, and on anything still shaped like a placeholder. Setting secrets
+restarts the app; that is expected.
+
+### Every release
+
+```bash
+fly deploy --config fly/api.toml     # migrations run first, and gate this
+fly deploy --config fly/web.toml     # only if the client changed
+```
+
+`release_command` runs `migrate up` in a temporary machine built from the new image *before* any
+machine running the old one is replaced, and a non-zero exit stops the deploy — the same gate
+`service_completed_successfully` gives the compose file. Confirm:
+
+```bash
+fly logs --app finance-api                         # the release command's output
+fly status --app finance-api                       # every machine on the new version, checks passing
+fly logs --app finance-api --process-group worker  # the worker specifically
+curl -fsS https://finance-web.fly.dev/healthz      # nginx is up and serving
+```
+
+**`/health` and `/health/ready` are not reachable from the public origin, and that is not an
+oversight.** They are mounted at the API's root while nginx proxies only `/api/`, so the public
+surface of this deployment is the client, `/api/v1/*` and nothing else. Note *how* they are
+unreachable, because it is easy to misread: the SPA fallback catches every unmatched path, so
+`curl https://…/health/ready` answers **200 with `index.html`**, not a 404. Anything scripted
+against those paths from outside is checking that nginx serves a web page. `/metrics` and
+`/openapi.json` sit at that same root — `/openapi.json` is public *by decision* in the compose
+deployment, and on Fly it stops being reachable from outside, which is a tightening rather than a
+regression. What watches `/health` is Fly's own check in `api.toml`, which reaches port 4000 on the
+private network; `fly status` is where its result shows up. To see readiness by hand:
+
+```bash
+fly ssh console --app finance-api -C \
+  "node -e \"fetch('http://127.0.0.1:4000/health/ready').then(r=>r.text()).then(console.log)\""
+```
+
+Proving the *proxy* reaches the API needs a route that is actually published, so use a public one
+and read the shape of the rejection. **422** with a `validation_failed` body is proof the request
+reached the API and its validator answered; a 502 is nginx failing to reach it, and 200 with HTML
+means the path fell through to the SPA and never went near the API at all:
+
+```bash
+curl -si https://finance-web.fly.dev/api/v1/auth/login \
+  -H 'content-type: application/json' -d '{}' | head -1
+```
+
+Deploy the API before the client when a release changes both: the API tolerates an older client,
+and the reverse — a new bundle calling an endpoint that is not there yet — is a broken screen.
+
+### Verify `TRUST_PROXY` after the first deploy, and after any change in front of the app
+
+**Do this once, deliberately.** `fly/api.toml` sets `TRUST_PROXY=2` for the two hops it expects —
+Fly's proxy, then the `web` app's nginx — but the number is a claim about someone else's
+infrastructure, and being wrong is silent in both directions: too low and every request appears to
+come from the nginx container, so the per-address rate limit becomes one bucket shared by the whole
+internet; too high and a client can invent addresses to escape it.
+
+Signing in writes `clientIp(req)` into `refresh_tokens.ip_address`, which is what makes this
+checkable from the outside — and it is the first useful thing to do with a database you can open in
+a GUI:
+
+1. Find your own public address: `curl -fsS https://api.ipify.org`.
+2. Sign in to the deployed app from that same machine.
+3. Read the row back, in DBeaver or psql:
+
+   ```sql
+   select ip_address, user_agent, created_at
+   from refresh_tokens
+   order by created_at desc
+   limit 5;
+   ```
+
+Your own address in the newest row means the number is right. An address belonging to Fly, or a
+private `fdaa:` address belonging to the nginx machine, means `TRUST_PROXY` is one too low: raise
+it in `fly/api.toml`, `fly deploy --config fly/api.toml`, then repeat from step 2 with a **fresh
+sign-in** — an existing row is a record of what was believed at the time and does not change.
+
+No UI shows this; the client has no active-sessions screen, only "sign out everywhere". The table is
+the instrument.
+
+### Looking at the database
+
+The managed provider's connection string works directly from a laptop in DBeaver, pgAdmin or psql —
+that is the reason it is managed rather than a container. Use the provider's own read-only or
+non-owner role for browsing where one is offered, and keep `sslmode=verify-full` on the string you
+paste in: it is what makes the certificate, and therefore the host on the other end, actually
+checked.
+
+For the self-hosted compose deployment there is no such connection, on purpose. Add the debug
+overlay for as long as you need one, and reach it through an SSH tunnel rather than by widening a
+bind address:
+
+```bash
+docker compose -f docker-compose.deploy.yml -f docker-compose.debug.yml \
+  --env-file .env.deploy up -d          # publishes pg/redis/api on 127.0.0.1 only
+ssh -N -L 5432:127.0.0.1:5432 you@your-server
+```
+
+A plain `up -d` without the overlay takes those ports back down.
 
 ## The rolling-deploy release (if this ever runs as more than one instance)
 
@@ -58,7 +187,7 @@ for the entire window both versions coexist.** Concretely:
   ship the additive half, wait for the fleet to finish rolling, ship the cleanup half.
 
 This codebase has not needed this discipline yet — every migration to date has been additive
-(section 3's migration list is all `CREATE TABLE` / `ADD COLUMN`, nothing has renamed or dropped a
+(the migration list is all `CREATE TABLE` / `ADD COLUMN`, nothing has renamed or dropped a
 column in production use). Writing the rule down now is cheaper than relearning it during an
 incident the first time that stops being true.
 
@@ -93,7 +222,7 @@ From there:
    back and forward again cleanly on every push — but `down()` scripts are not exercised against
    *production data shapes* the way `up()` is by ordinary use, so treat a rollback as a genuine
    incident action, not a routine one: read the migration's own `down()` before running this
-   against real data, and prefer restoring from a backup (`scripts/restore.sh`, section 5q) over a
+   against real data, and prefer restoring from a backup (`scripts/restore.sh`) over a
    rollback if the migration has already written data the `down()` script does not know how to
    undo (a backfilled column, say).
 4. **The API and worker will not start against a schema `migrate` has not reached** — that is the

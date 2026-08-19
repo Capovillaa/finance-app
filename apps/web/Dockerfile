@@ -47,8 +47,29 @@ FROM nginx:1.27-alpine AS runtime
 # ever built and run through Docker Desktop's own linux/amd64 runtime, and the
 # entrypoint that broke under musl was Postgres's, not nginx's.
 
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
+# Into `templates/`, not `conf.d/`: the nginx image's entrypoint runs
+# `envsubst` over everything in that directory and writes the result to
+# `conf.d/` before starting. The two variables below are what it substitutes.
+COPY apps/web/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
+
+# Defaults that describe *this repository's* compose network, so
+# `docker-compose.deploy.yml` sets neither variable and gets exactly the config
+# it had before this was a template: the container named `api`, resolved by
+# Docker's embedded DNS, which serves no AAAA records worth asking for.
+#
+# Override both together when the API lives somewhere else. On Fly, that is
+#   API_UPSTREAM=http://finance-api.flycast:4000
+#   NGINX_RESOLVER=[fdaa::3] valid=10s
+# — `.flycast` because it is an app-wide address that survives a deploy, where
+# `.internal` names individual machines that do not.
+#
+# NGINX_ENVSUBST_FILTER is a regex over variable *names*. It must stay pinned to
+# these two: unfiltered, `envsubst` also eats `$host`, `$uri`, `$scheme` and
+# `$remote_addr`, replacing each with an empty string. The config still parses.
+ENV API_UPSTREAM="http://api:4000" \
+    NGINX_RESOLVER="127.0.0.11 valid=10s ipv6=off" \
+    NGINX_ENVSUBST_FILTER="^(API_UPSTREAM|NGINX_RESOLVER)$"
 
 EXPOSE 80
 

@@ -1,0 +1,72 @@
+# The client, and the only public face of the deployment.
+#
+#     fly deploy --config fly/web.toml
+#
+# Run it from the repository root: the web image builds the client against the
+# `@finance/schemas` workspace, so the build context has to contain both.
+#
+# This app is the origin. It serves the built bundle and proxies `/api` to the
+# `finance-api` app over the private network, which is what lets the refresh
+# cookie be `SameSite=Lax` and the CSP's `connect-src` be `'self'`. It is also
+# the only place the *document's* security headers can live — a
+# Content-Security-Policy on a JSON response protects nothing. See
+# `apps/web/nginx.conf.template`.
+app = "finance-web"
+# The same region as the API and the database. Every `/api` request is proxied
+# from here, so a split pays the round trip twice.
+primary_region = "gru"
+
+[build]
+  dockerfile = "apps/web/Dockerfile"
+
+[env]
+  # Where nginx sends `/api`, and how it resolves that name. The image defaults
+  # both to the compose network's shape (`http://api:4000`, Docker's DNS at
+  # 127.0.0.11, IPv6 off), so on Fly they have to be replaced together.
+  #
+  # `.flycast` rather than `.internal`: an `.internal` name resolves to the
+  # individual machines, whose addresses change on every deploy, while a
+  # flycast address belongs to the app and survives one. nginx re-resolves per
+  # request through the `valid=` above regardless, but a stable name means a
+  # deploy of the API is not also a window of 502s here.
+  API_UPSTREAM = "http://finance-api.flycast:4000"
+  # Fly's internal resolver. IPv6 — which is why the resolver's whole argument
+  # list is one variable: the image's default ends in `ipv6=off`, correct for
+  # Docker and fatal here.
+  NGINX_RESOLVER = "[fdaa::3] valid=10s"
+
+[http_service]
+  internal_port = 80
+  # The refresh cookie is `Secure` in production, so a browser will not send it
+  # over plain HTTP: a session on an http:// origin dies at the first refresh.
+  # Fly terminates TLS and this redirects anything that arrives without it.
+  force_https = true
+  # Serving the app is cheap and a cold start is felt on the first paint of
+  # every visit, so this one stays warm too.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  # No `processes` key and no `[processes]` block: this app is one command, the
+  # nginx image's own entrypoint. Naming a group here without defining one is
+  # how you get a deploy that reports success and starts nothing.
+
+  # nginx's own liveness, distinct from the API's. It returns 200 from the
+  # config itself, so it says the server is up and parsing — nothing about
+  # whether the API behind it is well, which is deliberate: this machine should
+  # not be recycled because something it proxies to is down.
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "5s"
+    method = "get"
+    path = "/healthz"
+
+# ---- After the first deploy -------------------------------------------------
+#
+# A custom domain, if this is not staying on fly.dev:
+#
+#     fly certs add finance.example.com --app finance-web
+#
+# and then change API_BASE_URL and WEB_BASE_URL in `fly/api.toml` to match, or
+# the API refuses to start — they are one origin and it checks. Both point at
+# *this* app's URL, never at the API's.

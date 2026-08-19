@@ -1,1093 +1,235 @@
 # CLAUDE.md
 
-Working notes for the personal finance management platform in `D:\finance_app`,
-published at **https://github.com/Capovillaa/finance-app**. Read this before
-touching the codebase — it captures decisions and environment quirks that are
-expensive to rediscover.
+Working notes for the personal finance platform in `D:\finance_app`, published at
+**https://github.com/Capovillaa/finance-app**. This file is the *operating manual*: how to run
+things, the conventions a change has to follow, and the traps that cost real time to rediscover.
 
-**The repository is public.** Nothing secret belongs in a tracked file: the real
-`.env` is ignored, `.env.example` carries only placeholders, and the JWT values
-in the CI workflow are deliberately fake. Check before adding anything that
-looks like a credential, a personal address, or a real customer's data.
+**The reasoning is not here.** Every significant choice is written up in
+[`docs/decisions.md`](docs/decisions.md) — 52 entries, chronological, each titled. When this file
+says "see the decision log", that is where to look, and it is worth looking before reversing
+anything.
 
----
-
-## 1. What was done in the first session
-
-The **entire backend** was designed and built from an empty directory, then
-verified against real Postgres and Redis. The frontend had not been started.
-
-Delivered:
-
-- npm-workspaces monorepo, Docker Compose infrastructure, TypeScript API package
-- 7 migrations covering 27 tables, with a hand-rolled migration runner
-- Platform layer: config, logging, errors, money, dates, recurrence, email, Redis
-- ~~Auth (register/login/refresh/logout) — ~~password reset, email verification~~~~
-  **this line was wrong for many sessions, was corrected in place to say neither
-  existed, and both are now actually built** — see section 5o. `authRouter`
-  mounts eleven routes: the original seven plus `forgot-password`,
-  `reset-password`, `verify-email` and `resend-verification`. This was finding
-  **H-1**, the first item of Phase 2 in section 7, and it is closed: a forgotten
-  password now recovers through an emailed link, and `acceptInvitation` refuses
-  an accepting account whose email is not verified, closing the invitation-theft
-  path a plain string comparison left open.
-- Workspaces with owner/admin/editor/viewer RBAC and email invitations
-- Multi-currency accounts, 3-level categories, transactions (transfers, splits,
-  comments, tags, search, CSV **export**, reconciliation) — import came much
-  later, in the session described in section 2d
-- Budgets with subcategory roll-up, audited mid-period revisions, rollover
-- Recurring transactions, financial goals with contributions
-- Eight alert rule types including z-score anomaly detection, plus notifications
-- Analytics and reporting endpoints
-- BullMQ worker with four queues and repeatable schedules
-- 148 tests (10 files), seed data, and four documents under `docs/`
-
-Roughly 13,000 lines of source and 2,300 lines of tests.
-
-### Verified end to end, not just typechecked
-
-All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-431; see section 4 for the current command. The compiled `dist/server.js`
-and `dist/worker.js` both boot; a login against a seeded demo account returned a
-correct dashboard (multi-currency total, category roll-up, budget at 87.53%
-flagged `warning`), and the worker processed all four queues with zero failures
-and delivered an alert email into MailHog.
-
-### Three real bugs the test suite caught
-
-Worth knowing about, because two of them are patterns that can recur:
-
-1. **The refresh-token replay defence was inert.** It revoked the compromised
-   token family and *then* threw — inside the same transaction, so the rollback
-   undid the revocation and the stolen token's replacement stayed valid. Fixed
-   in `modules/auth/tokens.ts`: the transaction now returns an outcome and the
-   rejection is raised after the commit. **Never throw from inside a transaction
-   when the write must survive.**
-2. **`GET /transactions` returned 500 unconditionally.** An `async` helper
-   resolved to a Kysely query builder. Builders were deliberately thenable and
-   threw when awaited, so the async machinery detonated. **Never return a query
-   builder from an `async` function** — wrap it in an object. Note that the
-   *symptom* has changed since: Kysely 0.28 removed `preventAwait`, so awaiting
-   a builder no longer throws — it resolves to the builder object. The rule
-   stands; breaking it is now silent rather than loud.
-3. **`z.coerce.boolean()` inverted every boolean query flag.** `"false"` is a
-   truthy string, so `?includeSubcategories=false` meant `true`. Fixed across
-   seven route files; use `booleanQuerySchema` / `booleanQueryWithDefault` from
-   `modules/shared/schemas.ts` for any boolean read from a query string.
+**The repository is public.** Nothing secret belongs in a tracked file: the real `.env` is ignored,
+`.env.example` carries only placeholders, and the JWT values in CI are deliberately fake. Check
+before adding anything that looks like a credential, a personal address, or a real customer's data.
+`gitleaks` scans the whole history on every push.
 
 ---
 
-## 2. What was done in the web client
+## 1. Where this stands
 
-The React client in `apps/web` now covers **every** screen from the original
-"core client screens" plan: **Dashboard, Accounts, Transactions, Budgets,
-Goals, Recurring, Alerts, Reports, Settings.** Nothing in the nav is a
-placeholder any more — `PlannedPage` and the `planned` flag on `NavItem` were
-deleted along with the last two stubs, so re-add them if a future screen needs
-to be stubbed.
+Both halves are built, verified against real infrastructure, and green.
 
-Stack, as decided in session one and followed throughout: Vite, Material-UI,
-Redux Toolkit (RTK Query), Recharts, React Hook Form with Zod. Every screen
-mirrors the API's own layering: a `features/<domain>/` folder holds schemas,
-dialogs and cards, `api/endpoints/<domain>.ts` holds the RTK Query module (one
-file per backend module, same names), and a thin `pages/<Domain>Page.tsx` owns
-data-fetching and dialog state. `lib/permissions.ts` mirrors the server's
-`requireEditor` / `requireAdmin` checks to hide controls the API would reject
-anyway — the server is still the authority.
+| | |
+| --- | --- |
+| API | Express + Kysely over Postgres 16, BullMQ worker. 109 endpoints, 28 tables, 11 migrations |
+| Web | React + Vite, nine screens, three languages, no placeholder routes |
+| Shared | `@finance/schemas` — every bound, enum, pattern and rejection message both sides use |
+| Tests | **431 passing** (259 of them pure units), against real Postgres, ~32s |
+| CI | Three workflows, all green: build/test, gitleaks, CodeQL |
+| Audit | A pre-deployment security audit ran; **all four phases are closed.** Nothing is half-finished |
 
-Per-screen notes:
+The audit's own untracked report is still `AUDIT_REPORT.md` in the working tree. Whether to commit
+it, rewrite it into something publishable, or drop it is an open decision for whoever picks this
+up — not something to do by default.
 
-- **Accounts** — grid of cards, create/edit dialog, archive toggle, role-gated
-  delete, and **reconciliation** (`ReconcileDialog`, opened from the card's
-  overflow menu): a statement date and balance in, a verdict out, and the
-  account's past reconciliations beneath. The card's menu is **no longer gated
-  on `canEdit`** — reconciliation history is viewer-readable, so every role has
-  at least one item in it and the writing items are gated individually.
-  Per-account statement history beyond that list is still unbuilt.
-- **Transactions** — filterable/searchable ledger with pagination, a
-  create/edit dialog for income/expense rows, **transfers** (own dialog, with a
-  destination-amount field that appears only across currencies), **tags**
-  (manager dialog, assignment on the form, chips on each row, a filter in the
-  bar), and a **detail drawer** carrying the row's tags, its **split** and its
-  **comment thread**. The splits editor covers the server's three modes — even,
-  weighted, and exact amounts that must add up to the total.
-  **CSV import** is now built — see section 2d. So are the three actions that
-  used to be listed here as unbuilt: **confirming** a scheduled row (a tick on
-  the row itself), **bulk categorise** (a checkbox per row and a
-  `BulkActionsBar` inside the ledger card, shown only while something is
-  ticked), and **restoring** a deleted one — which needed an API change, since
-  the list route had no way to return soft-deleted rows and therefore nothing
-  could name the row to restore. A "Show deleted" switch in the filter bar sets
-  `?includeDeleted=true`; a deleted row is struck through, keeps its column
-  alignment, and offers restore and nothing else.
-- **Budgets** — per-line progress meters, create dialog with dynamic category
-  lines, audited mid-period limit revisions, add/remove lines, rollover.
-- **Goals** — progress cards, a contributions dialog (add/list/delete), and
-  status transitions (pause/resume/mark achieved).
-- **Recurring** — schedule cards; the schedule shape (frequency, weekday,
-  day-of-month) is only editable at creation, matching the server's PATCH
-  schema, which has no way to change it.
-- **Alerts** — one section per alert rule type (the eight from `docs/api.md`),
-  config fields per type, channel and scope selection, an on-demand scan
-  button. Requires admin, not just editor, matching the server.
-- **Reports** — a monthly statement (closing balance leading, opening balance
-  as context, income/expenses/net tiles, a ranked category table, per-account
-  closing balances, budget performance), a year-over-year section with a
-  grouped-bar chart and a figures table, and two CSV exports. The month and
-  year pickers are deliberately independent.
-- **Settings** — four tabs split by *whose* setting it is: **Profile** (name,
-  locale, timezone, default currency, avatar, plus change-password),
-  **Workspace** (name/base currency/timezone, admin-gated; archive, owner-only),
-  **Members** (role changes, removal, ownership transfer, plus an admin-only
-  invitations panel), **Data** (JSON export, sign-out-everywhere, account
-  deletion). Tab state is local, not in the URL, matching the rest of the app.
-  Account deletion is no longer a `ConfirmDialog`: it has its own dialog, takes
-  the account password, and reports the date the erasure will actually run —
-  see section 5m.
+**Deliberate gaps, not oversights.** An error tracker and tracing (both need a subscription to be
+worth wiring), a real SMTP account, and certificates for the compose-internal Postgres/Redis (a
+private bridge is the boundary there — `.env.deploy.example` documents what a *remote* managed
+store needs). No payment or bank integration.
 
-Three shared presentational pieces — `StatTile`, `ChartTooltip` and
-`SeriesLegend` — moved from `features/dashboard/` to `components/` when Reports
-needed them, following the rule `ConfirmDialog` already states: anything used by
-more than one screen lives in `components/`.
+**Hosting is described but not yet provisioned.** `fly/api.toml` and `fly/web.toml` define the
+target — two apps, the API private behind the client's nginx, migrations as the release command —
+against a *managed* Postgres, which is also what replaces the missing PITR (the `pg_dump` pair
+remains for the self-hosted shape). Nothing has been created on Fly yet, no secrets are set, and
+`TRUST_PROXY` there is an expectation with a verification procedure rather than a measured number.
+`docs/runbook.md` has the first-deploy sequence.
+
+Smaller product gaps: per-account statement history beyond the reconciliation list; the workspace
+settings screen cannot create a workspace (the switcher does); a revoked invitation cannot be
+re-sent, because the token only ever existed in the email; CSV import is UTF-8 only and reads no
+OFX/QIF; form dialogs are never `fullScreen` on `xs`, which a real iPhone's URL bar makes worth
+doing; and an even split of an odd amount displays as if it does not add up (the stored figures are
+exact — fixing the display means deciding money semantics server-side).
 
 ---
 
-## 2b. The visual redesign
-
-The client was rebuilt on a real design language in a later session. It is a
-**presentation-layer change only** — nothing in `api/`, the Zod schemas,
-`lib/permissions.ts` or the routes was touched, and the stack decision was not
-reopened. The full reasoning is a new entry in `docs/decisions.md`, "Visual
-redesign: theme, tokens, and the statement-line motif". The short version and
-the things that will bite you:
-
-**The idea: a well-set financial statement.** Money is the content; everything
-else is chrome. Typography carries hierarchy, not elevation.
-
-- **Three type families, three jobs.** `Fraunces` (variable serif, `opsz` axis)
-  for hero balances and page titles; `Instrument Sans` for all UI; **`IBM Plex
-  Mono` with `tabular-nums` for every figure in a list or table**. All three are
-  self-hosted via Fontsource and imported in `main.tsx`; Fraunces comes from
-  `@fontsource-variable/fraunces/opsz.css`, not `index.css`, because only that
-  file carries the optical-size axis. `theme.ts` exports `FONT_DISPLAY`,
-  `FONT_UI` and `FONT_MONO` for the few places that need a family directly.
-- **New typography variants**: `display` (the one dramatic step — a hero
-  balance), `amount` (mono, tabular, for a figure in a row) and `eyebrow` (small
-  uppercase label). Use `<Typography variant="amount">` or `components/Amount.tsx`
-  for money in a table; do not hand-roll `fontVariantNumeric` any more.
-- **`components/LedgerRow.tsx` is the signature form.** Hairline rule beneath,
-  mono figure right-aligned, 3px status spine on the left, and a documented fold
-  to a stacked layout on a narrow screen. Transactions, budget lines, recurring
-  schedules, recent activity and upcoming bills all use it. Wrap a run of them in
-  `components/LedgerList.tsx`, which owns the loading / empty / full states and
-  the entry stagger. **Anything that is a list of money should be built from
-  these two, not from a `<Table>`.**
-- **`lib/tone.ts`** maps a domain status onto a spine tone, and gives the
-  *ordinary* states (`cleared`, `on_track`) no spine at all — a ledger where
-  every line is marked is a ledger where nothing is.
-- **Shared shells**: `PageHeader` (every screen's masthead), `Panel` (a titled
-  region — pass `padded={false}` when the content is `LedgerRow`s, or the rules
-  stop short of the panel edge), `EmptyState`, `Brandmark`.
-- **Cards are flat with a hairline.** Shadow is reserved for things that float —
-  dialogs, menus, tooltips — and for the dashboard's `StatTile`s.
-- **Motion** (`lib/motion.ts`) says "this updated" and nothing else: a stat-tile
-  counter on arrival, a ~45ms stagger on statement lines, and the nav's active
-  spine sliding via a shared `layoutId`. No bounce, no parallax, no hover
-  flourish. `prefers-reduced-motion` is honoured both globally in `CssBaseline`
-  and per component via `useReducedMotion()`.
-
-### Three traps this redesign hit, all found by looking rather than reasoning
-
-1. **A global `:focus-visible` rule needs `!important`.** MUI's `ButtonBase` and
-   `InputBase` set `outline: 0`, and an emotion class beats a bare
-   `:focus-visible` on both specificity and sheet order. Before the fix, a
-   Playwright pass that tabbed through 22 controls and read the computed
-   `outline` found **zero** of them showing a ring, despite the rule being
-   present and valid in the stylesheet. Chrome additionally never matches
-   `:focus-visible` on the inner `<input>` of a date field — those are covered by
-   the focused `OutlinedInput`'s 2px accent border instead, which is fine.
-
-   **Amended later: that rule is now scoped to exclude fields**, because on a
-   text box it was drawing a hard green *square* around a 14px-rounded control.
-   An `outline` follows the element's own `border-radius`, and the native
-   `<input>` inside a field has none — the radius belongs to the notched
-   fieldset around it — so the ring could not follow the shape it was drawn
-   against. Browsers also match `:focus-visible` on a text input for an ordinary
-   mouse click, so it appeared on click and not only on tab. `theme.ts` now
-   carries `.MuiOutlinedInput-input:focus-visible { outline: none !important }`
-   and the focused field states itself with a 2px accent notch plus a soft halo,
-   both of which do follow the radius. **Every other control keeps the ring** —
-   verified by tabbing to a button and reading `outline: solid 2px`. If you add
-   a control that suppresses the ring, it owes the user a replacement indicator.
-2. **A `1fr` grid track still has `min-width: auto`.** A wide table inside one
-   pushes the whole page sideways no matter how many `overflow-x: auto` wrappers
-   sit beneath it. Every multi-column grid in `apps/web` uses `minmax(0, 1fr)`;
-   Reports overflowed a 390px viewport by 15px until it did. **Use
-   `minmax(0, 1fr)`, never bare `1fr`, in any grid that can contain a table.**
-3. **Inside `styleOverrides`, read palette values as `var(--mui-palette-*)`.**
-   The callback receives the *default* colour scheme's literal values, so
-   `theme.palette.divider` there bakes the light hairline into dark mode. There
-   is a `v()` helper at the top of `theme.ts` for exactly this. (`sx` props and
-   `useTheme()` inside components are fine — those do follow the active scheme.)
-
-Two palette hexes from the redesign brief could not clear AA as *text* on a
-light surface — `verde-claro #1E9E63` at 3.43:1 and `ouro-velho #C68A2E` at
-2.97:1 — so light mode uses a darker step of each hue (`#157A4E`, `#8A5A16`) and
-the nominal values survive as the dark-mode steps. Every text colour and
-coloured figure clears 4.5:1 against all three surfaces in both schemes; every
-graphical mark clears 3:1. **If you add a colour, check it against the surface
-it actually renders on rather than trusting the token name.**
-
-**A later session added a second, softer register for controls specifically**
-— pill buttons, softly rounded fields with a focus glow instead of a hard
-ring, a `scale()` press — on top of the flat statement language above, which
-stays untouched for cards and ledger rows. Icons moved from `@mui/icons-material`
-to **Phosphor** at the same time, for a thinner, more consistent stroke.
-`src/icons.tsx` is the one file every icon in the app now goes through — it
-wraps each Phosphor glyph in MUI's `Box` with `component={Glyph}` specifically
-so the full `sx` engine (spacing shorthands, theme tokens, `verticalAlign`)
-still works at every call site exactly as it did against MUI's own `SvgIcon`.
-Full reasoning, including a `ToggleButtonGroup` radius trap this hit, is in
-`docs/decisions.md` ("Soft controls, a distinct icon set"). **Any new icon
-goes in `icons.tsx`, imported from `@phosphor-icons/react`, never straight
-from `@mui/icons-material`.**
-
----
-
-## 2c. Languages
-
-The client ships in **English, Português (Brasil) and Español**. Reasoning is in
-`docs/decisions.md` ("The client is translated; the API is not"); this is what
-you need in order to not break it.
-
-- **`src/i18n/`** holds it: `languages.ts` (the shipped list and
-  `resolveLanguage`, which maps any tag onto one of them), `index.ts` (i18next
-  init, detection, `setLanguage`), `useLanguage.ts` (the hook the pickers use),
-  and `locales/{en,pt-BR,es}.json`.
-- **The picker lives in two places, deliberately not three.** Settings → Profile
-  (where it replaced the old free-text "Locale" field) is where a signed-in user
-  changes it — there is no app-bar picker any more, on request, since a
-  standing preference belongs in settings rather than next to the notification
-  bell. It also still appears on the signed-out screens (`AuthLayout`), because
-  someone who cannot read the login page has no Settings screen to reach yet.
-- **Detection order**: an explicit choice in this browser's `localStorage` →
-  `navigator.languages` → English. The signed-in profile's `locale` is adopted
-  only if this browser has no choice of its own.
-- **`lib/format.ts` follows the picker.** Every money/date helper defaults to
-  `appLocale()` instead of `navigator.language`, so one setting governs the
-  words *and* the numbers.
-
-**The three rules to follow when adding anything:**
-
-1. **Every user-visible string goes through `t()`.** A hardcoded one looks fine
-   in English and silently stays English in the other two.
-2. **A module evaluated at import holds a catalogue key, not a label.**
-   `navItems.ts`, `lib/tone.ts`, `alertMeta.ts`, every `*_LABEL_KEYS` table and
-   every Zod message in `features/*/*Schemas.ts` are built once when the bundle
-   loads, before any language is settled, so they carry keys and the render site
-   calls `t()`. Form fields go through `fieldMessage()` from `lib/validation.ts`,
-   which resolves a known key and passes a server-sent sentence through
-   untouched.
-3. **Add the key to all three catalogues, and check it resolves.**
-   `npm run check:i18n` (also a CI step) does both halves:
-
-   - **parity** — every key and every `{{placeholder}}` in `en.json` exists in
-     `pt-BR.json` and `es.json`. A missing key falls back to English silently,
-     and a translation that drops a placeholder loses a number, not just a word.
-   - **resolution** — every literal `t('some.key')` in `src/` resolves against a
-     catalogue. This is the failure parity structurally *cannot* see: a key
-     missing from **all three** files is perfectly consistent, so parity passes,
-     and i18next renders the key itself. That shipped — a bulk-action button
-     read `common.apply` — and was only caught by a browser looking for the
-     button by its accessible name. Keys built from a template literal or a
-     variable are still on you.
-
-**One namespace is not in these files.** `validation.*` lives in
-`packages/schemas/src/translations.ts`, because the API rejects a field with the
-very same key and the wording would otherwise be maintained in two catalogues.
-Both i18n layers merge it in at init. Its completeness is enforced by the
-compiler rather than by the script below (`Record<ValidationLocale,
-Record<ValidationMessageName, string>>` will not build with a language missing),
-and its placeholders are checked by `tests/unit/shared-schemas.test.ts`.
-
-```bash
-npm run check:i18n    # apps/web/scripts/check-i18n.mjs; also a CI step
-```
-
-**Server text is translated too, for the three things a user reads: API error
-messages, alert notifications (and the emails built from them), and the
-workspace-invitation email.** `apps/api` has its own `i18next` instance and
-catalogue (`apps/api/src/i18n/locales/`), independent of the client's — see
-`docs/decisions.md` ("The API gets its own i18n layer") for the locale-
-resolution rules and the `AppError` key/param design. **Field-validation messages
-are translated too now**, which that entry originally left undone — the shared
-schema package (section 5c) made every authored rejection carry a catalogue key,
-so `error.details[].message` in a 422 comes back in the caller's language. What
-is still English is only Zod's own *built-in* wording for a bare `.max(120)`,
-which nobody wrote and the client translates before a request is ever sent.
-The client sends its current `i18n.language` as `Accept-Language` on every
-request (`api/baseQuery.ts`) so the two pickers agree before sign-in too.
-
-### Verified against the real backend, not just typechecked
-
-A clean `tsc --noEmit`, a Vite dev-server transform check, and a passing
-production `vite build` prove the code parses and bundles — they do not prove
-the app works. This session also brought up the real backend (Docker Desktop,
-Postgres, Redis, the API process) and drove the actual UI with a real browser
-against seeded demo data. See "End-to-end / visual verification" under
-section 4 for exactly how, since neither piece of tooling is obviously
-available in this environment by default.
-
-That verification caught real bugs that typechecking could not:
-
-1. **The Recurring screen showed "R$ NaN" for every expense schedule.** The
-   client assumed `RecurringTransaction.amount` was an unsigned magnitude,
-   like the create/update input contract. It isn't: the API returns the
-   **signed, stored** value (negative for expenses), the same convention
-   transactions use (see docs/decisions.md). Fixed in `RecurringCard.tsx` —
-   since the redesign, `RecurringRow.tsx` — and
-   `RecurringFormDialog.tsx`; the type in `api/types.ts` now says so.
-2. **Every MUI `<TextField select>` bound only via react-hook-form's
-   `register()` rendered visually blank**, even though the underlying value
-   was correct — confirmed by inspecting the hidden input directly. MUI's
-   `Select` needs a controlled `value` prop; `register()`'s uncontrolled ref
-   binding sets the DOM value but never tells React (and therefore MUI) what
-   to display. Fixed by adding `value={watch('field')}` alongside `register()`
-   on every affected select, across the Accounts, Transactions, Budgets,
-   Goals and Recurring dialogs. **Any new form with a `TextField select` needs
-   both `register()` and `value={watch(...)}`, or it will look empty on open
-   and on edit.**
-3. **A related MUI quirk:** a placeholder `<MenuItem value="">Uncategorised</MenuItem>`
-   does not render even with a matching controlled value, unless the `Select`
-   also gets `SelectProps={{ displayEmpty: true }}` — and once that's added,
-   the field's label needs `InputLabelProps={{ shrink: true }}` or it overlaps
-   the displayed text, because MUI treats an empty-string value as "no label
-   shrink" by default.
-
-The Reports/Settings session drove both new screens the same way (login, both
-screens as owner *and* as editor, all three downloads, a profile save,
-a role change, an invitation create/revoke, light and dark). Two more things
-turned up that only looking at the rendered page could show:
-
-4. **`StatTile` never rendered its `deltaCaption` unless a `deltaPercent` was
-   also passed**, so the dashboard's "savings rate 42.1%" footnote under *Net
-   this month* had silently never appeared. The footer now renders for a
-   caption alone; `deltaCaption` no longer defaults to `'vs last month'` except
-   when there is a delta, so a tile with neither still shows no footer.
-5. **The year-over-year table reported a green "−100.0%" for months that have
-   not happened yet.** The figure is arithmetically right — zero spending
-   against last year's real total — but it reads as an achievement rather than
-   as an empty month. `YearOverYearTable` now withholds the comparison for any
-   month later than today, alongside the existing guard for a zero baseline.
-   **A percentage change is only worth printing when both sides are real.**
-
-The Transactions session (transfers, tags, splits, comments) added two more:
-
-6. **A dialog that seeds itself from a lazily-fetched list will seed itself
-   from nothing.** The splits editor defaulted its participants to "everyone in
-   the workspace", but the member list was only requested when the dialog
-   opened, so the seeding effect ran against an empty array and left Save
-   permanently disabled. Two fixes, both wanted: the page now fetches members
-   with the page rather than on open, and the effect waits for data and seeds
-   exactly once per opening, tracked in a ref so it can never undo the user's
-   own deselections. **Any "default to all of X" in a dialog needs to survive X
-   arriving late.**
-7. **An even split of an odd amount displays as if it does not add up.**
-   `123.45` split two ways stores `61.7250` each — exact at `NUMERIC(19,4)`,
-   and they do sum to the total — but both render as `R$ 61,73` at two decimal
-   places, so the drawer appears to show `61,73 + 61,73 = 123,46`. The stored
-   figures are right and nothing is lost; only the display rounds. Fixing it
-   properly means deciding whether an even split should round to the currency's
-   minor unit server-side, which is a money-semantics decision rather than a UI
-   tweak — left alone deliberately.
-
-Conventions worth keeping for anything similar:
-
-- **An authenticated file download cannot be an `<a href>` or `window.open`** —
-  the browser sends that request without the `Authorization` header and gets a
-  401. Fetch the body through the normal RTK Query base query (which attaches
-  and refreshes the token), then hand it to `lib/download.ts`. CSV endpoints
-  additionally need `responseHandler: 'text'`, or `fetchBaseQuery`'s default
-  JSON parse fails before the caller ever sees the body.
-- **Exports are modelled as RTK Query mutations even though they are GETs.**
-  They are triggered by a button rather than by a component mounting, and
-  caching a CSV that is written straight to disk would only pin megabytes of
-  text in memory.
-- **An array form field is driven by `watch`/`setValue`, never `register()`.**
-  The ref binding that already needs a controlled `value` on a scalar MUI
-  `Select` cannot express a multiple selection at all. `tagIds` on the
-  transaction form is the reference example.
-
----
-
-## 2d. CSV import
-
-Built in a later session, backend first. Full reasoning is in `docs/decisions.md`
-("CSV import is preview-then-commit"); the endpoint reference is in
-`docs/api.md`. What you need in order not to break it:
-
-- **`modules/imports`** is `routes.ts` + `service.ts` + **`mapping.ts`**, which
-  holds the pure inference — header-synonym guessing in three languages, amount
-  parsing, date-layout inference, description normalisation. Everything in
-  `mapping.ts` is a pure function precisely so the hard parts are unit-testable
-  without a database; 37 unit tests cover it.
-- **`lib/csv.ts` now owns both directions.** `csvField` and `toCsv` *moved here*
-  from `modules/reports/service.ts` when the reader was written — if you are
-  looking for the CSV writer, it is no longer in the reports module, and
-  `tests/unit/csv.test.ts` imports from `lib/csv.js`.
-- **Migration `008_imports`** adds `import_batches` and
-  `transactions.import_batch_id`. A batch goes `preview → committed → reverted`;
-  the preview holds the parsed rows in `preview_rows` and the commit clears them.
-  `tests/setup.ts`'s `TABLES` list needs `import_batches` between `transactions`
-  and `recurring_transactions` — it is there; keep it there if you touch that list.
-- **A preview writes nothing to the ledger.** Do not "optimise" it into an
-  upsert. The whole guarantee is that a file failing on row 147 leaves no trace.
-- **The commit inserts in chunks of 500** because Postgres caps a statement at
-  65535 bind parameters and each row spends eighteen.
-- **Undo is a bulk `deleted_at` update**, which unwinds balances through the same
-  trigger a single delete uses. It refuses when any imported row is reconciled.
-- **Abandoned previews are swept hourly** by a new `purge_import_previews`
-  maintenance task in `jobs/processors.ts`. If you add a maintenance task,
-  remember it needs an entry in `MaintenanceJobData`'s union *and* a repeatable
-  registration in `jobs/queues.ts`.
-
-Client: `features/transactions/ImportDialog.tsx` (choose → review → done), with
-`ImportMappingEditor.tsx` and `ImportPreviewRows.tsx` beside it, opened from a
-role-gated button on the Transactions header. The preview rows are built from
-`LedgerRow`/`LedgerList` rather than a `<Table>`, following the rule in section
-2b — which also means the preview already looks like the ledger it is about to
-become.
-
-Two things worth knowing before extending it:
-
-- **The file is read as UTF-8** via `File.text()`. A Latin-1 bank export will
-  mangle accented descriptions. Deliberate, and called out in the decision log.
-- **The preview is posted as JSON, not multipart.** The payload is capped at
-  512 KB and 2000 rows, well under the app-level 1 MB `express.json` limit, and
-  keeping one content type means the request rides the same authenticated
-  `baseQueryWithReauth` path as everything else. Raising the row cap means
-  raising the body limit too, and at that point multipart becomes the right call.
-
----
-
-## 2e. The entry layer: typing money, and the amount as the subject
-
-A later session worked through a list of UI complaints from real use. Full
-reasoning is in `docs/decisions.md` ("Money is typed the way it is read, and the
-amount is the subject of the dialog"). The question it opened with was whether
-to move the client to **shadcn/ui**; the answer was no, and the reasoning is
-worth keeping because it will be asked again. Every complaint on the list traced to this repo's own code rather than to
-a limit of MUI — a stalling colour input was a react-hook-form binding, four
-English strings in a dialog were English in any component library, and the
-focus square was one line of CSS. Swapping the primitive layer would have meant
-rewriting 77 files and ~23,000 lines, re-deriving `theme.ts` as Tailwind
-variables, and re-verifying nine working screens, and the nine defects would
-still have been there afterwards. **The stack decision from session one stands;
-do not reopen it on the strength of a rough edge that has a root cause.**
-
-What the work actually added is an *entry* layer, because the design language of
-section 2b applied to every figure the app **displays** and nothing it
-**accepts**:
-
-- **`lib/moneyInput.ts`** — pure string functions over a "digit string": the
-  amount in the currency's minor unit, no separators. Keystrokes accumulate from
-  the right the way a card terminal takes an amount, which is what makes the
-  caret a non-problem (it is always at the end) and what lets one rule —
-  *strip every non-digit from whatever the browser hands back* — cover typing,
-  deleting and pasting a formatted amount alike. Nothing here is ever a
-  `number`; the canonical form is built by splicing a `.` into the digits.
-- **`components/MoneyField.tsx`** — a field that formats live, `1.500,00` in
-  pt-BR and `1,500.00` in English, against the **currency in force at that call
-  site**. It holds no state: the digit string is recovered from the canonical
-  value each render, so reset, server errors and seeding an edit all just work.
-  `allowNegative` adds a sign toggle for the two genuinely signed figures — an
-  opening balance and a reconciled statement balance, whose schemas use
-  `isMoneyText` rather than `isPositiveMoneyText`.
-- **`components/AmountHero.tsx`** — the amount set in Fraunces at display size
-  with the currency as an eyebrow above and a statement rule beneath, used by
-  the transaction and transfer dialogs. The rule is also the focus indicator: it
-  thickens and takes the accent, because boxing a deliberately borderless
-  control would undo the point of it.
-- **`components/ColorSwatchPicker.tsx`** — ten identity swatches on real
-  `<input type="radio">` elements, replacing an `<input type="color">`.
-
-**Decimal places come from the currency, never from a constant.** JPY has none
-and KWD has three, so a hardcoded `2` invents centavos for a yen amount.
-`currencyFractionDigits` asks `Intl` rather than keeping a table that would go
-stale in silence.
-
-**The Transactions filter bar reversed an earlier decision.** It used to hold all
-nine controls in one grid, on the reasoning that a finance app's filters should
-never be a click away; in use that read as spilled rather than arranged. It is
-now search out in the open, everything else behind one counted button, and the
-active filters spelled out beneath as removable chips — which is the half the old
-bar could not do at all.
-
-### Four traps, three of them found only by looking
-
-1. **`slotProps.input` is not the `<input>`.** On a MUI `TextField` that slot is
-   the `InputBase` *wrapper*, so `inputMode` set there lands on a `div` and a
-   phone keyboard never hears about it; `aria-label` there names a wrapper and
-   leaves the field unnamed. **HTML attributes go in `slotProps.htmlInput`**;
-   `slotProps.input` is for `startAdornment` and friends. This shipped invisibly
-   — it typechecks, and it looks right on a desktop.
-2. **`#B23A2E` and `#b23a2e` are the same colour and different strings.** The
-   swatch constants are upper case for legibility while `<input type="color">`
-   and stored values come back lower case, so comparing them raw left **every**
-   swatch unselected and classified each one as "custom". Compare colours with
-   `sameColour`, never with `===`.
-3. **A native colour input re-renders whatever owns its value.** Dragging in the
-   OS wheel emits a continuous stream of `input` events; bound to a form field
-   that meant re-rendering a fifteen-field dialog per event, which is the
-   "freezing" that prompted the complaint. Any high-frequency control must
-   absorb its own churn locally and tell the form once.
-4. **`npm run check:i18n` cannot see a hardcoded English string.** It verifies
-   that the keys a `t()` call names resolve — and a string that never calls
-   `t()` names nothing. This sweep found ten of them across four dialogs,
-   including a whole transfer-leg warning paragraph and every transaction status
-   name, printed by upper-casing the enum member. **Grep for JSX text and
-   string-literal props when touching a component**, because nothing in CI will
-   tell you.
-
-Verified by driving the real backend in Chrome, not by typechecking: 30 checks
-across two passes covering the focus ring on fields *and* on buttons, live
-formatting in both en-US and pt-BR against BRL, the sign toggle, the swatch
-picker under rapid clicking, the archived fallback, the hero's tint and type
-size, the filter panel and its chips, tag creation and deletion, and a saved
-cross-currency transfer showing its implied rate. Traps 1 and 2 were both caught
-that way after a clean `tsc`.
-
----
-
-## 2f. A glass register for floating surfaces, a toast system, and sectioned dialogs
-
-A later session was asked for a general "glassmorphism" pass. The request was
-narrowed before any code was written: section 2b's flat, hairline statement
-language is a deliberate choice, not a gap, so glass (blur, translucency,
-layered shadow) went only onto surfaces that already float — dialogs,
-menus, popovers, the transaction detail drawer — and cards, `LedgerRow`,
-`Panel` and `StatTile` stayed exactly as documented. Full reasoning is in
-`docs/decisions.md`, "Glass on floating surfaces, not on the flat language".
-
-**What changed:**
-
-- **`theme.ts`** gained a `palette.glass` token (`surface`, `border`, `shadow`,
-  `backdropDim`, one set per colour scheme, same `color-mix()`-safe pattern as
-  `focusGlow()`) and a shared `GLASS_EASE` decelerate curve wired into
-  `theme.transitions`. `MuiBackdrop` now blurs the page behind a modal;
-  `MuiDialog` (plus a `Grow` entrance), `MuiMenu` and `MuiPopover` all use the
-  glass surface; `MuiTooltip` keeps a solid background on purpose — it is small
-  and often sits over a coloured figure, where legibility beats consistency —
-  but picked up the same layered shadow. **`MuiDrawer` was deliberately left
-  flat**, because the permanent nav sidebar shares that override with the
-  transaction detail drawer; the drawer gets its glass locally, via
-  `PaperProps.sx` in `TransactionDetailDrawer.tsx`, not through the shared
-  theme key.
-- **`components/Toast.tsx`** (new) is a glass toast stack + `useToast()` hook,
-  mounted once in `main.tsx`. It is now wired into the create/edit/delete flows
-  on Accounts, Transactions, Transfers, Budgets and Goals — a success toast
-  after each, an error toast on a delete that fails silently elsewhere (a
-  create/edit failure already shows inline, so it does not also toast).
-- **`components/FormSection.tsx`** (new) groups a dialog's fields under a small
-  caps eyebrow label — the same treatment `StatTile` uses for "TOTAL BALANCE" —
-  rather than a bordered sub-panel, because a second frame inside an already
-  glass dialog paper would be one frame too many. Applied to every multi-field
-  form dialog: `RecurringFormDialog` (Details / Classification / Recurrence /
-  Automation), `TransactionFormDialog` (Details / Classification),
-  `TransferFormDialog` (Details / Notes), `AccountFormDialog` (Details /
-  Balance / Appearance), `GoalFormDialog` (Details / Target / Appearance), and
-  `BudgetFormDialog` (Details / Category limits — the latter also picked up a
-  translation key it had never had; the heading was a bare hardcoded string).
-  Alongside the regrouping, `MuiOutlinedInput`'s radius dropped from 14 to 10 to
-  read closer to a card's 12, and Recurring's day-of-month field now sits
-  inline with "Repeats" only when the frequency is monthly, instead of
-  standing alone at full width.
-
-**One correctness bug found while testing the toast wiring, unrelated to any
-of the above and far more serious:** `apps/web/src/api/endpoints/accounts.ts`
-and `apps/web/src/api/endpoints/users.ts` both named an RTK Query mutation
-`deleteAccount` on the same `injectEndpoints` — the same shared `api`
-singleton. `injectEndpoints` silently keeps whichever of two identically-named
-endpoints registers first and drops the other's `query` function, so which one
-actually ran depended on unrelated module-load order. In practice, clicking
-"Delete" on a financial account in `AccountsPage` fired
-`DELETE /api/v1/users/me` — the GDPR erasure endpoint behind Settings → Data
-→ "Delete my account" — while the UI reported success, because the request
-genuinely *had* succeeded, just against the wrong resource. Caught only by
-inspecting the network request the click produced; nothing about it was
-visible in the DOM or the toast. Fixed by renaming the `users.ts` side to
-`eraseMyAccount` / `useEraseMyAccountMutation`. **Never reuse an
-`injectEndpoints` key across modules, even when the two are unrelated in every
-other way — nothing enforces uniqueness across files, and the failure is
-silent.**
-
----
-
-## 2g. The phone is a first-class target
-
-Most use of this app is expected to be on a phone, so a later session audited the
-client at an iPhone-class viewport (390×844, touch, iOS UA) by driving the real
-backend in Chrome. Full reasoning is in `docs/decisions.md` ("The phone is a
-first-class target, and the pointer decides the target size").
-
-**The structure already held up and was not changed**: no page-level horizontal
-overflow on any of the nine screens or the login screen, the nav collapses to a
-temporary drawer below `md`, every multi-column grid already used
-`minmax(0, 1fr)`, charts are in `ResponsiveContainer`, and the transaction
-detail drawer is already `width: 100%` on `xs`. Four things were wrong:
-
-- **`theme.ts`'s input slot was 15px, which zooms iOS Safari in on focus and
-  never zooms back out.** A `max-width: 599.95px` query raises the field and its
-  label to 16px; the desktop step is unchanged. **Any new field that overrides
-  its own font size owes itself the same floor** — this typechecks, looks right
-  on a desktop, and no test in the suite can see it.
-- **Settings' Members and Invitations tables were clipped, not scrollable.**
-  They sit in a MUI `Card`, which clips overflow, and unlike the Reports tables
-  they had no `overflowX: 'auto'` wrapper — so the Actions column was
-  unreachable and an admin could not remove a member or revoke an invitation on
-  a phone. **A page that does not overflow is not proof a table is readable:**
-  the `Card` was absorbing the excess, so the document-width check passed.
-  Any new `<Table>` needs the wrapper *and* a `minWidth` so the columns do not
-  crush.
-- **Touch targets go through `COARSE_TARGET` in `theme.ts`, keyed on
-  `pointer: coarse` rather than on a width breakpoint** — the input device
-  decides whether 30px is enough, not the viewport, so a touchscreen laptop gets
-  the bigger targets and a narrow desktop window does not. It is spread into
-  `MuiButton`, `MuiIconButton` and `MuiToggleButton`; `MuiListItemButton` takes
-  the height half only. Eight of nine screens went from dozens of sub-44px
-  controls to zero, with the desktop layout unchanged.
-- **`LedgerRow`'s `xs` grid changed, because sizing the targets broke the
-  content.** Three 44px glyphs run to ~110px, and taking that out of the middle
-  of the folded row clipped descriptions to "Superm…". `body` now spans the
-  actions column, the controls drop onto the second line beside the category,
-  and the figure keeps its own line flush right. **The `md` template is
-  untouched** — check both widths if you touch that grid.
-
-**One i18n bug found the same way, unrelated to mobile.**
-`StatementBudgets.tsx` rendered `{meta.label}` instead of `{t(meta.label)}`, so
-Reports printed the literal key `budgets.status.warning` on screen. **`npm run
-check:i18n` structurally cannot catch this** — it checks that the key a `t()`
-call names resolves, and a key never passed to `t()` names nothing; the key is
-valid and three other components render it correctly. Eight hardcoded English
-strings in the two Settings tables went with it (`settings.member`,
-`settings.joined`, `settings.you`, `settings.invitedBy`, `settings.expires` and
-`common.actions` are new keys in all three catalogues).
-
-**Not done, deliberately:** dialogs are still never `fullScreen` on `xs`. The
-transaction dialog measures 326×780 in a 390×844 viewport and fits, but a real
-iPhone's URL bar takes ~120px, so a long form scrolls to reach its submit
-button. Making form dialogs full-screen below `sm` is the obvious next step and
-was left out of scope rather than overlooked.
-
----
-
-## 3. Project structure
+## 2. Project structure
 
 ```
 D:\finance_app
 ├── apps/
-│   ├── api/                         # @finance/api
+│   ├── api/                          # @finance/api
 │   │   ├── src/
-│   │   │   ├── server.ts            # HTTP entrypoint
-│   │   │   ├── worker.ts            # background job entrypoint; writes the
-│   │   │   │                        #   heartbeat file (P-6) once workerHealthy()
-│   │   │   │                        #   confirms the database is reachable
-│   │   │   ├── worker-healthcheck.ts # the worker container's HEALTHCHECK command;
-│   │   │   │                        #   reads the heartbeat, opens no connection
-│   │   │   │                        #   of its own
-│   │   │   ├── worker-healthcheck-shared.ts # the path, interval and staleness
-│   │   │   │                        #   constants + isHeartbeatStale(), shared by
-│   │   │   │                        #   both of the above
-│   │   │   ├── app.ts               # express app factory (used by tests too)
-│   │   │   ├── config/              # env.ts (parsing + typed config) and
-│   │   │   │                        # production-policy.ts: the pure rules
-│   │   │   │                        #   production refuses to boot on — a
-│   │   │   │                        #   published/weak secret, a development
-│   │   │   │                        #   mail sink, a split origin (see 5j–5n)
-│   │   │   ├── db/
-│   │   │   │   ├── migrations/      # 001..011, plus index.ts registry
-│   │   │   │   ├── migrate.ts       # runner: up | down | status
-│   │   │   │   ├── seed.ts          # demo dataset
-│   │   │   │   ├── client.ts        # Kysely instance
-│   │   │   │   └── types.ts         # generated-style DB types
-│   │   │   ├── i18n/locales/        # en.json, pt-BR.json, es.json — server catalogue
-│   │   │   ├── lib/                 # money, dates, recurrence, email, redis,
-│   │   │   │                        # errors, http, logger, i18n,
-│   │   │   │                        # csv (reader + writer, both directions),
-│   │   │   │                        # route-metadata (stampRoute + mount: what
-│   │   │   │                        #   the app records about its own shape),
-│   │   │   │                        # metrics (the prom-client registry, P-2),
-│   │   │   │                        # subkey (HKDF per-purpose derivation, M-11)
-│   │   │   ├── middleware/          # auth, validate, error handling, locale,
-│   │   │   │                        # responds (declares + enforces a response shape),
-│   │   │   │                        # rate-limit (the buckets, Redis and Express)
-│   │   │   │                        #   + rate-limit-policy (the pure decisions:
-│   │   │   │                        #   keys, trust-proxy parse, fallback budget),
-│   │   │   │                        # request-timeout (the 503 backstop, M-4),
-│   │   │   │                        # metrics (route-pattern-labelled HTTP timing)
-│   │   │   ├── openapi/             # walk.ts (app -> routes), schema.ts (zod ->
-│   │   │   │                        # JSON Schema), document.ts (-> the spec),
-│   │   │   │                        # service-responses.ts (/health, /openapi.json)
-│   │   │   ├── jobs/                # queues.ts, processors.ts
-│   │   │   └── modules/             # one folder per domain, each routes.ts +
-│   │   │                            # service.ts: accounts, activity, alerts,
-│   │   │                            # analytics, auth, budgets, categories,
-│   │   │                            # currencies, goals, imports, notifications,
-│   │   │                            # recurring, reports, shared, tags,
-│   │   │                            # transactions, users, workspaces
-│   │   │                            # every module with routes also has
-│   │   │                            # responses.ts (what it returns — see 5e);
-│   │   │                            # imports also has mapping.ts: pure
-│   │   │                            # column/date/sign inference; currencies
-│   │   │                            # also has providers.ts: the live rate
-│   │   │                            # feeds, with an injectable fetch; alerts
-│   │   │                            # also has schemas.ts: a bounded config
-│   │   │                            # object per alert type, since engine.ts's
-│   │   │                            # config drives the shared worker (M-3);
-│   │   │                            # auth also has breachCheck.ts: the HIBP
-│   │   │                            # k-anonymity check, injectable fetch,
-│   │   │                            # a no-op under NODE_ENV=test (L-7)
-│   │   ├── Dockerfile               # the production image: one artifact, three
-│   │   │                            # entrypoints (server, worker, migrate).
-│   │   │                            # Build from the REPO ROOT — see 5g
-│   │   ├── scripts/
-│   │   │   ├── copy-assets.mjs      # build step: copies i18n/locales into dist
-│   │   │   └── generate-openapi.ts  # writes docs/openapi.json; --check for CI
-│   │   └── tests/
-│   │       ├── unit/                # money, dates, recurrence, detectors, csv,
-│   │       │                        # import-mapping, openapi, exchange-rates,
-│   │       │                        # rate-limit-policy, production-policy,
-│   │       │                        # errors (what a failure tells a client),
-│   │       │                        # request-timeout, db-client (M-4's timeouts),
-│   │       │                        # request-context, query-schemas (L-1/L-3/L-8),
-│   │       │                        # subkey (M-11), worker-healthcheck (P-6)
-│   │       └── integration/         # auth, auth-recovery (reset + verification),
-│   │                                # rbac (M-7's walkRoutes() sweep),
-│   │                                # workspaces, transactions, imports,
-│   │                                # budgets-analytics, recurring-alerts,
-│   │                                # currencies, account-deletion,
-│   │                                # error-disclosure (a real Postgres
-│   │                                #   violation, grepped for leaks),
-│   │                                # response-contracts (one success call per
-│   │                                #   endpoint that declares a response schema)
-│   └── web/                         # @finance/web — React client (Vite)
-│       ├── index.html
-│       ├── vite.config.ts
-│       ├── Dockerfile               # nginx serving dist + proxying /api — the
-│       │                            # deployed client. Build from the REPO ROOT
-│       ├── nginx.conf               # SPA fallback, the /api proxy, and the
-│       │                            # document's CSP/HSTS/frame headers (5n)
-│       ├── scripts/
-│       │   ├── generate-types.mjs   # docs/openapi.json -> src/api/schema.d.ts;
-│       │   │                        #   --check for CI
-│       │   └── check-i18n.mjs       # catalogue parity + every t() key resolves
+│   │   │   ├── server.ts             # HTTP entrypoint
+│   │   │   ├── worker.ts             # job entrypoint; writes the heartbeat file
+│   │   │   ├── worker-healthcheck.ts # the container HEALTHCHECK; reads the heartbeat,
+│   │   │   │                         #   opens no connection of its own
+│   │   │   ├── worker-healthcheck-shared.ts  # the path/interval/staleness constants
+│   │   │   ├── app.ts                # express app factory (the tests use it too)
+│   │   │   ├── config/               # env.ts, and production-policy.ts: the pure rules
+│   │   │   │                         #   production refuses to boot on
+│   │   │   ├── db/                   # migrations/ 001..011 + index.ts, migrate.ts,
+│   │   │   │                         #   seed.ts, client.ts, types.ts
+│   │   │   ├── i18n/locales/         # en, pt-BR, es — the server catalogue
+│   │   │   ├── lib/                  # money, dates, recurrence, email, redis, errors, http,
+│   │   │   │                         #   logger, i18n, csv (both directions), metrics,
+│   │   │   │                         #   route-metadata (stampRoute + mount), subkey (HKDF)
+│   │   │   ├── middleware/           # auth, validate, error-handler, locale, responds,
+│   │   │   │                         #   rate-limit + rate-limit-policy (the pure half),
+│   │   │   │                         #   request-timeout, request-context, metrics
+│   │   │   ├── openapi/              # walk.ts, schema.ts, document.ts, service-responses.ts
+│   │   │   ├── jobs/                 # queues.ts, processors.ts
+│   │   │   ├── modules/              # one folder per domain (see the convention below)
+│   │   │   └── types/                # context.ts, express.d.ts
+│   │   ├── Dockerfile                # one image, three entrypoints. Build from the REPO ROOT
+│   │   ├── scripts/                  # copy-assets.mjs, generate-openapi.ts (--check for CI)
+│   │   └── tests/{unit,integration}/
+│   └── web/                          # @finance/web
+│       ├── Dockerfile, nginx.conf.template   # the deployed client: bundle, /api proxy, CSP/HSTS
+│       ├── scripts/                  # generate-types.mjs, check-i18n.mjs (both --check in CI)
 │       └── src/
-│           ├── main.tsx             # entrypoint: store, theme, router
-│           ├── App.tsx              # routes
-│           ├── theme.ts             # MUI theme, light/dark, money palette
-│           ├── icons.tsx            # every icon in the app; wraps @phosphor-icons/react
-│           │                        # behind MUI's SvgIcon prop surface (fontSize/color/sx)
-│           ├── app/                 # store.ts, hooks.ts
-│           ├── api/
-│           │   ├── api.ts           # the single RTK Query service + tag types
-│           │   ├── baseQuery.ts     # fetch base query + transparent refresh
-│           │   ├── schema.d.ts      # GENERATED from docs/openapi.json; do not edit
-│           │   ├── types.ts         # names for what is in schema.d.ts; no field lists
-│           │   └── endpoints/       # one file per backend module: accounts.ts,
-│           │                        # alerts.ts, analytics.ts, auth.ts,
-│           │                        # budgets.ts, categories.ts, goals.ts,
-│           │                        # imports.ts, notifications.ts, recurring.ts,
-│           │                        # reports.ts, tags.ts, transactions.ts,
-│           │                        # users.ts, workspaces.ts
-│           ├── components/          # Amount, AmountHero, AppLayout, Brandmark,
-│           │                        # ChartTooltip, ColorSwatchPicker,
-│           │                        # ConfirmDialog, EmailVerificationBanner,
-│           │                        # EmptyState, ErrorState, LanguageMenu, LedgerList,
-│           │                        # LedgerRow, MoneyField, NotificationsMenu,
-│           │                        # PageHeader, Panel, SeriesLegend, StatTile,
-│           │                        # UserMenu, navItems.ts
-│           ├── i18n/               # index.ts (init + detection), languages.ts,
-│           │                        # useLanguage.ts, locales/{en,pt-BR,es}.json
-│           ├── features/            # one folder per domain: accounts, alerts,
-│           │                        # auth, budgets, dashboard, goals,
-│           │                        # recurring, reports, settings,
-│           │                        # transactions, workspace — each holds its
-│           │                        # *Schemas.ts (client mirror of the
-│           │                        # server's Zod schemas), dialogs and cards.
-│           │                        # settings/ also has DeleteAccountDialog:
-│           │                        #   erasure takes a password now (5m)
-│           ├── pages/               # AccountsPage, AlertsPage, BudgetsPage,
-│           │                        # DashboardPage, GoalsPage, RecurringPage,
-│           │                        # ReportsPage, SettingsPage,
-│           │                        # TransactionsPage
-│           └── lib/                 # apiError.ts, chartTokens.ts, currencies.ts,
-│                                     # download.ts (authenticated file saves),
-│                                     # format.ts (money/date formatting),
-│                                     # money.ts (exact add/compare, display only)
-│                                     # moneyInput.ts (typing an amount: the
-│                                     #   digit-string model behind MoneyField)
-│                                     # motion.ts (shared Framer Motion variants)
-│                                     # permissions.ts (client-side role checks)
-│                                     # tone.ts (domain status -> ledger spine)
-│                                     # validation.ts (resolves Zod message keys)
-├── packages/
-│   └── schemas/                     # @finance/schemas — the rules both apps share
-│       ├── package.json             # builds to dist/; `prepare` runs that build
-│       ├── tsconfig.json            # NodeNext + declarations (apps/api is stricter)
-│       └── src/
-│           ├── limits.ts            # every bound, in one table
-│           ├── enums.ts             # every closed set of values
-│           ├── patterns.ts          # predicates: money, date, password, ranges
-│           ├── messages.ts          # ValidationKey union + interpolation params
-│           ├── translations.ts      # the wording, en/pt-BR/es, typed complete
-│           └── fields.ts            # the API's request fields (no transforms)
-├── docs/
-│   ├── architecture.md              # system design
-│   ├── api.md                       # endpoint reference: what each one is for
-│   ├── openapi.json                 # GENERATED — `npm run generate:openapi`;
-│   │                                # do not hand-edit, CI checks it. Requests
-│   │                                # AND responses; the client's types come
-│   │                                # out of this file
-│   ├── decisions.md                 # decision log (see section 6)
-│   ├── runbook.md                   # release runbook (P-4): where migrate runs,
-│   │                                # the rolling-deploy backward-compatibility
-│   │                                # rule, and how to read/roll back a failure
-│   └── finance_management_project_prompt.md   # original brief
-├── infra/
-│   ├── postgres/init/                # container init SQL
-│   └── prometheus/alerts.example.yml # example alert rules for GET /metrics (P-2);
-│                                      # not wired into anything — no Prometheus
-│                                      # deployment exists in this repo to wire it into
-├── scripts/                          # backup.sh / restore.sh (P-3) — `npm run backup` /
-│                                      # `npm run restore`; both run pg_dump/pg_restore
-│                                      # through the running container, nothing to install
-├── .github/workflows/ci.yml         # typecheck, builds, generated-file and
-│                                    # i18n checks, unit tests, both images +
-│                                    # what they refuse to boot on, the deploy
-│                                    # composition; and the full suite on Postgres
-├── .gitignore                       # also ignores AUDIT_REPORT.md and
-│                                    # to_do.txt on purpose — see section 7
-├── .gitattributes                   # LF in the repo, native in the tree
-├── .dockerignore                    # keeps node_modules and .env out of the
-│                                    # build context
-├── docker-compose.yml               # DEVELOPMENT ONLY: postgres, redis,
-│                                    # mailhog, all bound to 127.0.0.1 (see 5k)
-├── docker-compose.deploy.yml        # the deployed shape: web (nginx), api,
-│                                    # worker, migrate, and its own postgres +
-│                                    # redis. No mail sink, no published data
-│                                    # store ports, no credential defaults (5k)
-├── .env.example                     # development config; its JWT values are
-│                                    # public and production refuses them (5j)
-├── .env.deploy.example              # deployment config; nothing that is a
-│                                    # credential has a default
-└── package.json                     # workspace root; also pins `vite` to
-                                     # dedupe it — see "Environment quirks"
+│           ├── main.tsx, App.tsx, theme.ts
+│           ├── icons.tsx             # EVERY icon; wraps @phosphor-icons/react
+│           ├── api/                  # api.ts, baseQuery.ts, schema.d.ts (GENERATED),
+│           │                         #   types.ts (names only), endpoints/<domain>.ts
+│           ├── components/           # shared shells and primitives
+│           ├── features/<domain>/    # schemas, dialogs, cards
+│           ├── pages/<Domain>Page.tsx
+│           ├── i18n/                 # index.ts, languages.ts, locales/{en,pt-BR,es}.json
+│           └── lib/                  # format, money, moneyInput, permissions, tone, motion,
+│                                     #   validation, download, chartTokens, currencies, apiError
+├── packages/schemas/src/             # limits, enums, patterns, messages, translations, fields
+├── docs/                             # architecture.md, api.md, openapi.json (GENERATED),
+│                                     #   decisions.md, runbook.md, the original brief
+├── infra/                            # postgres/init/, prometheus/alerts.example.yml (unwired)
+├── fly/                              # api.toml (app + worker + release migration), web.toml
+├── scripts/                          # backup.sh, restore.sh
+├── .github/workflows/                # ci.yml, gitleaks.yml, codeql.yml
+├── docker-compose.yml                # DEVELOPMENT ONLY: postgres, redis, mailhog, on 127.0.0.1
+├── docker-compose.deploy.yml         # the deployed shape: web, api, worker, migrate, pg, redis
+├── docker-compose.debug.yml          # OVERLAY on the above: pg/redis/api on 127.0.0.1, opt-in
+├── .env.example / .env.deploy.example
+└── package.json                      # workspace root; pins `vite` to force a dedupe
 ```
 
-**API module convention:** every domain folder in `apps/api` is exactly
-`routes.ts` (Express router, Zod validation, no business logic), `service.ts`
-(all logic, owns its own SQL) and **`responses.ts`** (the Zod description of what
-it returns — section 5e). Follow this when adding domains.
-Three rules that a new module has to obey, all enforced by something that will
-fail loudly rather than silently: **import Zod from `zod/v4`**, not `'zod'`,
-**mount the router with `mount()`** from `lib/route-metadata.ts` rather than
-`.use()` — the OpenAPI walker throws on a router whose path it cannot recover —
-and **declare what each route returns with `responds()`**, which the test suite
-then enforces against the real response.
-Nothing else is needed for the new endpoints to appear in the specification;
-the tag, the role, the security requirement and the 429 all follow from the
-middleware already on the routes. Run `npm run generate:openapi` afterwards.
-
-**Web feature convention:** every domain folder in `apps/web/src/features` mirrors
-the API module it talks to — schemas first, then dialogs, then cards.
-Data-fetching and dialog open/close state live in the `pages/<Domain>Page.tsx`,
-not in the feature components themselves, so a card or dialog can be reused
-without knowing where its data came from.
-
-A `features/<domain>/*Schemas.ts` file is **no longer a hand-written copy** of
-the server's rules. It reads every bound, value set and pattern from
-`@finance/schemas` and adds only the form's own half: fields that arrive as text
-rather than as numbers, `''` where the API would see `undefined`, and
-confirmation fields the API never sees. **Do not write a literal bound into one
-of these files** — if a number is not in `packages/schemas/src/limits.ts` yet,
-put it there.
-
-**Shared-package convention:** `@finance/schemas` is consumed as **compiled
-output**, so `packages/schemas/dist` must exist before either app typechecks.
-Every root script (`npm run typecheck`, `build`, `test`, `test:unit`, `dev`)
-builds it first, `npm ci` builds it through the package's own `prepare` script,
-and both CI jobs build it explicitly. If you edit the package and then run a
-workspace script *directly* (`npm run typecheck --workspace=@finance/web`), run
-`npm run build:schemas` first or you are typechecking against stale declarations.
+Untracked on purpose (see `.gitignore`): `AUDIT_REPORT.md`, `to_do.txt`, `backups/`, the installed
+agent skills under `.agents/` and `.claude/skills/`.
 
 ---
 
-## 4. How to run
+## 3. How to run
 
-Requires Docker Desktop running, and Node >= 22.
+Requires Docker Desktop running and Node >= 22.
 
 ```bash
 npm install
 cp .env.example .env          # defaults already match docker-compose
 npm run infra:up              # postgres + redis + mailhog
 npm run migrate               # apply migrations
-npm run seed                  # demo data (optional but recommended)
+npm run seed                  # demo data (optional, recommended)
 npm run dev                   # API on http://localhost:4000
-```
 
-The web client is a separate process, in `apps/web`:
-
-```bash
 npm run dev --workspace=@finance/web    # Vite on http://localhost:5173
-```
-
-The worker is a separate process too:
-
-```bash
 npm run dev:worker --workspace=@finance/api
 ```
 
-To run the **built** system instead of the dev servers — the same image a
-deployment uses, with migrations gating startup — it is a **separate compose
-file**, not a profile of this one (section 5k). It runs as `NODE_ENV=production`
-and brings up its own Postgres and Redis, so it shares nothing with the
-development stack above, including the demo data:
+| What | Where |
+| --- | --- |
+| API | http://localhost:4000 (`/health`, `/health/ready`, `/metrics`, `/openapi.json`) |
+| Web client | http://localhost:5173 |
+| Postgres | 127.0.0.1:5432, db `finance` / `finance_test`, user+pass `finance` |
+| Redis | 127.0.0.1:6379 |
+| MailHog UI | http://localhost:8025 (SMTP on 1025) |
+
+**Demo accounts** after `npm run seed`: `ana@demo.local` and `bruno@demo.local`, password
+`Demo1234567`.
+
+To run the **built** system — the same image a deployment uses, with migrations gating startup —
+use the other compose file. It runs as `NODE_ENV=production`, brings up its own Postgres and Redis,
+and therefore shares nothing with the development stack above, demo data included:
 
 ```bash
 cp .env.deploy.example .env.deploy   # then fill in every REQUIRED value
 docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build
 ```
 
-| What | Where |
-| --- | --- |
-| API | http://localhost:4000 (`/health`, `/health/ready`, `/openapi.json`) |
-| Web client | http://localhost:5173 |
-| Postgres | 127.0.0.1:5432, db `finance` / `finance_test`, user+pass `finance` |
-| Redis | 127.0.0.1:6379 |
-| MailHog UI | http://localhost:8025 (SMTP on 1025) |
-
-Those three now publish on **`127.0.0.1` explicitly** rather than on every
-interface — see section 5k. Nothing about connecting to them from this machine
-changes.
-
-**Demo accounts** (after `npm run seed`): `ana@demo.local` and
-`bruno@demo.local`, password `Demo1234567` for both.
-
-**Backups** (section 5q):
+**Backups:**
 
 ```bash
-npm run backup                       # dev stack -> ./backups/finance-<timestamp>.dump
-npm run restore backups/finance-<timestamp>.dump --yes   # DESTRUCTIVE, see the script's own guard
+npm run backup                                            # -> ./backups/finance-<timestamp>.dump
+npm run restore backups/finance-<timestamp>.dump --yes    # DESTRUCTIVE; refuses without --yes
 ```
 
-Point `COMPOSE_FILE=docker-compose.deploy.yml` (plus `POSTGRES_USER`/`POSTGRES_DB` if they differ
-from the defaults) at either command to operate on the deployed stack instead. `backups/` is
-gitignored — a database dump must never reach a public repository.
+Point `COMPOSE_FILE=docker-compose.deploy.yml` at either to operate on the deployed stack.
 
-### Tests
+### Two seed-script quirks that look like failures and are not
+
+- **`npm run seed` never exits.** It prints `Seed complete` with its counts and then sits holding
+  the pool open. The work is done at that line — watch for it rather than for the process to
+  return, or you will burn a long timeout.
+- **Re-running it against a database that already has demo data fails** with a foreign-key
+  violation on `workspaces_owner_id_fkey`. That is a bug in its own idempotent-reset step, not a
+  sign anything is broken. `npm run migrate` is always safe to re-run.
+
+---
+
+## 4. Tests, checks and CI
 
 ```bash
 npm test                 # all 431 — needs Postgres, and only Postgres
 npm run test:unit        # 259 pure units, no infrastructure at all
-npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
+npm run check:i18n       # catalogue parity + every literal t() key resolves
+npm run check:openapi    # fail if docs/openapi.json or schema.d.ts is stale (the CI step)
+npm run generate:openapi # rewrite both of those
 npm run build:schemas    # @finance/schemas alone; the others depend on it
-npm run build --workspace=@finance/api
-npm run build --workspace=@finance/web
-npm run generate:openapi # rewrite docs/openapi.json AND apps/web/src/api/schema.d.ts
-npm run check:openapi    # fail if either is stale (this is the CI step)
-
 npm audit --omit=dev --audit-level=high   # the CI gate: runtime deps only
-npm audit                                 # everything, including dev tooling
 ```
 
-**`npm run generate:openapi` after any route or response-schema change**, or CI
-fails on the stale committed files — as will `tests/unit/openapi.test.ts`, which
-compares the spec against a freshly built document. It writes **two** generated
-files, in a chain: the API produces `docs/openapi.json` from the router it boots,
-and the client produces `apps/web/src/api/schema.d.ts` from that. They are
-regenerated by one command precisely so they cannot be regenerated apart.
-Neither step needs a database — the script stubs the environment variables
-`config/env.ts` demands, because generating walks the router and converts schemas
-without opening a connection.
+The suite creates and migrates `finance_test` itself on first run and finishes in about half a
+minute. **It needs neither Redis nor MailHog** — under `NODE_ENV=test` the cache short-circuits,
+`invalidateWorkspaceCache` is a no-op, the rate limiter is `RateLimiterMemory`, the breached-password
+check is a no-op and `sendEmail` never opens a socket. Verified by stopping both containers.
 
-Each of the root scripts above builds `@finance/schemas` first — see the
-shared-package convention in section 3 for why, and for the one case where you
-have to build it yourself.
-
-The suite creates and migrates `finance_test` itself on first run. It should
-finish in well under a minute — if it takes many minutes, see the TRUNCATE note
-in section 6.
-
-**The suite does not need Redis or MailHog.** Under `NODE_ENV=test` the cache
-helpers short-circuit, `invalidateWorkspaceCache` is a no-op and the rate
-limiter uses `RateLimiterMemory`, so nothing reaches either service. Verified by
-stopping both containers and running the full suite — not inferred from reading.
-
-**Both builds and both typechecks now pass.** Earlier versions of this file
-documented `npm run build --workspace=@finance/web` as permanently broken by a
-`vite.config.ts` type error; that error is **fixed** — see "Environment quirks"
-below for what it was. Any output from these commands is now a real failure.
+**Run `npm run generate:openapi` after any route or response-schema change**, or CI fails on the
+stale committed files — as will `tests/unit/openapi.test.ts`. It writes **two** files in a chain
+(the spec from the booted router, then the client's `schema.d.ts` from that spec) and they are one
+command precisely so they cannot be regenerated apart. Neither step needs a database.
 
 ### CI
 
-`.github/workflows/ci.yml`, on push to `main`, on pull requests, and on demand.
-Two jobs run in parallel: **check** (the dependency-advisory gate, typecheck,
-both builds, the OpenAPI freshness check, the i18n check, unit tests, both
-container images, and what those images refuse to do — no services) and
-**test** (the full suite against a `postgres:16` service container, then a
-migration rollback round-trip). Green on the first run, in about a minute.
+`.github/workflows/ci.yml` runs two jobs in parallel, in about a minute. **check**: the advisory
+gate, typecheck, both builds, the generated-file and i18n checks, unit tests, both container
+images, and what those images *refuse* to do. **test**: the full suite against a `postgres:16`
+service container, then a migration rollback round-trip.
 
-**Two more workflows run alongside it (L-6, section 5q).**
-`.github/workflows/gitleaks.yml` runs the open-source `gitleaks` binary
-directly, via its published container image, against the full git history on
-every push and pull request — this is the automated check for the exact
-mistake C-1 was, a real secret committed to a public repository.
-`.gitleaks.toml` allowlists exactly the placeholder strings
-`production-policy.ts`'s `PUBLISHED_SECRETS` already tracks, plus
-`apps/api/tests/` wholesale (the test suite hardcodes fake passwords
-throughout, on purpose — real Postgres, real credential flows, no mocks — and
-a fixture is not a secret). **Add a new placeholder to both lists together, or
-this scan starts failing on your own dev secrets.**
-`.github/workflows/codeql.yml` runs GitHub's own static analysis
-(`javascript-typescript`) on push, pull request and a weekly schedule; free
-for a public repository, no account or key needed beyond what
-`github-actions` already has. `build-mode: manual` because this monorepo's
-`autobuild` default does not know `@finance/schemas` has to build before the
-other two workspaces typecheck (the shared-package convention, section 3).
+Four `check` steps are about the deployed artefacts and are easy to break from the source side:
+the API image still builds; the web image builds and `nginx -t` parses; the image can import the
+whole app graph (which is what catches a missing dependency an existence check would miss); and the
+image refuses a published secret, a development mail sink and a split origin.
 
-**Four of the `check` steps are about the deployed artefacts** and are easy to
-break from the source side without noticing:
+**A new refusal in `config/production-policy.ts` owes the last two steps a variable.** The positive
+step boots the image with a complete production environment, so a rule it does not satisfy fails it
+for a reason unrelated to the module graph. Each negative case likewise supplies valid values for
+every rule it is *not* testing, or it passes on the wrong refusal and asserts nothing.
 
-| Step | What it proves |
-| --- | --- |
-| Build the production image | the API's Dockerfile still builds (it rotted for sessions once) |
-| Build the web image + `nginx -t` | the client's image builds and its config parses |
-| The image can load the whole app graph | every route, service and library imports |
-| The image refuses … | a published secret, a development mail sink and a split origin each stop the boot |
+The advisory gate is deliberately narrow — high/critical in a **runtime** dependency only. A bare
+`npm audit` blocks unrelated pull requests whenever a build tool publishes a dev-server advisory,
+and a gate nobody accepts gets deleted.
 
-**A new refusal in `config/production-policy.ts` owes both of the last two steps
-a variable.** The positive step boots the image with a complete production
-environment, so a rule it does not satisfy fails it for a reason that has nothing
-to do with the module graph — which is exactly what happened when the same-origin
-rule landed. Each negative case likewise supplies valid values for every rule it
-is *not* testing, or it passes on the wrong refusal and asserts nothing.
+`gitleaks.yml` and `codeql.yml` run alongside, both on the open-source tooling directly, needing no
+account. **`.gitleaks.toml` allowlists exactly the placeholder strings `production-policy.ts`'s
+`PUBLISHED_SECRETS` already tracks, plus `apps/api/tests/` wholesale** (the suite hardcodes fake
+passwords on purpose). Add a new placeholder to *both* lists together, or the scan starts failing
+on your own dev secrets. **A CodeQL alert that is not one of the seven known false-positive
+patterns is a real finding** — the table is in the decision log under L-6 and L-7.
 
-**The advisory gate is deliberately narrow.** It fails on a high or critical
-advisory in a **runtime** dependency (`npm audit --omit=dev --audit-level=high`)
-and reports the rest without failing. A bare `npm audit` blocks unrelated pull
-requests whenever a build tool publishes a dev-server advisory, and a gate that
-blocks for reasons nobody accepts gets deleted. See section 5h.
-
-The workflow declares **no repository secrets**: the JWT values in it are
-deliberately fake and the test database is created and discarded within the run.
-Do not "improve" this by moving them into GitHub secrets — there is nothing to
-protect, and it would only add a setup step before CI could work for anyone else.
-
-If you add a step, run it locally first with CI's own environment rather than
-your `.env` — `DATABASE_URL`, `TEST_DATABASE_URL`, `JWT_ACCESS_SECRET`,
-`JWT_REFRESH_SECRET` and `EMAIL_TOKEN_SECRET` are the only variables without
-defaults:
+The workflow declares **no repository secrets** and should not gain any: the JWT values in it are
+fake, the test database is created and discarded in the run, and moving them to GitHub secrets
+would only add a setup step before CI works for anyone else. To reproduce CI locally, use its own
+environment rather than your `.env` — these five have no defaults, and the values below are
+**exactly** the ones `PUBLISHED_SECRETS` denylists, so do not change them casually:
 
 ```bash
 DATABASE_URL=postgres://finance:finance@localhost:5432/finance \
@@ -1100,2292 +242,411 @@ npm test
 
 ### Git
 
-The repository is **https://github.com/Capovillaa/finance-app** — public, one
-remote (`origin`), default branch `main`.
+Public, one remote (`origin`), default branch `main`.
 
-- **Commits use a noreply author**, `160801041+Capovillaa@users.noreply.github.com`,
-  set as `user.email` in this repository's own config so a fresh clone or a
-  changed global identity cannot leak a personal address into a public history.
-  If you ever rewrite history, keep it that way.
-- **`.gitattributes` normalises line endings** (`* text=auto`, LF in the
-  repository, native in the working tree). Development happens on Windows with
-  `core.autocrlf=true` while CI runs on Linux; without this every file would
-  show as wholly changed the first time it was touched from the other platform.
-  It was added before the first commit deliberately, so there is no
-  normalisation churn in the history.
-- The `gh` CLI is installed at `C:\Program Files\GitHub CLI\gh.exe` and is
-  **not on Git Bash's PATH** in an already-open shell — invoke it by full path,
-  or from PowerShell.
+- **Commits use a noreply author** (`160801041+Capovillaa@users.noreply.github.com`), set as this
+  repository's own `user.email` so a fresh clone or a changed global identity cannot leak a
+  personal address into a public history. If you rewrite history, keep it that way.
+- **`.gitattributes` normalises line endings** (LF in the repository, native in the tree). It was
+  added before the first commit deliberately, so there is no normalisation churn in the history.
+- The `gh` CLI is at `C:\Program Files\GitHub CLI\gh.exe` and is **not on Git Bash's PATH** in an
+  already-open shell — invoke it by full path, or from PowerShell.
 
-### End-to-end / visual verification
+---
 
-Typechecking and a production build prove the code parses; they do not prove a
-screen renders correctly against real data, or that a create/edit dialog
-actually round-trips through the API. Section 2's three bugs were only found
-this way. Neither piece of tooling below is obviously present by default, so
-this is worth writing down.
+## 5. Conventions
 
-**Docker Desktop is a GUI app but starts fine headlessly.** From this repo's
-shell (PowerShell), it does not need a user to click anything:
+### An API module
 
-```powershell
-Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-```
+Exactly three files: **`routes.ts`** (Express router, Zod validation, no business logic),
+**`service.ts`** (all logic, owns its own SQL — there is no repository layer, on purpose) and
+**`responses.ts`** (the Zod description of what it returns, beside the query that builds it).
+Four rules, each enforced by something that fails loudly:
 
-The daemon (`docker info`) is typically ready within 5–10 seconds. Poll it
-instead of sleeping a fixed amount — a bounded loop checking every few seconds
-is enough; it does not need minutes.
+1. **Import Zod from `zod/v4`**, not `'zod'`. `apps/api` and `packages/schemas` are on v4;
+   `apps/web` is still on v3.
+2. **Mount with `mount()`** from `lib/route-metadata.ts`, never a bare `.use()` — the OpenAPI
+   walker throws on a router whose path it cannot recover.
+3. **Declare what each route returns with `responds()`**, between `validate()` and the handler.
+   Under `NODE_ENV=test` it parses every outgoing body against the declaration and fails the
+   request on a mismatch — including on a success status the route does not declare.
+4. **Run `npm run generate:openapi` afterwards.** The tag, the role, the security requirement and
+   the 429 all follow from the middleware already on the route; nothing else is needed.
 
-**There is no `chromium-cli` in this environment.** For a real browser check,
-install Playwright in a scratch directory outside the repo (so it never
-touches `apps/web/package.json` or the lockfile) and drive the machine's
-already-installed Chrome directly — this skips downloading Playwright's own
-bundled Chromium entirely:
+**A response schema describes the wire, not the row** — a `timestamp` column is a `Date` in the
+service and an ISO string in the response. Build fields from `modules/shared/responses.ts`
+(`money`, `dateOnly`, `timestamp`, `uuid`, `integer`, `currencyCode`, `percent`, `jsonObject`,
+`dateRange`, `periodTotals`, `page(item)`) and wrap anything a caller has a *word* for in
+`component('Account', …)` — name the concepts, not the packaging. **Reach matters as much as
+strictness**: a schema no test succeeds against is an assertion nobody made.
+`RESPONSE_REACH=1 npx vitest run 2>&1 | grep -o "REACH .*" | sort -u` lists what the suite
+exercises; anything missing belongs in `tests/integration/response-contracts.test.ts`. It is
+109/109 today, and "all of them" is the invariant — not the number.
+
+### A web feature
+
+`features/<domain>/` mirrors the API module it talks to: schemas first, then dialogs, then cards.
+`api/endpoints/<domain>.ts` is the RTK Query module, one per backend module, same name. Data
+fetching and dialog open/close state live in `pages/<Domain>Page.tsx`, never in the feature
+components, so a card can be reused without knowing where its data came from. Anything used by more
+than one screen moves to `components/`.
+
+A `features/<domain>/*Schemas.ts` file is **not** a hand-written copy of the server's rules: it
+reads every bound, value set and pattern from `@finance/schemas` and adds only the form's own half
+(text instead of numbers, `''` where the API sees `undefined`, confirmation fields the API never
+sees). **Never write a literal bound into one of these files** — if a number is not in
+`packages/schemas/src/limits.ts` yet, put it there.
+
+`lib/permissions.ts` mirrors `requireEditor`/`requireAdmin` to hide controls the API would reject
+anyway. The server is still the authority.
+
+### The shared package
+
+`@finance/schemas` is consumed as **compiled output**, so `packages/schemas/dist` must exist before
+either app typechecks. Every root script builds it first and `npm ci` builds it through the
+package's own `prepare`. If you edit the package and then run a workspace script *directly*
+(`npm run typecheck --workspace=@finance/web`), run `npm run build:schemas` first or you are
+typechecking against stale declarations.
+
+**The Zod schemas themselves are deliberately not shared** — the API parses a JSON body and
+transforms money through `decimal.js`; a form parses text and transforms nothing. Do not "finish
+the job" by merging them; read the decision log first. Money never transforms in the package:
+`moneyField` validates and stops, and `modules/shared/schemas.ts` adds `.transform(money)`.
+
+**A rejection carries a catalogue key, never a sentence** — a Zod message is fixed at import,
+before either process knows the request's language. **A message that quotes a bound gets the number
+from `LIMITS`**, via `VALIDATION_PARAMS`; never type a bound into a translation.
+
+### i18n
+
+Three languages: English, Português (Brasil), Español. Three rules:
+
+1. **Every user-visible string goes through `t()`.** A hardcoded one looks fine in English and
+   silently stays English in the other two.
+2. **A module evaluated at import holds a key, not a label.** `navItems.ts`, `lib/tone.ts`,
+   `alertMeta.ts`, every `*_LABEL_KEYS` table and every Zod message are built before any language
+   is settled — they carry keys and the render site calls `t()`. Form fields go through
+   `fieldMessage()` from `lib/validation.ts`.
+3. **Add the key to all three catalogues and check it resolves** (`npm run check:i18n`).
+
+`validation.*` is the one namespace that lives elsewhere — `packages/schemas/src/translations.ts`,
+because the API rejects a field with the same key. Its completeness is enforced by the compiler.
+
+The API has its own catalogue (`apps/api/src/i18n/locales/`) for the three things a user reads:
+error messages, alert notifications, and the invitation email. The client sends its current
+language as `Accept-Language` on every request. Note when writing tests: registration defaults a
+user's `locale` to **pt-BR**, and `requireAuth` overwrites `Accept-Language` with the stored value.
+
+### Money
+
+`NUMERIC(19,4)` in Postgres, `Decimal`/string in TypeScript, **never `number`**. `lib/money.ts`
+owns all arithmetic and rounds half-even; amounts cross the API as strings. Every transaction also
+stores a `base_amount` in the workspace's base currency, converted at write time, so analytics
+never joins rates at read time.
+
+On the client, **no form binds a raw `TextField` to a money field.** Use `components/MoneyField.tsx`
+(or `AmountHero.tsx` where the amount is the subject of the dialog), which model an in-progress
+amount as a digit string in the currency's minor unit — keystrokes accumulate from the right, so
+the caret is never a problem and one rule (strip every non-digit) covers typing, deleting and
+pasting alike. **Decimal places come from the currency, never a constant**: JPY has none and KWD
+has three, so `currencyFractionDigits` asks `Intl`.
+
+### The visual language
+
+Flat; typography and a hairline carry the hierarchy. Full description in the decision log
+("Visual redesign", "Soft controls", "Glass on floating surfaces", "The phone is a first-class
+target"). The rules that constrain new work:
+
+- **Three type families, three jobs**: Fraunces (display), Instrument Sans (UI), **IBM Plex Mono
+  with `tabular-nums` for every figure in a list or table**. Use `<Typography variant="amount">`
+  or `components/Amount.tsx`; never hand-roll `fontVariantNumeric`.
+- **Anything that is a list of money is built from `LedgerRow` + `LedgerList`, not a `<Table>`.**
+  Wrap them in `Panel` with `padded={false}`, or the hairlines stop short of the panel edge.
+- **`lib/tone.ts` gives the ordinary states no spine at all** — a ledger where every line is marked
+  is a ledger where nothing is.
+- **Cards get a hairline, not a shadow.** Shadow and glass are for what genuinely floats: dialogs,
+  menus, popovers, the transaction detail drawer. Never cards, `LedgerRow` or `Panel`.
+- **Every icon goes through `src/icons.tsx`**, imported from `@phosphor-icons/react`, never
+  straight from `@mui/icons-material`.
+- **Motion says "this updated" and nothing else.** No bounce, no parallax, no hover flourish;
+  `prefers-reduced-motion` is honoured globally and per component.
+- **Check a new colour against the surface it actually renders on**, not against its token name.
+  Two brief hexes could not clear AA as text on a light surface, so light mode uses darker steps.
+- **Chart colours come from `lib/chartTokens.ts` and are validated, not chosen.** The two
+  categorical slots are semantic (income green, expense brick) — the pair red-green colour
+  blindness collapses — so they are separated by a full lightness step, plus legend and labelling.
+
+---
+
+## 6. Traps that will bite
+
+Each of these was found the hard way. Most typecheck perfectly.
+
+### Data, transactions and schemas
+
+- **Never throw from inside a transaction when the write must survive.** The refresh-token replay
+  defence revoked the family and *then* threw, inside the same transaction — the rollback undid the
+  revocation. Return an outcome and raise after the commit.
+- **Never return a query builder from an `async` function.** Wrap it in an object. Kysely 0.28
+  removed `preventAwait`, so this no longer throws — it silently resolves to the builder object.
+- **`z.coerce.boolean()` inverts every boolean query flag** (`"false"` is truthy). Use
+  `booleanQuerySchema` / `booleanQueryWithDefault` from `modules/shared/schemas.ts` for anything
+  read from a query string.
+- **Import `{ Decimal }` from `decimal.js` as a named import.** The package merges a class with a
+  same-named namespace; under NodeNext the default import resolves to the namespace.
+- **A rule restated for the spec goes in `.meta()`, never a real check.** Moving a pattern into
+  `z.string().regex(...)` looks equivalent: inside a union it replaces the catalogue key with
+  `"Invalid input"`, and it changes what the API accepts. Documenting a rule must not do that.
+- **`component()` composes with `.extend()`, never `.and()`.** An intersection publishes as `allOf`
+  and the component branch carries `additionalProperties: false`, so a strict validator rejects
+  every property from the other branch. A recursive schema must be named, or Zod emits `$ref: "#"`.
+- **Zod's metadata registry is a process-wide singleton that outlives a source module.** vitest's
+  `singleFork` re-evaluates `src/` per test file while `node_modules` stays cached, so the same id
+  registers repeatedly. `component()` evicts the stale registration — do not simplify that away.
+- **The alert-rule upsert matches the scope explicitly** instead of `ON CONFLICT DO UPDATE`,
+  because the uniqueness rule is an expression index over `COALESCE(...)` and Postgres cannot infer
+  a conflict target from one.
+- **A new maintenance task needs an entry in `MaintenanceJobData`'s union *and* a repeatable
+  registration in `jobs/queues.ts`.**
+- **`tests/setup.ts`'s `TABLES` list is order-sensitive** — `import_batches` sits between
+  `transactions` and `recurring_transactions`. Keep it there.
+- **Tests reset with `DELETE`, not `TRUNCATE`.** TRUNCATE forces an fsync per relation; across
+  every table before every test it took the suite from 16 seconds to over 25 minutes on Docker
+  Desktop. The test database also sets `synchronous_commit = off`, and bcrypt drops to 4 rounds
+  under `NODE_ENV=test`. Do not "fix" any of these back.
+
+### Security and configuration
+
+- **A mount's guard middleware cannot be recognised by handler identity.** `requireAuth` is one
+  shared object that is *also* ordinary middleware inside three routers; keying the skip on
+  identity dropped authentication from those and published two dozen authenticated routes as
+  public. The walker matches by position instead. **If you add a shared middleware as a mount
+  guard, check the public route list in the generated spec** — exactly eleven operations carry no
+  security requirement: `/health`, `/health/ready`, `/metrics`, `/openapi.json`, and auth's
+  `register`, `login`, `refresh`, `logout`, `forgot-password`, `reset-password`, `verify-email`.
+  Anything else appearing there is that bug coming back.
+- **`TRUST_PROXY` defaults to `false` and must stay that way** unless something really is in front.
+  `req.ip` comes from a header the *client* sends; setting this with nothing in front lets six
+  invented addresses defeat a limit of three. The deployed composition sets `TRUST_PROXY=1`
+  because nginx is genuinely there.
+- **The credential limiter's two buckets must stay separate.** A single `ip:email` key is not two
+  dimensions, it is weaker than either alone — a new address is a new key, so rotating addresses
+  hands back the whole budget against the same account.
+- **`globalRateLimit` verifies the bearer token itself.** It is mounted above every `requireAuth`,
+  so `req.user` is always `undefined` there; the old `req.user?.id ?? req.ip` had been a pure IP
+  limiter for its whole life. Do not "simplify" it back.
+- **`enableOfflineQueue: false` on the shared Redis client is not a style choice.** With it on, a
+  command issued during an outage parks behind the reconnect backoff — the first request after
+  Redis stopped hung for two minutes instead of hitting the fallback that exists for it. BullMQ's
+  own connection keeps the queue, and must, because it blocks across reconnects.
+- **An error response says only what this codebase wrote.** Four fields: `code`, `message`,
+  `details`, `requestId`. `AppError.internalDetail` reaches the log and never a response — a
+  Postgres `detail` names columns, constraints and *other rows' values*, and `expose` being
+  `status < 500` meant every 409 and 422 published them. Text you did not write belongs in that
+  fifth argument; the sentence a client sees comes from `i18n/locales/`.
+- **A `.env` variable that exists but is empty is `''`, not `undefined`, and `??` will not save
+  you.** Use `blankAsUndefined` for any optional string read from the environment.
+- **A boot-time refusal belongs in `config/production-policy.ts`**, which imports nothing — that is
+  what lets it be unit-tested. Its placeholder regexes run against legitimately random values, so a
+  new pattern must be improbable in 64 random characters; the published throwaways are caught by an
+  exact list instead. **If you publish a new placeholder anywhere, add it to `PUBLISHED_SECRETS`**
+  and to `.gitleaks.toml`.
+- **Any new sign-in path owes `cancelAccountDeletion` a call.** `login` and `resetPassword` both
+  make it; a magic link or OAuth callback that skipped it would let a pending erasure run after the
+  user has demonstrably come back.
+- **Do not simplify registration back to a 409 on a known address.** The whole point is that the
+  response is indistinguishable; the client follows a successful register with an ordinary `login`.
+
+### The client
+
+- **MUI's `<TextField select>` needs `value={watch('field')}` alongside `register()`**, or it
+  renders visually blank while holding the right value. A placeholder option with `value=""`
+  additionally needs `SelectProps={{ displayEmpty: true }}` and
+  `InputLabelProps={{ shrink: true }}`. An array field is driven by `watch`/`setValue` and never
+  by `register()` — the ref binding cannot express a multiple selection at all.
+- **`slotProps.input` is not the `<input>`.** That slot is the `InputBase` *wrapper*, so
+  `inputMode` set there lands on a `div` and `aria-label` names a wrapper. **HTML attributes go in
+  `slotProps.htmlInput`.** This typechecks and looks right on a desktop.
+- **Never reuse an `injectEndpoints` key across modules.** Two files named a mutation
+  `deleteAccount` on the same shared `api` singleton; `injectEndpoints` silently keeps whichever
+  registered first, so clicking Delete on a financial account fired the **GDPR erasure endpoint**
+  and reported success. Nothing enforces uniqueness across files and the failure is silent.
+- **Compare colours with `sameColour`, never `===`.** `#B23A2E` and `#b23a2e` are the same colour
+  and different strings, which left every swatch unselected.
+- **A high-frequency control must absorb its own churn locally.** A native colour input emits a
+  continuous stream of `input` events; bound straight to a form field that re-renders a
+  fifteen-field dialog per event — the "freezing" a user reported.
+- **Use `minmax(0, 1fr)`, never bare `1fr`,** in any grid that can contain a table. A `1fr` track
+  still has `min-width: auto`, so a wide table pushes the whole page sideways regardless of how
+  many `overflow-x: auto` wrappers sit beneath it.
+- **Inside `styleOverrides`, read palette values as `var(--mui-palette-*)`** via the `v()` helper
+  in `theme.ts`. The callback receives the *default* scheme's literal values, so
+  `theme.palette.divider` there bakes the light hairline into dark mode. `sx` and `useTheme()`
+  inside components are fine.
+- **A global `:focus-visible` rule needs `!important`** to beat MUI's `outline: 0` — but it is
+  scoped to exclude fields, because an outline follows the element's own `border-radius` and the
+  native `<input>` has none, so the ring drew a hard square around a rounded control. Fields state
+  themselves with a 2px accent notch plus a halo. **A control that suppresses the ring owes the
+  user a replacement indicator.**
+- **Any field that overrides its own font size owes itself the 16px floor below `sm`.** Anything
+  smaller zooms iOS Safari in on focus and never zooms back out.
+- **A new `<Table>` needs an `overflowX: 'auto'` wrapper *and* a `minWidth`.** A MUI `Card` clips
+  overflow, so a page-width check passes while the Actions column is simply unreachable — which is
+  how an admin lost the ability to remove a member on a phone.
+- **Touch minimums are keyed on `pointer: coarse`, never a width breakpoint** (`COARSE_TARGET` in
+  `theme.ts`) — the input device decides, so a touchscreen laptop gets big targets and a narrow
+  desktop window does not. `LedgerRow`'s `xs` grid is sized around those targets; the `md`
+  template is untouched, so check both widths if you touch that grid.
+- **An authenticated download cannot be an `<a href>` or `window.open`** — the browser sends no
+  `Authorization` header and gets a 401. Fetch through the RTK Query base query, then hand the body
+  to `lib/download.ts`. CSV endpoints also need `responseHandler: 'text'`. Exports are modelled as
+  mutations even though they are GETs, so a megabyte of text is not pinned in the cache.
+- **`RecurringTransaction.amount` is the signed, stored value**, not an unsigned magnitude like the
+  create/update input. Assuming otherwise printed "R$ NaN" for every expense schedule.
+- **A dialog that seeds itself from a lazily-fetched list will seed itself from nothing.** Fetch
+  with the page, and let the effect wait for data and seed exactly once per opening, tracked in a
+  ref so it can never undo the user's own deselections.
+- **`npm run check:i18n` structurally cannot see a hardcoded English string, or a key that is
+  rendered without `t()`.** It checks that the key a `t()` call names resolves — and a string that
+  never calls `t()` names nothing. Both shipped: a button reading `common.apply`, and Reports
+  printing the literal `budgets.status.warning`. **Grep for JSX text and string-literal props when
+  touching a component.** The sweep for the other half is
+  `grep -rn "helperText={.*\.message}" apps/web/src --include=*.tsx | grep -v fieldMessage`.
+- **When you add a rule to a field, check the field can actually say so.** A new bound made a form
+  refuse to submit while showing nothing, because that one `TextField` had no `error`/`helperText`
+  wired — it had never needed them.
+
+### Build and tooling
+
+- **`vite` is a root `devDependency` pinned to `^6` to force a dedupe.** Do not remove it thinking
+  it is unused: without it `apps/web` nests its own copy, `@vitejs/plugin-react` hoists to the
+  root, and `apps/web`'s typecheck fails on a `vite.config.ts` type mismatch. The tree now holds
+  exactly one vite.
+- **`vitest` stays on 3.x deliberately.** Vitest 4 removes `poolOptions` and maps `singleFork` onto
+  `maxWorkers: 1, isolate: false`, which is *not* what `singleFork` meant — and the registry
+  eviction above is written around exactly that behaviour.
+- **`@finance/schemas` is ESM-only and its error says something else.** Resolving it from CommonJS
+  fails with `ERR_PACKAGE_PATH_NOT_EXPORTED: No "exports" main defined`, which reads like a
+  malformed `package.json`. Add `{"type":"module"}` next to a scratch script rather than a CJS
+  build to the package.
+- **`@finance/schemas` declares `sideEffects: false`**, which is what keeps `fields.ts` and its Zod
+  4 build out of the client bundle. Removing it silently adds ~40 kB of duplicate Zod.
+- **The API's two tsconfigs both use NodeNext.** They were split once and `typecheck` passed while
+  `build` failed. `apps/web` correctly uses `bundler`, because Vite bundles it.
+- **`npm audit fix` fixes nothing here.** All nine historical advisories needed explicit major
+  bumps; expect the same next time.
+- **The Dockerfile builds from the repository root**, and three npm behaviours bite in it: a linked
+  workspace's `prepare` runs even under `--ignore-scripts`; `--workspace` scopes which *scripts*
+  run, not what gets installed (leaving `apps/web/package.json` out of the context is what keeps 58
+  MB of icon fonts out of the API image); and npm nests what it cannot hoist, so per-workspace
+  `node_modules` must be copied too, not just the root one.
+
+### Deployment
+
+- **`apps/web/nginx.conf.template` is rendered by `envsubst` at container start**, and
+  `NGINX_ENVSUBST_FILTER` in `apps/web/Dockerfile` must stay pinned to `API_UPSTREAM` and
+  `NGINX_RESOLVER`. Unfiltered, `envsubst` also substitutes nginx's own `$host`, `$uri`, `$scheme`
+  and `$remote_addr` — with empty strings, because they are not environment variables — and the
+  result **parses cleanly** while proxying to nowhere and forwarding no client address. Do not write
+  a worked `${…}` example into a comment in that file either; comments are substituted too. Check a
+  change by rendering it, not by reading it: `docker run --rm --entrypoint sh finance-web:x -c
+  "/docker-entrypoint.sh nginx -t; cat /etc/nginx/conf.d/default.conf"`.
+- **The two variables move together.** `NGINX_RESOLVER` is the resolver's whole argument list, not
+  an address, because the compose default ends in `ipv6=off` — right for Docker's embedded DNS and
+  fatal on Fly, whose private network is IPv6.
+- **"Off" is not a value a compose `ports:` entry can hold.** `${VAR:+…}` expanding to an empty
+  string fails validation with `invalid proto:`, which is why the debugging ports live in
+  `docker-compose.debug.yml` as an overlay rather than behind a variable.
+- **`/health`, `/health/ready`, `/metrics` and `/openapi.json` are mounted at the API's root, not
+  under `/api/v1`** — so nginx, which proxies only `/api/`, does not expose them. Anything reaching
+  for them through the public origin is reaching for something that is not there.
+
+---
+
+## 7. This machine's quirks
+
+Not preferences — workarounds for real failures observed here.
+
+- **Postgres must be Debian `postgres:16`, not `-alpine`.** The musl build cannot exec its own
+  entrypoint under this Docker Desktop/WSL2 setup (`exec format error` on `/bin/sh`). Same reason
+  the app image is Debian slim.
+- **Docker's data lives on `D:\DockerData`**, reached through a directory junction at
+  `%LOCALAPPDATA%\Docker\wsl\disk`. `C:` had filled to zero bytes. Do not delete that junction;
+  setting `dataFolder` in Docker's `settings-store.json` did **not** work. Watch free space on `C:`
+  before large pulls.
+- **Docker Desktop is a GUI app but starts fine headlessly**, from PowerShell:
+  `Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"`. The daemon is usually ready
+  within 5–10 seconds — poll `docker info` rather than sleeping a fixed amount.
+- **Windows cannot deliver a real SIGTERM to an external process** (`process.kill()` terminates
+  rather than invoking the JS handler), so anything about graceful shutdown has to be verified in
+  the actual Linux container with `docker stop`.
+
+### Driving a real browser
+
+Typechecking and a production build prove the code parses; they do not prove a screen renders or
+that a dialog round-trips. Most of the bugs in section 6 were found this way and by nothing else.
+
+There is no `chromium-cli` here. Install Playwright in a scratch directory **outside the repo** (so
+it never touches `apps/web/package.json` or the lockfile) and drive the machine's already-installed
+Chrome, which skips downloading Playwright's own Chromium:
 
 ```bash
-mkdir -p /path/to/scratch/pw && cd /path/to/scratch/pw
-npm init -y && npm install playwright
+mkdir -p /path/to/scratch/pw && cd /path/to/scratch/pw && npm init -y && npm install playwright
 ```
 
 ```js
 const { chromium } = require('playwright');
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const page = await (await browser.newContext()).newPage();
-await page.goto('http://localhost:5173/login');
-await page.fill('input[type="email"]', 'ana@demo.local');
-await page.fill('input[type="password"]', 'Demo1234567');
-await page.click('button[type="submit"]');
-await page.waitForSelector('text=Dashboard', { timeout: 15000 });
-await page.screenshot({ path: 'dashboard.png', fullPage: true });
-// The driver script is deliberately not checked in — it is scratch, and it
-// belongs outside the repo along with the Playwright install. Rebuild it fresh
-// each time; it's a dozen lines.
 ```
 
-**Three selector traps, learned the slow way while driving the forms:**
+The driver script stays out of the repo — it is a dozen lines, rebuild it fresh each time.
 
-1. **A dialog's submit button often has the same label as the button that opened
-   it.** `t('recurring.create')` is "New schedule" on both the page header and
-   the dialog's submit, so `getByRole('button', { name: 'New schedule' })` is
-   ambiguous the moment the dialog is open. Use
-   `page.locator('[role="dialog"] button[type="submit"]')`, which is unambiguous
-   and survives a label change.
-2. **The nav items are links, not buttons.** `ListItemButton` is rendered with
-   `component={Link}`, so each one matches `getByRole('link')` and **not**
-   `getByRole('button')` — an earlier version of this note said the opposite and
-   cost a run. Match the name exactly too: a loose regex like `/account/i` finds
-   the sidebar entry before the "Add account" button and quietly navigates
-   instead of opening the dialog.
-3. **A form needs its `<Select>`s filled or it fails on those instead.** Click
-   the `[role="combobox"]` and then `li[role="option"]` — the field you are
-   actually testing never gets to report anything until the required selects hold
-   a value.
+Four things learned the slow way:
 
-**You do not need seed data to reach a signed-in screen.** Registering through
-the UI takes four fills and a click, gives a clean workspace, and avoids the
-seed's re-run problem below entirely. Force the language first with
-`localStorage.setItem('finance.language', 'en')` so assertions do not depend on
-whatever this machine's browser prefers — it is pt-BR here, which will silently
-break an English string match.
+1. **Force the language first** with `localStorage.setItem('finance.language', 'en')`. This
+   machine's browser prefers pt-BR, which silently breaks an English string match.
+2. **A dialog's submit button often has the same label as the button that opened it.** Use
+   `page.locator('[role="dialog"] button[type="submit"]')`, which is unambiguous and survives a
+   label change.
+3. **The nav items are links, not buttons** — `ListItemButton` renders with `component={Link}`, so
+   each matches `getByRole('link')`. Match the name exactly: a loose `/account/i` finds the sidebar
+   entry before the "Add account" button and quietly navigates instead of opening the dialog.
+4. **A form needs its `<Select>`s filled or it fails on those instead** — click the
+   `[role="combobox"]`, then `li[role="option"]`.
 
-**If `npm run seed` fails with a foreign-key violation on `workspaces_owner_id_fkey`
-when re-run against a database that already has demo data**, that's a bug in the
-seed script's own idempotent-reset step (it deletes from `users` before the
-`workspaces` rows that reference them are gone) — not a sign anything is
-broken. Check whether `ana@demo.local` / `bruno@demo.local` already exist
-before treating a seed failure as real; `npm run migrate` is always safe to
-re-run.
-
-**`npm run seed` also does not exit when it finishes.** It prints
-`Seed complete` with its counts and then sits there holding the database pool
-open, which reads exactly like a hang and will burn a long timeout if you wait
-for it. The work is already done at that point — the demo accounts exist and
-the transactions are inserted. Watch for the `Seed complete` line rather than
-for the process to return, and stop it yourself.
-
-### Environment quirks on this machine
-
-These are not preferences, they are workarounds for real failures observed here:
-
-- **Postgres image must be Debian `postgres:16`, not `postgres:16-alpine`.** The
-  musl build cannot exec its own entrypoint under this Docker Desktop/WSL2 setup
-  (`exec format error` on `/bin/sh`). `docker-compose.yml` carries a comment.
-- **Docker's data lives on `D:\DockerData`**, reached through a directory
-  junction at `%LOCALAPPDATA%\Docker\wsl\disk`. `C:` had filled to zero bytes and
-  the 5.1 GB `docker_data.vhdx` was moved off it. Do not delete that junction.
-  Setting `dataFolder` in Docker's `settings-store.json` did **not** work.
-- Keep an eye on free space on `C:` before large image pulls.
-- ~~**`apps/web`'s `tsc --noEmit` reports a `vite.config.ts` type error.**~~
-  **Fixed** in the CI session, because a CI job cannot gate on a step that
-  always fails. The cause was two `vite` copies: root got 5.x (pulled in by
-  `apps/api`'s `vitest`), `apps/web` got its own nested 6.x, and
-  `@vitejs/plugin-react` hoisted to root — so `react()` returned root-vite-5's
-  `Plugin` while `defineConfig` in `apps/web` wanted web-vite-6's
-  `PluginOption`. The fix is one line: **`vite` is now a root `devDependency`**
-  pinned to `^6.4.3`. npm then hoists vite 6 to the root, where
-  `plugin-react` and `apps/web` both resolve it — the suite was 222-green
-  before and after. **Do not remove `vite` from the root `package.json`
-  thinking it is unused; it is there to force that dedupe.** Since the
-  dependency-upgrade session (5h) the dedupe is total rather than partial:
-  vitest 3 accepts `^6`, so it resolves the same root copy instead of nesting
-  its own vite 5, and the tree now holds **exactly one vite**.
+You do not need seed data to reach a signed-in screen: registering through the UI takes four fills
+and a click, gives a clean workspace, and avoids the seed's re-run problem entirely.
 
 ---
 
-## 5. Next tasks, in priority order
+## 8. Where the reasoning lives
 
-**Everything numbered 1–10 is built.** The smaller gaps listed after the list
-are features rather than operations work.
+`docs/decisions.md` is the log; these are the entries most likely to matter before a change.
 
-1. ~~**Web client scaffold.**~~ **Done.** Vite, Material-UI, Redux Toolkit and
-   Recharts, with React Hook Form and Zod for forms. Auth, workspace switching,
-   and the API client are wired.
-2. ~~**Core client screens.**~~ **Done** (section 2). All nine screens exist:
-   Dashboard, Accounts, Transactions, Budgets, Goals, Recurring, Alerts,
-   Reports, Settings.
-3. ~~**Finish the Transactions screen.**~~ **Done** (section 2), except CSV
-   import, which is now task 4. Bulk categorise, confirm and restore are still
-   UI-less but are one button each, not a project.
-4. ~~**CSV import.**~~ **Done** (section 2d). Preview-then-commit, with undo,
-   duplicate flagging and per-account mapping recall. The design that guided it
-   is kept after this list, annotated with what changed in the building.
-5. ~~**Share the request schemas.**~~ **Done.** `packages/schemas`
-   (`@finance/schemas`) now owns every bound, value set, pattern and rejection
-   message the two apps have to agree on, and both build their own parser on
-   top — see section 5c for what shape that took and why the Zod schemas
-   themselves are deliberately *not* shared. Four real divergences were found
-   and fixed in the process, and the API's field-validation errors are now
-   translated as a direct consequence.
-6. ~~**OpenAPI generation.**~~ **Done, both phases.** Phase 1 (section 5d)
-   generates `docs/openapi.json` from the running app, serves it at
-   `/openapi.json`, and checks it in CI. Phase 2 (section 5e) describes
-   **every operation the app publishes** (108 as of section 5o's four new
-   auth routes; the number moves whenever a route does — do not treat it as
-   pinned), every one of them checked against a real response
-   by the test suite — and `apps/web/src/api/types.ts` is no longer
-   hand-written: `openapi-typescript` turns the spec into
-   `apps/web/src/api/schema.d.ts`, and `types.ts` only assigns names to what is
-   in it. Doing it found one real bug (a recurring schedule's `categoryName` was
-   never selected, so the Recurring screen had silently shown only the account
-   name since the redesign) and one divergence (a category's `kind` has three
-   members, not the two the client's types claimed).
-7. ~~**CI**~~ **Done.** `.github/workflows/ci.yml` — see section 4. The
-   `vite.config.ts` type error it would have tripped over was fixed rather than
-   worked around, so the client's own `npm run build` is on the critical path.
-   The repository was initialised, published and verified in the same session:
-   **https://github.com/Capovillaa/finance-app** (public, `main`). The first
-   push triggered the workflow and **both jobs passed in about a minute** —
-   including the Postgres container coming up, `finance_test` being created
-   from nothing, all 8 migrations applying and 222 tests passing. It is not a
-   workflow that merely looks right; it has run.
-8. ~~**Live exchange rates.**~~ **Done** (section 5f). `EXCHANGE_RATE_PROVIDER`
-   now selects between the static table, **Frankfurter** (the ECB's daily
-   reference rates, no API key) and **Open Exchange Rates** (a key, USD-quoted
-   on the free plan). Verified against the real ECB feed, not only stubbed.
-   No schema change was needed — the `exchange_rates` table's `source` column
-   already distinguished a provider's rows from the static ones.
-9. ~~**Rate-limit and auth hardening review.**~~ **Done** (section 5i). Three
-   defects that shared one shape — the code said what it meant to do in a
-   comment and did something else, invisibly. `X-Forwarded-For` was trusted
-   with nothing in front of the process; the credential limiter's single
-   `ip:email` key made IP rotation *easier*, not harder; and the global
-   limiter had never once keyed per user. Plus the fallback this entry named:
-   it now carries a divided budget, says when it engages, and engages in
-   milliseconds rather than parking behind ioredis's offline queue.
-10. ~~**Deployment story**~~ **Done** (section 5g). One image, three
-    entrypoints — server, worker, migration runner — brought up in an order
-    where the schema is current before anything serves traffic. (The command was
-    `docker compose --profile app up -d` then; it is
-    `docker compose -f docker-compose.deploy.yml up -d` since section 5k.) CI now builds the image and boots
-    its module graph, because nothing ever building it is exactly how the old
-    Dockerfile came to be broken.
-
-Not started, deliberately: any real payment or bank integration, and hosting
-this anywhere — the image and the compose profile exist and run (section 5g),
-but nothing is provisioned, and no registry, TLS or secret store is chosen. Smaller known gaps, none of them oversights: ~~**bulk categorise,
-confirm and restore have no UI**~~ — **built**, see section 2. That entry used
-to claim each was "one button", and only one of them was: bulk categorise needs
-a selection model, and restore needed the list endpoint to be able to return
-deleted rows at all. ~~**account reconciliation has no UI**~~ — **built**, see
-section 2, though per-account statement history beyond the reconciliation list
-still is not; the workspace settings screen cannot create a workspace (the
-switcher does that); a revoked invitation cannot be re-sent, because the token
-only ever exists in the email; CSV import reads files as UTF-8 only, and
-supports no other statement format (OFX, QIF).
-
-~~One real gap found while building the import dialog: `SplitsDialog.tsx` still
-has four hardcoded English strings.~~ **Fixed**, along with a fifth found the
-same way in `TransactionFiltersBar` (`"3 selected"`). `npm run check:i18n` now
-fails on a hardcoded-key regression of that shape — see section 2c.
-
----
-
-## 5b. CSV import — the design it was built from
-
-**This is now built** (section 2d); the design below is kept because it explains
-*why* the feature has the shape it does, and it was followed almost exactly. The
-few places the implementation diverged are marked **[built as]** inline. For the
-reasoning as shipped, read `docs/decisions.md`, "CSV import is preview-then-commit".
-
-The shape of the problem: a user downloads a statement from their bank and
-wants those rows in a workspace, without typing them. Every bank names its
-columns differently, the file says nothing about which account it belongs to,
-and re-importing an overlapping month must not double the balances.
-
-**Do it as preview-then-commit.** Parsing and validating everything up front,
-showing the user what will happen, and only then writing — rather than
-streaming rows straight into the ledger — is the whole design. A file that
-fails on row 147 must leave nothing behind.
-
-Proposed API, as a new `modules/imports` following the usual `routes.ts` +
-`service.ts` split:
-
-- `POST /workspaces/:id/imports/preview` — multipart or a raw text body, plus
-  `accountId` and an optional column mapping. Parses, applies the mapping,
-  converts, runs duplicate detection, and returns a preview: the resolved rows,
-  per-row errors with line numbers, a proposed mapping when none was given, and
-  counts. Writes nothing.
-  **[built as]** a JSON body carrying the file's text, not multipart — see the
-  reasoning at the end of section 2d. The preview also persists as an
-  `import_batches` row with status `preview`, which is where the batch id comes
-  from.
-- `POST /workspaces/:id/imports/commit` — takes the preview's id plus the rows
-  the user kept, and inserts them in a single transaction, tagged with an
-  `import_batch_id`.
-  **[built as]** `POST /imports/:batchId/commit`, since the preview id *is* the
-  batch id; the body is `{ rows: [{ lineNumber, categoryId? }] }`, so a row can
-  be re-categorised on the way in.
-- `DELETE /workspaces/:id/imports/:batchId` — undo a whole batch. Cheap to
-  build once the batch id exists, and the thing a user will want within
-  30 seconds of a bad import.
-  **[built as]** exactly this, plus a `GET /imports` listing recent batches so
-  the dialog can offer undo for an earlier import too, not only the last one.
-
-Pieces to get right:
-
-- **A real CSV parser, not `split(',')`.** Quoted fields containing commas and
-  newlines, `""` escapes, a UTF-8 BOM, and CRLF endings all occur in bank
-  exports. `lib/csv.ts` currently only *writes*; the reader belongs beside it
-  with its own unit tests.
-- **Column mapping with a sensible guess.** Match header names
-  case-insensitively against a per-locale synonym list (`date`/`data`,
-  `amount`/`valor`, `description`/`histórico`/`descrição`), let the user
-  override every column, and remember the mapping per account so the second
-  import of the same bank is one click.
-- **Sign convention.** Some banks emit a signed amount, others separate
-  debit/credit columns, others a positive amount plus a `D`/`C` flag. Support
-  all three and make the choice explicit in the preview — getting this wrong
-  inverts someone's whole statement.
-- **Dates.** `DD/MM/YYYY` and `MM/DD/YYYY` are indistinguishable for the first
-  twelve days of a month. Infer from the file where a day > 12 appears, and ask
-  when it does not. Never guess silently.
-- **Money stays a string end to end.** Parse into `Decimal` via `lib/money.ts`;
-  a `Number` anywhere in this path defeats the point of the rest of the stack.
-- **Duplicate detection**, against both the existing ledger and the file
-  itself: same account, same `occurred_on`, same amount, and a similar
-  description. Flag rather than drop, and let the user decide per row — a
-  genuine pair of identical coffees on one day is not a duplicate.
-- **Limits.** Cap the file size and row count, and reject a preview whose rows
-  are not all valid before commit is allowed.
-  **[built as]** 512 KB and 2000 rows. The commit rejects any *selected* row
-  that has errors rather than the whole preview — a statement with four bad
-  lines out of six is still worth importing the other two of, and the broken
-  rows simply cannot be ticked.
-
-Client: an import dialog on the Transactions screen — drop a file, choose the
-account, confirm or fix the guessed mapping, review a table of rows with the
-duplicates and errors called out, then commit. It should show the batch id
-afterwards with an undo button.
-
-Tests: unit tests for the parser (quoting, BOM, CRLF, ragged rows), for the
-mapping guesser, and for date and sign inference; an integration test that
-previews and commits a small file, re-imports the same file and sees every row
-flagged as a duplicate, and undoes a batch.
-
----
-
-## 5c. The shared schema package
-
-Built as task 5. Full reasoning is in `docs/decisions.md`, "The validation rules
-are shared; each side still builds its own parser". What you need in order not to
-break it:
-
-**What is in `@finance/schemas`** — six files, no framework, no I/O:
-
-| File | Holds |
+| If you are touching… | Read |
 | --- | --- |
-| `limits.ts` | every numeric bound and length, in one `LIMITS` table |
-| `enums.ts` | every closed set, as `as const` tuples → Zod enum *and* TS union |
-| `patterns.ts` | predicates a form can use on text: money, date, password, ranges |
-| `messages.ts` | the `ValidationKey` union and the params a message interpolates |
-| `translations.ts` | the wording for those keys in en / pt-BR / es |
-| `fields.ts` | the API's request fields as Zod schemas, stopping before any transform |
-
-**The Zod schemas themselves are not shared, on purpose.** The API parses a JSON
-body (a number may arrive, absent is `undefined`, `moneySchema` transforms into
-the `NUMERIC(19,4)` string via `decimal.js`); a form parses text (absent is `''`,
-nothing is transformed). Sharing the objects would mean shipping `decimal.js` to
-the browser or draining the server schema of its transform. **Do not "finish the
-job" by merging them** — read the decision entry first.
-
-**Money never transforms in the package.** `moneyField` validates and stops;
-`apps/api/src/modules/shared/schemas.ts` adds `.transform(money)`. That module is
-the API's adapter onto the package and is where server-only concerns
-(query-string booleans, CSV arrays, the money transform) live.
-
-**A rejection carries a catalogue key, never a sentence.** A Zod message is fixed
-at import, before either process knows the request's language. Both resolvers
-render it late: `apps/web/src/lib/validation.ts` and
-`apps/api/src/middleware/error-handler.ts`. **This means the API's 422 details
-are now translated** — a change from what section 2c used to say. Zod's own
-built-in wording for a bare `.max(120)` is still English, deliberately.
-
-**A message that quotes a bound gets the number from `LIMITS`.** The catalogue
-entry says `{{min}}`/`{{max}}`; `VALIDATION_PARAMS` supplies the values. Never
-type a bound into a translation — a unit test fails if a placeholder has no value
-behind it, but nothing can catch a hardcoded number that has gone stale.
-
-**Adding a rule:** put the bound in `limits.ts`, the key in the `ValidationKey`
-union, the wording in all three locales in `translations.ts` (the compiler
-insists), then use it from both sides. The four divergences this package was
-built to end — `occurrenceLimit`, `leadTimeDays`, `intervalCount` and the budget
-line cap — are covered by boundary tests in
-`apps/api/tests/unit/shared-schemas.test.ts`, which check the server's field and
-the client's text predicate against each other rather than each in isolation.
-
-**Build ordering is the one operational cost.** See the shared-package convention
-at the end of section 3.
-
-**The package is ESM-only, and the error it gives says something else.** There is
-no `require` condition in its `exports` map, so resolving it from a CommonJS
-context fails with `ERR_PACKAGE_PATH_NOT_EXPORTED: No "exports" main defined` —
-which reads like a malformed `package.json` and is not. Both consumers are ESM,
-so this never bites in the app; it bites a scratch script written outside a
-`"type": "module"` package. Add `{"type":"module"}` next to the script rather
-than a CJS build to the package.
-
-### Two things only the browser found
-
-Typechecks, both builds and 242 green tests all passed before either of these
-was known. Both were caught by registering a fresh account through the real UI
-and driving the Recurring and Budgets forms.
-
-1. **A new rule on a field with no error binding fails silently.** Giving
-   `occurrenceLimit` its 1–1000 bound made the Recurring form refuse to submit —
-   correctly — while showing nothing at all, because that `TextField` was the one
-   in the dialog with no `error` / `helperText` wired to it. It had never needed
-   them: the field previously had no rule to break. **When you add a rule to a
-   field, check that the field can actually say so.**
-2. **Three budget-line helper texts rendered the raw catalogue key.**
-   `BudgetFormDialog` passed `errors.lines?.[index]?.categoryId?.message`
-   straight to `helperText` instead of through `fieldMessage()`, so a user saw
-   `validation.categoryRequired` where a sentence belonged. That predates this
-   work — the messages have been keys since the i18n session — and it survived
-   because nothing renders a nested field-array error unless you make the array
-   invalid on purpose. **Every `helperText` carrying a Zod message goes through
-   `fieldMessage()`**; the sweep that finds violations is
-   `grep -rn "helperText={.*\.message}" apps/web/src --include=*.tsx | grep -v fieldMessage`.
-
----
-
-## 5d. OpenAPI generation
-
-**Phase 1 is built.** The design this was written from is kept below, annotated
-with **[built as]** wherever the implementation diverged — it was followed
-closely, and the two places it was wrong are worth reading before extending it.
-Full reasoning as shipped is in `docs/decisions.md`, "The OpenAPI document is
-generated from the app that boots, and only describes requests".
-
-What exists now:
-
-- **`npm run generate:openapi`** writes `docs/openapi.json` (104 operations
-  across 78 paths). **`npm run check:openapi`** regenerates and exits 1 if the
-  committed file differs — that is the CI step, in the `check` job.
-- **`GET /openapi.json`** serves the same document, built from the live app on
-  first request and cached. Verified byte-identical to the committed file
-  against a running server.
-- **`apps/api/src/openapi/`** is `walk.ts` (app → route records), `schema.ts`
-  (Zod → JSON Schema), `document.ts` (route records → the document).
-  **`apps/api/src/lib/route-metadata.ts`** holds `stampRoute` and `mount`.
-- **`tests/unit/openapi.test.ts`** — 17 tests, no infrastructure.
-
-**Four things to know before you touch it:**
-
-1. **`apps/api` and `packages/schemas` are on `zod/v4` now**; `apps/web` is
-   still on Zod 3. `z.toJSONSchema()` reads Zod 4's internals and throws
-   `Cannot read properties of undefined (reading 'def')` on a v3 schema, so the
-   migration was a prerequisite rather than the optional first step the design
-   below assumed. **Import from `zod/v4` in anything under `apps/api`.**
-2. **`@finance/schemas` declares `sideEffects: false`,** which is what keeps
-   `fields.ts` — and the Zod 4 build it pulls in — out of the client bundle.
-   Removing it silently adds ~40 kB of duplicate Zod to `apps/web`.
-3. **A rule restated for the spec goes in `.meta()`, not in a real check.**
-   Moving `MONEY_PATTERN` into a `z.string().regex(...)` looks equivalent and is
-   not: inside a union it replaces the catalogue key with `"Invalid input"`
-   unless the union carries an explicit `error`, and it makes the parser reject
-   `" 12.50 "`, which `.refine(... .trim())` accepts today. Publishing a rule
-   must not change what the API accepts.
-4. **Every mount goes through `mount()`.** The walker throws on a router mounted
-   with a bare `.use()`, because it cannot recover the path. Adding a new
-   module means `mount(...)` in `routes.ts` and nothing else — the tag, the
-   security requirement, the role and the 429 all follow from the code.
-
-**Phase 2 — responses — is done; see section 5e**, which supersedes the
-"responses are the expensive half" note in the design below. All 104 operations
-describe what they return, and `apps/web/src/api/types.ts` is generated from
-that rather than hand-written.
-
----
-
-### The design it was built from
-
-Everything asserted below was checked by running it against this repo, not
-recalled — where a claim came from an experiment, it says so.
-
-### The shape of the problem
-
-The API's request rules are already machine-readable: they are Zod schemas, and
-since the shared-schema package they are built from one set of declarations. What
-is *not* machine-readable is the API's shape — which paths exist, what they
-accept, who may call them. Today that lives in three places that agree only
-because a human keeps them agreeing: the route files, `docs/api.md`, and
-`apps/web/src/api/types.ts`, whose response interfaces are hand-written.
-
-The goal is one generated document, produced from the code that actually runs, and
-a client whose types come out of it.
-
-### Use Zod's own JSON Schema output; no OpenAPI library
-
-**The installed `zod` is 3.25.76, and it already ships Zod 4 at the `zod/v4`
-subpath** — including `z.toJSONSchema()`. Verified by calling it. That matters
-twice over, because **both third-party candidates now require Zod 4 as a peer
-dependency** (`@asteasolutions/zod-to-openapi` 9.1.0, `zod-openapi` 6.0.1), so
-"just add a library" is not the low-friction path it looks like: it means the Zod
-4 migration either way, plus a dependency.
-
-Going native means the migration and nothing else. Import from `zod/v4` in the
-generator alone at first — the runtime schemas can stay on the v3 API until
-there is a reason to move them.
-
-**[built as]** — and this paragraph was **wrong**, which is the one thing in this
-design that cost real time. `toJSONSchema` reads Zod 4's internal representation:
-handed a schema built with the v3 API it throws `TypeError: Cannot read
-properties of undefined (reading 'def')`. The original experiment must have been
-run against a replica already written in `zod/v4`, which proved the function's
-behaviour but not that it could read the app's own schemas. There is no
-generator-only path; `apps/api` and `packages/schemas/src/fields.ts` moved to
-`zod/v4` wholesale. It was cheap in the end — an import change in twenty-two
-files plus `z.record(z.unknown())` needing a key type, `ZodTypeAny` becoming
-`ZodType`, and `ZodError` having to come from the version that throws it — and
-all 242 tests passed unchanged. `apps/web` stayed on Zod 3 (see the note about
-`sideEffects` above).
-
-**`{ io: 'input' }` is not optional, it is the whole trick.** An OpenAPI request
-body describes what a caller *sends*, and the API's money fields end in
-`.transform(money)`, so their output type is not their input type. Both were run
-against a faithful replica of `moneySchema`:
-
-| Call | Result |
-| --- | --- |
-| `z.toJSONSchema(body, { io: 'input' })` | correct — describes the accepted union |
-| `z.toJSONSchema(body, { io: 'output' })` | **throws** `Transforms cannot be represented in JSON Schema` |
-
-This is why `packages/schemas/src/fields.ts` keeps every transform out of the
-shared fields and leaves `.transform(money)` to the API's own adapter. That was
-done for a different reason and turns out to be exactly what makes the request
-schemas describable.
-
-### One thing to change first: `.refine()` is invisible to JSON Schema
-
-A `.refine()` is an arbitrary predicate, so `toJSONSchema` drops it silently. Run
-against the money field, the output is `anyOf: [string, number]` — with no
-mention of the decimal format at all. A spec that omits the rule is worse than no
-spec, because it looks authoritative.
-
-**Before generating anything, move every rule that JSON Schema can express out of
-`.refine()`.** `MONEY_PATTERN` and `DATE_ONLY_PATTERN` already live in
-`packages/schemas/src/patterns.ts`; using them through `z.string().regex(...)`
-instead of `.refine(isMoneyText)` puts them in the spec as a `pattern` and
-changes nothing about what is accepted. What genuinely cannot be expressed —
-"greater than zero" on a decimal *string*, the cross-field rules like
-`fromAccountId !== toAccountId` — stays a `.refine()` and gets a prose
-`description` instead. The unit tests in `tests/unit/shared-schemas.test.ts`
-already pin the behaviour, so this refactor is safe to make: if a bound moves,
-they fail.
-
-**[built as]** metadata rather than a real `regex()`, because "changes nothing
-about what is accepted" turned out to be false in two ways. A branch-level
-`regex` inside `moneyField`'s union makes Zod report `"Invalid input"` instead of
-the catalogue key, un-translating every rejected amount, unless the union is
-given an explicit `{ error: 'validation.decimalAmount' }`. And the shipped parser
-refines on `String(value).trim()`, so it accepts `" 12.50 "` — which a branch
-regex rejects. Narrowing what the API accepts is not something a documentation
-task gets to do quietly, so `dateField`, `moneyField` and `positiveMoneyField`
-carry `.meta({ pattern, description })` and their parsers are byte-for-byte
-unchanged. `.meta()` survives `.transform()`, `.optional()` and `.nullish()`,
-which is what makes this work: routes compose `moneySchema`, never `moneyField`.
-
-### Getting the routes out of the app, not out of a list
-
-A spec needs (method, path, schemas, required role) per route. Three findings,
-all from walking the real app:
-
-1. **The app is walkable.** `app._router.stack`, recursed, yields **103 routes**.
-   So the document can be generated from the app that actually boots, which is
-   the only version that cannot drift. (That count was taken before this was
-   built; it is 104 now, because `/openapi.json` is itself a route. Do not treat
-   any number in this design section as current — the specification is.)
-2. **Middleware are anonymous.** `validate(...)`, `requireEditor` and friends are
-   arrow functions returned from factories; only `requireAuth` and
-   `withWorkspace` survive with a `.name`. **You cannot identify a route's schema
-   or its role by inspecting handler names.** The fix is one line in each
-   factory: stamp what it knows onto the handler it returns
-   (`handler.schemas = schemas` in `validate()`, `handler.role = 'editor'` in
-   `requireEditor`), and have the walker read the stamps.
-3. **Do not reverse-engineer the mount prefixes.** Reassembling a path from
-   `layer.regexp` half-works — the structure comes out right and `:id` from
-   `route.path` is clean, but the mounted-router parameter arrives as
-   `/workspaces(?:/([^/]+?))/accounts` and unescaping that by hand is a
-   heuristic waiting to break. There is no need: **every mount in this app is in
-   one file.** `apps/api/src/routes.ts` holds all sixteen (five top-level, eleven
-   workspace-scoped) and `app.ts` holds the `/api/v1` one. A `mount(prefix,
-   router)` helper that records the literal string it was given costs seventeen
-   edits in two adjacent files and yields exact paths with nothing inferred.
-
-**[built as]** all three, with the stamps in a `WeakMap` (`lib/route-metadata.ts`)
-rather than as properties on the handlers, so the running app is not carrying
-documentation fields on objects Express also inspects. The rate limiters are
-stamped too, which is why `/health` and `/openapi.json` correctly publish no 429.
-
-**One trap the design did not see.** A mount's guard middleware cannot be
-recognised by handler identity. `mount()` records what guards a router so the
-walker does not also inherit it positionally — Express applies such a guard to
-every *later* sibling under the same prefix — but `requireAuth` is a single
-shared object that is *also* ordinary middleware inside `userRouter`,
-`notificationRouter` and `workspaceRouter`. Keying the skip on identity dropped
-authentication from those, and the generated document confidently published two
-dozen authenticated routes as public. The walker matches guards by position
-within one stack instead. **If you add a shared middleware as a mount guard,
-check the public route list in the generated spec** — it is the fastest way to
-see it. Exactly seven operations carry no security requirement: `/health`,
-`/health/ready`, `/openapi.json`, and auth's `register`, `login`, `refresh` and
-`logout`. Anything else appearing there is this bug coming back.
-
-### Responses are the expensive half — do requests first
-
-Requests have schemas. **Responses have none**: services return Kysely rows and
-routes `res.json()` them, so there is nothing to convert. Describing them means
-writing response schemas from scratch for every endpoint, which is a bigger job
-than everything above combined.
-
-Split it:
-
-- **Phase 1 — requests, paths, security, errors.** Generates from what exists.
-  Delivers a real spec, `docs/api.md` gets a generated companion, and the error
-  envelope (already a fixed shape) is described once as a shared component.
-- **Phase 2 — responses**, endpoint by endpoint, and only then does
-  `apps/web/src/api/types.ts` get replaced by `openapi-typescript` output
-  (7.13.0; it takes the spec and needs no Zod). **Until phase 2 lands, leave
-  `api/types.ts` alone** — a half-generated types file where nobody can tell
-  which half is which is worse than the honest hand-written one.
-  **[built as]** exactly this, and `openapi-typescript` 7.13.0 was the right
-  call. The one thing the split did not anticipate is that authoring a response
-  schema is guesswork unless something checks it, so `responds()` enforces every
-  declaration against the real body under test — see section 5e. `types.ts`
-  survives as an alias layer over the generated `schema.d.ts` rather than being
-  deleted, because the generated names are unusable at a call site; it holds no
-  field lists, so the worry above does not apply.
-
-### Serving and checking it
-
-Write the document to a **committed file** (`docs/openapi.json`) from a
-`generate:openapi` script, and serve that same file at `/openapi.json`. The
-committed copy is what makes it reviewable: a pull request that changes an
-endpoint shows the contract change in the diff.
-
-**[built as]** the endpoint builds from the live app on first request and caches
-the result, rather than reading the committed file off disk. It needs no
-build-time copy into `dist/`, and what a caller reads is then guaranteed to be
-what that process enforces rather than what someone last remembered to commit.
-The committed file still exists for review and is what CI compares against, so
-the two cannot diverge; they were checked byte-identical against a running
-server.
-
-Then **add a CI step that regenerates and fails if the result differs from the
-committed file**, the same way the migration round-trip step earns its place —
-it is the only thing that stops the spec from quietly rotting. It needs no
-database, so it belongs in the `check` job.
-
-### Tests
-
-Unit-level, no infrastructure: the generator produces a document that parses as
-OpenAPI 3.1; every one of the 103 routes appears exactly once; every path
-parameter in a path string has a matching parameter object; a route behind
-`requireEditor` carries the security requirement; and the money field's `pattern`
-survives into the schema — that last one is the regression test for the
-`.refine()` trap above.
-
-**[built as]** all of those plus four worth keeping: every operation's `security`
-is compared against the walker's own view (the check that would have caught the
-mount-guard bug immediately), `operationId`s are unique and usable as
-identifiers, a 429 appears only where a limiter is really mounted, and the
-committed `docs/openapi.json` is compared against a freshly built document — so
-a stale file fails the *test suite* too, not only CI. 17 tests in
-`tests/unit/openapi.test.ts`. The route count assertion is written against
-`walkRoutes()` rather than the literal 103, which is now 104 because
-`/openapi.json` is itself a route.
-
-The test file sets `DATABASE_URL` and the three signing secrets before importing
-the app, exactly as `scripts/generate-openapi.ts` does: generating touches no
-database, but `config/env.ts` parses the environment at import time and CI's
-`check` job has no Postgres to point at.
-
----
-
-## 5e. OpenAPI phase 2 — response schemas, and the generated client types
-
-**Done.** Every operation the app publishes describes what it returns (108 as
-of section 5o — the count moves whenever a route does; the invariant is "all
-of them", not the specific number), every one is
-exercised by a real call in the suite, and `apps/web/src/api/types.ts` no longer
-describes a single structure by hand. Full reasoning is in `docs/decisions.md`
-("Response schemas live beside the service, and the test suite proves them" and
-"The client's response types are generated"). This is what you need in order to
-extend it without breaking it.
-
-### The chain
-
-```
-apps/api/src/modules/<domain>/responses.ts     Zod, authored beside the query
-        ↓  responds({ 200: … }) on the route, enforced under NODE_ENV=test
-docs/openapi.json                              npm run generate:openapi
-        ↓  openapi-typescript
-apps/web/src/api/schema.d.ts                   GENERATED — never edit
-        ↓  aliases only, no field lists
-apps/web/src/api/types.ts                      the names the app imports
-```
-
-`npm run generate:openapi` runs both generation steps; `npm run check:openapi`
-regenerates both and fails on any difference, which is the CI step. **They are
-one command on purpose** — regenerating the spec without the client types would
-let the two drift.
-
-### Where things live
-
-| What | Where |
-| --- | --- |
-| A domain's response schemas | `modules/<domain>/responses.ts` — beside the query that builds it |
-| Scalars and cross-module shapes | `modules/shared/responses.ts` — the response side of `shared/schemas.ts` |
-| `/health`, `/health/ready`, `/openapi.json` | `openapi/service-responses.ts` — they belong to no module |
-| The declaration + the runtime check | `middleware/responds.ts` |
-| Zod → components conversion | `openapi/schema.ts`'s `toResponseJsonSchema` |
-
-**Beside the service, deliberately, not in one `openapi/responses/` tree.** The
-change that invalidates a response schema is a change to the `SELECT` above it;
-keeping the two in one folder puts them in one diff. A central tree relies on
-whoever edited the query remembering a parallel file exists, and that failure is
-silent — the spec still generates and now describes last month's row.
-
-### Adding or changing an endpoint
-
-1. Write or extend `modules/<domain>/responses.ts`. Build fields from
-   `shared/responses.ts` (`money`, `dateOnly`, `timestamp`, `uuid`, `integer`,
-   `currencyCode`, `percent`, `jsonObject`, `dateRange`, `periodTotals`,
-   `page(item)`), and wrap anything a caller has a *word* for in
-   `component('Account', …)`.
-2. Put `responds({ 200: theEnvelope })` on the route, between `validate()` and
-   the handler. A 204 is `responds({ 204: NO_BODY })`; a CSV or file download is
-   `responds({ 200: media('text/csv', '…') })`.
-3. Make sure a test *succeeds* against it — see "reach" below.
-4. `npm run generate:openapi`, then `npm test`.
-
-A new name for the client goes in `apps/web/src/api/types.ts` as an alias:
-`components['schemas'][…]` for a component, `Ok<'operationId'>` for an envelope
-only one endpoint returns. **Never write a field list in that file.**
-
-### The six rules
-
-1. **A response schema describes the wire, not the row.** A `timestamp` column is
-   a JS `Date` in the service and an ISO string in the response; the schema says
-   string, and `responds()` checks it against `JSON.parse(JSON.stringify(body))`
-   so the two cannot disagree. This is the response-side twin of the request
-   side's `io: 'input'`.
-2. **`responds()` is enforced under `NODE_ENV=test`.** It parses every outgoing
-   body against the declaration and fails the request loudly on a mismatch — and
-   also on a *success status the route does not declare*, which catches a handler
-   that starts answering 200 where its declaration still says 201. Outside tests
-   it is a `next()`.
-3. **Reach matters as much as strictness.** A schema no test succeeds against is
-   an assertion nobody made. `RESPONSE_REACH=1 npx vitest run 2>&1 | grep -o
-   "REACH .*" | sort -u` lists every declaration the suite exercises; anything
-   declared and missing from that list belongs in
-   `tests/integration/response-contracts.test.ts`, which exists to close exactly
-   that gap. It is currently 104/104.
-4. **Name the concepts, not the packaging.** `Account` and `CategoryNode` are
-   components; `{ account: Account }` is not. The scalars (`Money`, `Timestamp`,
-   `DateOnly`, `Uuid`, `CurrencyCode`, `Integer`) are components too — an ISO
-   instant compiles to a 300-character pattern and inlining it beside every
-   `createdAt` in a hundred operations buries the document.
-5. **`component()` composes; `.describe()` on one is safe.** Zod does not carry a
-   component's `id` onto a derivative, so `money.describe('…')` emits prose beside
-   the `$ref` and `timestamp.nullable()` an `anyOf` around it. What you must not
-   do is name two different schemas the same thing — `component()` throws.
-6. **A recursive schema must be named.** Zod emits `$ref: "#"` for a schema that
-   is its own root, which points at the whole document; the converter throws
-   rather than publish that. `component()` gives it somewhere to point.
-
-### Traps already hit
-
-- **Never compose a component with `.and()`.** A Zod intersection publishes as
-  `allOf`, and the component branch carries `additionalProperties: false`, so a
-  strict validator rejects every property contributed by the other branch. Use
-  `.extend()`, which inlines the fields and drops the id — `periodTotals.extend({
-  range: dateRange })` in `analytics/responses.ts` is the reference case.
-- **Zod's metadata registry is a process-wide singleton that refuses a repeated
-  id, and it outlives a source module.** `vitest` with `pool: forks, singleFork`
-  re-evaluates `src/` per test file while `node_modules` stays cached, so the six
-  test files that import the app registered `Money` six times and the second
-  threw `ID Money already exists in the registry`. `component()` evicts the stale
-  registration; the guard that matters is its own `Set`, reset by the same
-  re-evaluation. **Do not "simplify" that eviction away.**
-- **`GET /categories` really returns two shapes**, so it is published as a union
-  of the two envelopes rather than as one with an optional `children`. A caller
-  picks the branch its `?shape=` asked for.
-- **Some fields are legitimately optional because a join supplies them.**
-  `Transaction.accountName`, `RecurringTransaction.categoryName` and
-  `Tag.usageCount` are present on the list and detail queries and absent from
-  create and update, which use `returningAll()` on one table. The schemas say
-  `.optional()` and mean it.
-
-### What describing them found
-
-Both are the payoff, and both were invisible to a typecheck before:
-
-1. **`RecurringTransaction.categoryName` was never selected.** `RecurringRow.tsx`
-   renders `accountName · categoryName`, the hand-written client type claimed the
-   field existed, and the API had never joined it — so every schedule had shown
-   only its account name since the redesign. The join was added beside the
-   `accountName` one it should always have sat next to, and the row now reads
-   `Checking · Alimentação` in a real browser.
-2. **A category's `kind` has three members**, not two: `transfer` is reachable and
-   the client's `CategoryKind` had said otherwise.
-
----
-
-## 5f. Live exchange rates
-
-Task 8, built in a later session. Full reasoning is in `docs/decisions.md`,
-"Live exchange rates: one provider interface, and a fallback that cannot do
-harm". What you need in order not to break it:
-
-**`EXCHANGE_RATE_PROVIDER` picks one of three**, and `static` is still the
-default, so a checkout with no network behaves exactly as it did before:
-
-| Value | What it is | Needs |
-| --- | --- | --- |
-| `static` | seven indicative BRL pairs hardcoded in `service.ts` | nothing |
-| `frankfurter` | the ECB's daily reference rates, republished | nothing |
-| `openexchangerates` | commercial, USD-quoted on the free plan | `EXCHANGE_RATE_API_KEY` |
-
-**`modules/currencies/providers.ts` imports neither `config/env` nor
-`db/client`.** That is what lets its eighteen tests run in the unit lane with no
-infrastructure at all: `fetch` is injectable (`ProviderOptions.fetchImpl`), and
-everything else in the file is pure. The service decides *which* provider to
-build and from what configuration; the provider only knows how to talk to one.
-**Keep it that way** — the moment it reads `env`, the test file needs the same
-environment stubbing `tests/unit/openapi.test.ts` has to do.
-
-**Adding a provider** is: a payload schema, a `fetchLatest` that normalises into
-a `RateQuote` (base, date, rates as decimal *strings*), a case in
-`createRateProvider`, and the name in `LIVE_PROVIDERS` **and** in `env.ts`'s
-enum. Nothing else — `rebase()`, the filtering, the upsert and the fallback are
-all shared.
-
-Five things that are deliberate, in rough order of how expensive they'd be to
-rediscover:
-
-1. **A row carries the provider's date, not today's.** The ECB publishes on
-   business days, so a Sunday refresh rewrites Friday's row rather than
-   inventing a Sunday one. Do not "fix" this to `today()` — it is the whole
-   reason a historical conversion is genuinely historical.
-2. **A failed live refresh never falls back to the static table** unless there
-   are no rates on record at all. `getRate` already resolves the most recent
-   rate at or before the date it is asked about, so a missed day costs
-   freshness and nothing else; overwriting a real rate with an indicative one
-   every time the network hiccups would cost correctness.
-3. **Only currencies in the `currencies` table are stored.** `exchange_rates`
-   has foreign keys into it, and one unknown code fails the whole insert. This
-   is why ARS keeps its static rate under `frankfurter` — it is not an ECB
-   currency — which is correct, not a gap.
-4. **Rates become strings the moment they arrive** and are never a `number`
-   again, following the same rule money does. `rebase()` divides through
-   `Decimal`.
-5. **An error message may not carry the API key.** Open Exchange Rates
-   authenticates with `app_id` in the query string, so failures print the
-   origin and path only, and there is a test asserting the key does not appear.
-
-**A `.env` variable that exists but is empty is `''`, not `undefined`, and `??`
-will not save you.** `EXCHANGE_RATE_API_URL=` in `.env.example` turned
-`${endpoint}/latest` into `/latest` and `new URL` threw before a request was
-ever made. `env.ts` now normalises a blank optional string to `undefined` via
-`blankAsUndefined`; use it for any new optional string read from the
-environment.
-
-**Verified against the real ECB feed**, not only against a stub: six pairs
-landed in the development database, and `getRate` then answered BRL→USD
-directly, USD→BRL by inversion and USD→EUR by crossing through BRL. To repeat
-it, set `EXCHANGE_RATE_PROVIDER=frankfurter` and call `refreshRates()` — it is
-a dozen lines of scratch script and needs no key.
-
----
-
-## 5g. Deployment: one image, three entrypoints
-
-Task 10. Full reasoning is in `docs/decisions.md`, "One image, three
-entrypoints, and a migration that gates the rollout". What you need in order not
-to break it:
-
-```bash
-# `--env-file .env.deploy` for a real one; see section 5k
-docker compose -f docker-compose.deploy.yml up -d --build   # migrate, then api + worker
-docker compose -f docker-compose.deploy.yml logs -f api
-docker compose -f docker-compose.deploy.yml down
-```
-
-**These commands used to be `docker compose --profile app …` against
-`docker-compose.yml`.** The deployed stack is now its own file — section 5k has
-the reasoning; everything else in this section is unchanged by that move.
-
-**`apps/api/Dockerfile` builds from the repository root**, never from its own
-directory — the API depends on the `@finance/schemas` workspace, so the context
-has to contain both packages. The old file copied only `apps/api` and could
-neither install nor compile; it had been broken for several sessions because
-nothing ever built it.
-
-**`docker-compose.deploy.yml` is the deployed shape**: `migrate` runs to
-completion, then `api` and `worker` start behind
-`depends_on: service_completed_successfully`. A failed migration stops the
-rollout instead of leaving a new binary talking to an old schema.
-
-**None of the three reads `env_file: .env`** — see sections 5j and 5k. They take
-the shared `x-app-environment` block at the top of that file, where every
-credential is a required compose variable and everything else defaults to what
-`config/env.ts` would default to anyway. If you add a variable the deployed API
-needs, add it there; no `.env` will carry it.
-
-Five things that will bite, all of them found by building and running rather
-than by reading:
-
-1. **`npm ci --ignore-scripts` does not stop a linked workspace's `prepare`.**
-   `@finance/schemas` compiles itself that way, so a stage holding only its
-   `package.json` fails with `TS5058: The specified path does not exist:
-   'tsconfig.json'`. The build copies the package whole and lets `prepare` do
-   its job; production deps come from `npm prune --omit=dev` afterwards rather
-   than from a second `npm ci`, which would hit the same wall with no compiler
-   installed.
-2. **`--workspace` scopes which scripts run, not what gets installed.** With
-   `apps/web/package.json` in the context, npm installed the client's tree too
-   and `prune` kept it — MUI, Recharts, Framer Motion and 58 MB of icon fonts
-   inside the API image. Leaving that manifest out of the build context is what
-   drops it. Do not "tidy up" by copying all the manifests for symmetry.
-3. **Copy the per-workspace `node_modules`, not just the root one.** npm hoists
-   what it can and nests what it cannot; it nested `i18next` under
-   `apps/api/node_modules`. The image built, every file-existence check passed,
-   and the container died on boot with `ERR_MODULE_NOT_FOUND`.
-4. **`env_file` beats the image's `ENV`.** `.env` is a development file, so the
-   compose services set `NODE_ENV: production` in `environment:` (which beats
-   `env_file`) — otherwise a production container runs as `development` and asks
-   pino for the `pino-pretty` transport that a pruned image does not contain.
-   `lib/logger.ts` now resolves that transport defensively too, because failing
-   at import means dying before there is a logger to say why.
-5. **Debian slim, not alpine**, for the same reason `docker-compose.yml` pins
-   Debian Postgres: a musl image cannot exec its own `/bin/sh` under this
-   machine's Docker Desktop/WSL2 setup.
-
-**CI builds the image and boots its module graph.** `docker run … node -e
-"await import('/app/apps/api/dist/app.js')"` pulls in every route, service and
-library without opening a socket, which is exactly the check that catches a
-missing dependency an existence test would miss.
-
----
-
-## 5h. Clearing the dependency advisories
-
-`npm audit` reported **nine advisories — 1 critical, 3 high, 5 moderate** across
-four root packages. All nine are gone; the tree audits clean including dev
-dependencies. Full reasoning is in `docs/decisions.md` ("Dependency advisories
-are fixed by upgrading, and the gate is on what ships"). What you need here:
-
-| Package | Was | Now | Ships? |
-| --- | --- | --- | --- |
-| `kysely` | 0.27.6 | **0.29.5** | yes — API runtime |
-| `nodemailer` | 6.10.1 | **9.0.5** | yes — API runtime |
-| `react-router-dom` | 6.30.4 | **7.18.2** | yes — client bundle |
-| `vitest` | 2.1.9 | **3.2.7** | no — dev only |
-
-**`npm audit fix` fixes none of them.** Verified by running it: it reports no
-changes and the same nine findings. Every one needed an explicit major bump, so
-do not expect the automated path to help here or next time.
-
-Five things to know before touching any of this:
-
-1. **Kysely 0.29 moved the migration API to `kysely/migration`.** `Migrator`,
-   `Migration` and `MigrationProvider` now import from the subpath; the root
-   export resolves to a `KyselyTypeError` telling you so at compile time.
-   `db/migrate.ts` and `db/migrations/index.ts` are the two files affected.
-2. **Kysely 0.28 removed `preventAwait`**, so awaiting a query builder no longer
-   throws — it resolves to the builder object. See the amended bug 2 in section
-   1: the rule is unchanged, the failure is now silent.
-3. **`vitest` stopped at 3.2.7 on purpose, and 4.x is a separate decision.**
-   Vitest 4 removes `poolOptions` and maps `singleFork` onto `maxWorkers: 1,
-   isolate: false` — which is *not* what `singleFork` meant. `singleFork` keeps
-   re-evaluating the module graph per test file, and `component()` in
-   `openapi/schema.ts` is written around exactly that (see section 5e's registry
-   trap). Moving to vitest 4 means reasoning about that first.
-4. **The vite tree is now a single copy.** vitest 3 accepts `^6` and resolves the
-   root `vite` 6.4.3 rather than nesting its own vite 5. The root `vite` pin
-   matters more than before, not less — see "Environment quirks".
-5. **`react-router-dom` 7 needed no source change.** Every import the client uses
-   is API-identical in v7. There was no in-major fix to take: 6.30.4 is the
-   newest v6 on the registry and the open redirect is fixed in 7.18.0.
-
-**Two of the four upgrades are invisible to `npm test`, so neither was trusted
-to it.** `sendEmail` short-circuits under `NODE_ENV=test` and never builds a
-transporter, so nodemailer was verified by delivering a real invitation through
-the compiled `dist/lib/email.js` into MailHog and reading it back out of
-MailHog's API. React Router has no tests at all, so it was driven in Chrome —
-signed-out redirect, all eight sidebar routes, history back/forward, a signed-in
-deep-link reload and the unknown-path catch-all, 15 checks green. Kysely is the
-one the suite does cover well: 320 tests of real SQL, plus a migration
-up/down/status round-trip, since `Migrator` is the piece that moved.
-
-**The CI gate added with this work fails only on high-or-critical advisories in
-runtime dependencies.** Dev-tool findings are reported and do not block. The
-reasoning is under "CI" in section 4.
-
----
-
-## 5i. Rate-limit and auth hardening
-
-Task 9, built in a later session. Full reasoning is in `docs/decisions.md` —
-"Rate limiting is two-dimensional, and a forwarded header is only trusted when
-something sends it" and "'Sign out everywhere' now means everywhere, via one
-nullable column". What you need in order not to undo it:
-
-**`TRUST_PROXY` defaults to `false`, and that is deliberate.** `req.ip` comes
-out of `X-Forwarded-For`, which the *client* sends. The old code set
-`trust proxy: 1` unconditionally under a comment claiming every deployment sits
-behind a reverse proxy; this repo's own compose profile publishes the API
-straight onto a host port. Measured before the fix: six credential attempts from
-six invented addresses, all allowed, against a limit of three. **A deployment
-that really is behind a proxy has to say so** — `TRUST_PROXY=1` for one hop, or
-`loopback`, or a list of subnets. Setting it when nothing is in front reopens
-the hole.
-
-**Every request is charged to two budgets, and both are load-bearing:**
-
-| Limiter | Buckets | Default |
-| --- | --- | --- |
-| `globalRateLimit` (all of `/api/v1`) | the address, and the user if the bearer token verifies | 1200/min, 300/min |
-| `authRateLimit` (register, login, change-password) | the address, and the account named in the body | 10/min, 20/15min |
-
-Four rules behind that table, in rough order of how expensive they'd be to
-rediscover:
-
-1. **`globalRateLimit` verifies the bearer token itself.** It is mounted on
-   `/api/v1`, above every `requireAuth` in the app, so `req.user` is *always*
-   `undefined` there — the old key expression `req.user?.id ?? req.ip` had been
-   a pure IP limiter for its whole life and nothing could have shown you. Do not
-   "simplify" it back to reading `req.user`. A token that fails verification is
-   charged to its address, because otherwise a stream of forged tokens would
-   mint a fresh budget per request.
-2. **The credential limiter's two buckets must stay separate.** A single
-   `ip:email` key is not two dimensions, it is *weaker* than either alone: a new
-   address is a new key, so rotating addresses hands back the whole budget
-   against the same account. The per-account bucket has its own, much longer
-   window for exactly that reason.
-3. **The fallback budget is divided by `RATE_LIMIT_INSTANCES`.** Falling back to
-   an in-process counter when Redis is down is right; falling back to the *full*
-   budget on every replica means N instances allowing N times the advertised
-   limit at the worst possible moment. It also logs, once a minute, that it is
-   running degraded.
-4. **`enableOfflineQueue: false` on the shared Redis client is not a style
-   choice.** With ioredis's offline queue on, a command issued during an outage
-   is parked until the connection returns — the first request after Redis
-   stopped hung for over two minutes behind the reconnect backoff instead of
-   being served by the fallback that exists for it. Everything using that client
-   (the cache, the limiter) has an answer for "Redis said no" and none has one
-   for "Redis has not answered yet". **BullMQ's connection keeps the queue** and
-   must, because it issues blocking commands across reconnects.
-
-**Credential endpoints fail closed; everything else fails open.** A store error
-used to call `next()` everywhere, which on `/auth/login` means unlimited password
-guesses for the length of an incident. The refusal is a 429 rather than a 503 on
-purpose — the client's correct behaviour is identical, the endpoint already
-publishes 429, and which of the two happened belongs in a log line.
-
-**`users.tokens_valid_from` (migration `009`) makes revocation reach the access
-token.** Revoking refresh tokens ends a session's ability to renew and does
-nothing to the JWT already issued, so "sign out everywhere" quietly meant "in
-about fifteen minutes". `requireAuth` already reads the user's row to check the
-account is active, so the check rides along on a query that was happening
-anyway — no revocation list, no shared denylist cache. NULL means nothing has
-been revoked.
-
-**The access token carries `iatMs`, and the comparison depends on it.** A JWT's
-`iat` counts whole seconds, which cannot distinguish "issued just before the
-revocation" from "issued just after" — so a second-granular cut-off either lets
-a stale token survive or rejects the replacement the user just signed in for.
-Both are wrong and the choice is false. `tests/integration/auth.test.ts` has a
-case asserting a user can sign back in **in the same second** they signed out of
-everything; if you touch this, that is the test that will tell you.
-
-**Two smaller fixes in the same pass.** CORS reflected any origin with
-credentials whenever `NODE_ENV` was not literally `production` — which included
-staging and preview deployments — and is now an explicit list (`CORS_ORIGINS`,
-defaulting to `WEB_BASE_URL`) everywhere except development. And the refresh
-cookie's `maxAge` was hardcoded to thirty days while the token's real lifetime
-comes from `REFRESH_TOKEN_TTL_DAYS`.
-
-`apps/api/src/middleware/rate-limit-policy.ts` holds the pure half — key
-derivation, the trust-proxy parse, the fallback division — and imports neither
-`config/env` nor Redis nor Express, which is what lets `tests/unit/
-rate-limit-policy.test.ts` run in the unit lane. Same rule as
-`modules/currencies/providers.ts`; **keep it that way.**
-
-### Verified by driving it, not by reading it
-
-None of this is visible to the test suite: under `NODE_ENV=test` the limiter is
-`RateLimiterMemory` with a thousand times the budget, precisely so unrelated
-cases do not trip each other. So the runtime behaviour was checked against real
-instances with small budgets and real Redis:
-
-- rate-limit headers present, and reporting the *tighter* of the two budgets —
-  `x-ratelimit-limit: 1200` anonymous, `300` with a bearer token, which is the
-  per-user bucket doing something for the first time;
-- eight attempts on one account from eight different addresses, cut off at the
-  fifth, with a second account from those same addresses untouched;
-- with `TRUST_PROXY=false`, five attempts from five *claimed* addresses cut off
-  at the third — and the same run against a trusted-proxy instance allowed all
-  six, which is what the old unconditional setting shipped;
-- Redis stopped mid-run: budget dropped to ⌊6/3⌋ = 2 as configured, requests
-  answered in ~3 ms, the degradation logged, `/health/ready` reporting
-  `{"redis":"down"}` in 4 ms.
-
----
-
-## 5j. Production refuses a published signing secret
-
-Finding **C-1** of `AUDIT_REPORT.md`, the first Phase 1 task. Full reasoning is in
-`docs/decisions.md`, "A published secret is refused at boot, not documented as
-something to change". What you need in order not to undo it:
-
-**`apps/api/src/config/production-policy.ts` is the whole rule, and it imports
-nothing.** Same constraint as `middleware/rate-limit-policy.ts` and
-`modules/currencies/providers.ts` — no `config/env`, no database, no Express —
-which is what lets `tests/unit/secret-policy.test.ts` run in the unit lane.
-`config/env.ts` calls it after the Zod parse, and only when
-`NODE_ENV=production`. **Keep it that way.**
-
-Under `NODE_ENV=production` a JWT secret is rejected when it is shorter than 32
-characters, is one of the values this repository has published, still *looks*
-like a placeholder (`change-me`, `placeholder`, a leading `dev-`), has fewer
-than ten distinct characters, or is the same value as the other secret.
-Development and tests keep the old 16-character floor: nothing they sign
-outlives the process.
-
-Four things that are deliberate:
-
-1. **`.env.example` still boots in development.** The audit suggested replacing
-   the values with `CHANGE_ME`, which would break `cp .env.example .env && npm
-   run dev` — the documented first five minutes here — to defend a case the boot
-   check already covers. They now read `dev-only-insecure-access-secret-change-me`
-   and are on the denylist, so they work locally and cannot reach production.
-2. **A new placeholder pattern must be improbable in 64 random characters.**
-   These regexes run against values that are legitimately random. An anchored
-   `^ci-` would fire on about one generated secret in 130,000, which is a
-   false refusal at the boot of a deploy; the published `ci-…` throwaways are
-   caught by the exact list instead. The unit test asserts 200 freshly generated
-   secrets pass, and that half is the one that matters.
-3. **If you ever publish a new placeholder — in `.env.example`, in the CI
-   workflow, in a script — add it to `PUBLISHED_SECRETS`.** The exact list is
-   what makes "this value is public knowledge" a fact rather than a guess.
-4. **The deployed services do not load `.env`.** That was the pipe the
-   placeholder travelled down: a development file, loaded wholesale, into
-   containers forced to `NODE_ENV=production`. They take `x-app-environment` at
-   the top of **`docker-compose.deploy.yml`** — which was still
-   `docker-compose.yml` when this section was written, and moved in 5k — where
-   every credential is a required variable (`${JWT_ACCESS_SECRET:?…}` stops
-   compose before it starts anything).
-
-**CI gates it in both directions**, in the `check` job: the existing "load the
-whole app graph" step now generates a fresh `openssl rand -hex 32` per run,
-because the image is `NODE_ENV=production` and the old throwaways are exactly
-what is now refused — and a new step runs the same image on a published
-placeholder and fails if it *boots*.
-
-Verified by running the real `config/env.ts` five ways: production plus each of
-the two published pairs (refused), production with one real secret in both
-variables (refused), production with two generated secrets (boots), and
-development with the placeholders (boots).
-
-One thing this task did **not** do, still open: `JWT_REFRESH_SECRET` signs both
-refresh tokens and invitation tokens (**M-11**) — the "must not be the same
-value" check is only half of that finding.
-
-**The module is `production-policy.ts`, not `secret-policy.ts`.** It was renamed
-when C-2 (section 5k) added the second boot-time refusal, the mail host. If you
-add a third — a cookie-topology rule for H-4, say — it belongs here rather than
-inline in `env.ts`, for the same reason the first two do: the decision is the
-part that can be quietly wrong.
-
----
-
-## 5k. Development and deployment are two compose files
-
-Finding **C-2** of `AUDIT_REPORT.md`, the second Phase 1 task. Full reasoning is
-in `docs/decisions.md`, "Development and deployment are two files, because a
-profile was never a boundary". What you need in order not to undo it:
-
-**A compose service without a `profiles:` key is in the *default* profile and
-starts unconditionally.** That one fact is the whole finding. `--profile app`
-therefore never selected a deployed stack — it *added* `migrate`, `api` and
-`worker` to the development one, so the "deployment" also brought up Postgres on
-5432 with the password `finance`, Redis on 6379 with no password at all, and
-**MailHog's unauthenticated UI on 8025** with the API and worker both pointed at
-it. Every workspace invitation link is a bearer token granting membership, and
-that UI displays them all.
-
-| File | What it is |
-| --- | --- |
-| `docker-compose.yml` | development infrastructure only: postgres, redis, mailhog |
-| `docker-compose.deploy.yml` | the deployed shape: postgres, redis, migrate, api, worker |
-| `.env.example` | development configuration; public secrets, well-known password |
-| `.env.deploy.example` | deployment configuration; nothing that is a credential has a default |
-
-Six things that are deliberate:
-
-1. **The deploy file publishes no database or cache port at all.** Not a
-   different binding — none. Reach them with `docker compose exec` or a tunnel.
-   `docker inspect` shows `map[5432/tcp:[]]`, which is what "exposed to the
-   compose network and nowhere else" looks like.
-2. **The development file binds to `127.0.0.1` explicitly.** Docker's `"5432:5432"`
-   means `0.0.0.0:5432` — on a laptop joining a café network, that is a Postgres
-   with the password `finance` on the local WiFi. Keep the prefix on any port
-   added there.
-3. **Redis takes `--requirepass` and the password rides in `REDIS_URL`.** The
-   healthcheck authenticates through `REDISCLI_AUTH`, which `redis-cli` reads on
-   its own, so the password never lands on a command line inside the container.
-   Both passwords are interpolated into URLs, so **generate them from base64url
-   or hex** — an `@` or a `/` breaks the URL rather than the password.
-4. **`name: finance_app` is pinned in the development file.** Compose derived
-   that from the directory before anyone wrote it down, and it is what prefixes
-   the volumes; changing it points the file at fresh empty ones and abandons the
-   local database. The deploy file is `finance-deploy` and has its own volumes on
-   purpose — it is not a way to run the built image against your demo data.
-5. **`SMTP_HOST` has no safe default in production**, so there is none:
-   `production-policy.ts`'s `isDevelopmentMailHost` refuses `localhost`,
-   `mailhog`, `127.0.0.1` and friends at boot. Mail carries invitations,
-   `sendEmail` logs its failures rather than raising them, and
-   `createInvitation` never reads the result — so a deployment left on the
-   default posts invitations into a socket that is not listening and reports
-   success. The check is on the **resolved value**, not on whether the variable
-   was set, because `env.ts` loads `.env` through dotenv *into* `process.env`
-   and the two are indistinguishable afterwards.
-6. **The worker's healthcheck is disabled rather than faked.** The image's
-   `HEALTHCHECK` probes the HTTP port, which the worker never opens, so
-   inheriting it marks a healthy worker unhealthy forever. A real liveness
-   signal is **P-6** and is not built.
-
-Verified by running the whole thing, not by reading it: the deploy stack brought
-up on generated credentials — all 9 migrations applied to a fresh volume,
-`migrate` exited 0, the API answered `/health/ready` on `127.0.0.1:4100` and the
-worker ran; `redis-cli ping` with the password cleared returned `NOAUTH
-Authentication required`; both data stores showed no host binding; and the image
-refused `SMTP_HOST=mailhog` under `NODE_ENV=production`.
-
-Still open from C-2's fix list: nothing requires **TLS** to Postgres or Redis
-(**L-5**), and the deployed composition has no web client to serve (**P-1**,
-which is also where CSP and HSTS will live).
-
----
-
-## 5l. An error response says only what this codebase wrote
-
-Findings **H-3** and **M-1** of `AUDIT_REPORT.md`, the third and seventh Phase 1
-tasks — done together because they are the same four lines of the same response
-body. Full reasoning is in `docs/decisions.md`, "An error response is written by
-this codebase, not by Postgres". What you need in order not to undo it:
-
-**An error body is now exactly four fields: `code`, `message`, `details` when
-there are any, and `requestId`.** Nothing else leaves the process.
-
-- **`AppError.rawMessage` is now `internalDetail`, and `localize()` ignores it.**
-  It reaches `Error.message` — which is what the error handler logs — and never
-  a response. It used to *be* the response message whenever present, on the
-  reasoning that a Postgres `detail` is already English. What that overlooked is
-  what Postgres puts in it: a unique violation reads `Key
-  (email)=(someone@example.com) already exists.`, a foreign-key violation names
-  the table it searched, a check violation quotes the failing row. `expose` is
-  `status < 500` and these map to 409, 422 and 400 — so the API handed every
-  caller its column names, its constraint names, and **other rows' values**, in
-  production too.
-- **The `P0001` branch is treated the same way, and that is deliberate.** Those
-  are our own `RAISE EXCEPTION` strings from migration `003`. Every case they
-  catch is already rejected earlier by the service with a translated message
-  (`categories.depthLimit`, a 404 from `getCategory`), so the trigger is a
-  backstop against a race or a hand-written statement, and its developer-facing
-  wording is for us.
-- **The `stack` is gone unconditionally.** It used to be sent whenever
-  `!env.isProduction && !expose` — which includes staging and preview
-  deployments, exactly the shape of the CORS bug section 5i fixed — carrying
-  absolute filesystem paths and the module structure.
-
-**This is a gain as well as a subtraction:** the sentence now comes from the
-catalogue, so it is translated. A 409 answers `Já existe um registro com esses
-valores` to a pt-BR caller, which a raw `detail` structurally could not.
-
-**The generic wording already existed** — `database.conflict`, `foreignKey`,
-`constraint`, `notNull`, `malformed`, `serialization`, `rejected` are in all
-three catalogues and were only being bypassed.
-
-Two tests hold it: `tests/unit/errors.test.ts` pins the mapping and asserts the
-detail survives on `.message` while `localize()` never repeats it, and
-`tests/integration/error-disclosure.test.ts` drives a **real** unique violation
-(two accounts of the same name — neither the accounts nor the tags service
-pre-checks its name index) and greps the whole response body for eight
-Postgres-only fragments. Verified separately that pino still carries `detail`,
-the SQLSTATE and the `requestId` into the log line.
-
-**If you add an error path, the wording it shows a client comes from
-`i18n/locales/`.** Passing text you did not write to `new AppError(...)`'s fifth
-argument is fine and is where it belongs — it will be logged, not sent.
-
-One thing worth knowing when writing a test against a localized message: a
-registration defaults the user's `locale` to **pt-BR**, and `requireAuth`
-overwrites `Accept-Language` with the signed-in user's stored value. Patch
-`/users/me` if a test needs English.
-
----
-
-## 5m. Erasure is a request with a grace period
-
-Finding **H-2**. Full reasoning is in `docs/decisions.md`, "Erasure is a request,
-not an act". What you need in order not to undo it:
-
-`DELETE /users/me` used to *be* the erasure — one transaction that hard-deleted
-every solely-owned workspace and all its history, behind a bearer token and
-`{ confirm: true }`. Three things guard it now, and the third was a product
-decision rather than a security one:
-
-1. **The account password**, verified with `verifyPassword`. Any path yielding a
-   fifteen-minute access token was otherwise enough to destroy someone's whole
-   financial record.
-2. **`authRateLimit`**, because an endpoint that takes a password is a guessing
-   oracle whether or not that is its purpose.
-3. **A grace period** — `ACCOUNT_DELETION_GRACE_DAYS`, default 7. The request
-   stamps `users.deletion_requested_at` (migration `010`) and revokes every
-   session; a daily maintenance task does the real erasure once the window
-   closes. The endpoint answers **200 with `deletionScheduledFor`**, not 204.
-
-**Signing in cancels it, and that is the entire undo mechanism.** `login` clears
-the column when it finds one set. There is no cancel endpoint and no emailed
-token: proving you can still authenticate is proof enough that you want the
-account, and it works from any device the person still has. If you add another
-way in — an OAuth flow, a magic link — it owes the same call to
-`cancelAccountDeletion`.
-
-Four smaller things that are deliberate:
-
-- **Asking twice does not extend the countdown.** `requestAccountDeletion`
-  reuses the existing `deletion_requested_at` rather than restamping it.
-- **`eraseAccount` is one function, called by the route's job and by nothing
-  else.** It was inline in the route handler before; the maintenance task and
-  the route must never drift into two different definitions of "erased".
-- **The sweep erases one account per transaction and logs-and-skips a failure**,
-  because a thrown error in a retried job stops on the same row forever.
-- **A shared workspace is archived, not deleted.** Only ones the user owns alone
-  go with them, or other members lose their records.
-
-**The client change is not optional**: the endpoint now requires a password, so
-the old `ConfirmDialog` would simply 422. `features/settings/DeleteAccountDialog.tsx`
-collects it and then stays open to show the date, because the session ends the
-moment it closes.
-
----
-
-## 5n. One origin, and something that serves the client
-
-Findings **H-4**, **H-5** and **P-1**, which are one piece of work: the fix for
-the cookie is the thing that also serves the HTML that also carries the CSP.
-Full reasoning is in `docs/decisions.md`, "One origin, because the cookie says
-so". What you need:
-
-**There was no way to deploy the web client at all.** `npm run build
---workspace=@finance/web` produced `apps/web/dist` and nothing consumed it — no
-Dockerfile, no static server, no compose service. `apps/web/Dockerfile` and
-`apps/web/nginx.conf` are that, and the `web` service in
-`docker-compose.deploy.yml` runs it.
-
-**The topology is now enforced, not documented.** The refresh cookie is
-`SameSite=Lax` and is the only credential `/auth/refresh` accepts, so a browser
-on a different origin than the API never sends it: every session would end at
-the first token refresh, fifteen minutes in, with a 401 and a forced sign-out.
-`config/production-policy.ts`'s `crossOriginBaseUrls` makes the API refuse to
-boot in production when `API_BASE_URL` and `WEB_BASE_URL` disagree, and
-`.env.deploy.example` has **one** `PUBLIC_URL` filling both. `apps/web/.env.example`
-now says to keep `VITE_API_BASE_URL` relative.
-
-**nginx is the shared origin**: it serves the bundle and proxies `/api` to the
-API container. Five things in that config are load-bearing:
-
-1. **`TRUST_PROXY=1` on the API service in the deployed composition**, because
-   there is now genuinely one proxy in front. Left at `false`, every request
-   would appear to come from the nginx container and the per-address rate limit
-   would become a single shared bucket for the internet. Verified: three logins
-   claiming three different `X-Forwarded-For` values drew down one budget
-   (8 → 7 → 6) rather than getting a fresh one each.
-2. **The upstream goes through a variable and a `resolver`**, not a literal
-   `proxy_pass http://api:4000`. nginx resolves a literal upstream **once at
-   startup** and caches it for the process's life, so recreating the API
-   container — any redeploy — leaves the proxy pointing at a dead address. It is
-   also what lets `nginx -t` parse the file outside the compose network, which
-   is the CI check.
-3. **`add_header` in a `location` block replaces the inherited set**, so the
-   security headers are repeated in `/assets/` and `/index.html`. Omitting them
-   there is the classic way a hardened site serves one bare path.
-4. **`always` on every `add_header`**, or an error page — which is HTML, and
-   exactly where a clickjacking frame would sit — goes out without them.
-5. **`index.html` is `no-store`; hashed assets are `immutable`.** Caching the
-   entry document pins a browser to the JS bundle of a build that is gone.
-
-The policy is `default-src 'self'` with `style-src 'unsafe-inline'` as the one
-relaxation — MUI/emotion inject `<style>` tags at runtime. `font-src 'self'`
-needs no Google origin because all three families are self-hosted via Fontsource,
-and `connect-src 'self'` is only possible *because* of the proxy.
-
-**And the seed script refuses a real database** (**M-10**). `npm run seed`
-creates two accounts whose password is published on GitHub and deletes existing
-rows for them first. It now refuses when `NODE_ENV=production` **and** when
-`DATABASE_URL`'s host is not local — `NODE_ENV` is not the check that matters,
-because nobody sets it before typing `npm run seed`; what they get wrong is a
-`DATABASE_URL` still exported in the shell. `--i-know-this-is-not-a-demo-database`
-overrides it out loud.
-
-### Verified by driving the deployed stack in Chrome
-
-Not by typechecking: the whole composition was built and run, and Playwright
-drove it end to end — 12 checks, all green. Registration through nginx, the
-refresh cookie present on the app origin with `HttpOnly`/`Lax`/`path=/api/v1/auth`,
-a deep-link reload of `/transactions` (the SPA fallback), every `/api/` call
-staying on the one origin, the erasure dialog refusing a wrong password and then
-naming the deletion date, the session ending on close, signing back in cancelling
-it, **no CSP violations in the console**, and no failed requests. A `curl` pass
-covered the headers themselves, the immutable asset caching, and the
-forged-`X-Forwarded-For` case above.
-
-**One real bug that only the browser could show**: the wrong-password message
-came back in **pt-BR** while the UI was in English. `RegisterPage` sends
-`timezone` and `baseCurrency` from the device but never sent `locale`, so every
-account was stamped with the API's `'pt-BR'` default — and since `requireAuth`
-prefers the stored locale over `Accept-Language`, every server-rendered sentence
-afterwards was in a language the user never chose. One line in `RegisterPage.tsx`.
-**A form that collects a preference the API can store should send it.**
-
----
-
-## 5o. Password reset and email verification
-
-Finding **H-1**, the first item of Phase 2 (section 7), and the one place section 1 used to be
-wrong about what this codebase had actually delivered. Full reasoning is in `docs/decisions.md`,
-"Password reset and email verification, and why they get their own signing secret". What you need
-in order not to break it:
-
-**`authRouter` now mounts eleven routes.** The original seven plus:
-
-| Method | Path | Auth | Notes |
-| --- | --- | --- | --- |
-| POST | `/forgot-password` | none | Always 204. Never reveals whether the address has an account. |
-| POST | `/reset-password` | none | Body `{ token, newPassword }`. Consumes the token, revokes every other session, signs the caller in — same response shape as `/login`. |
-| POST | `/verify-email` | none | Body `{ token }`. The token is the proof; no session is required to call it. |
-| POST | `/resend-verification` | required | No-op if already verified. |
-
-**Migration `011`** adds two nullable pairs to `users` — `password_reset_token_hash` /
-`_expires_at` and `email_verification_token_hash` / `_expires_at` — following the precedent
-`deletion_requested_at` (migration `010`) set: one outstanding request per purpose per user, and a
-new request simply overwrites the last one. There is no separate table, the same way there is none
-for the deletion grace period.
-
-**A new, dedicated signing secret: `EMAIL_TOKEN_SECRET`.** `hashEmailToken` in
-`modules/auth/tokens.ts` is the only place that touches it. It is *not*
-`JWT_REFRESH_SECRET`, which `workspaces/invitations.ts` already uses as an HMAC key and which also
-signs every refresh token — finding **M-11** already flags that as two purposes on one secret, and
-a third would only compound it. `EMAIL_TOKEN_SECRET` is held to the identical production bar as the
-two JWT secrets in `config/production-policy.ts` (length, entropy, not a published placeholder, not
-shared with either JWT secret) and is required everywhere they are: `.env`, `.env.example`,
-`.env.deploy.example`, `docker-compose.deploy.yml`'s `x-app-environment`, and every CI step that
-boots the production image. **A fourth secret added later owes all of those the same treatment.**
-
-**Registration now sends a verification email, best-effort — the same way an invitation email is.**
-`sendEmail` already swallows its own failures rather than throwing, so an unreachable SMTP host
-never fails the registration that triggered the message. `email_verified_at` stays `NULL` until the
-link is followed; nothing about signing in or using the app otherwise requires it to be set.
-
-**`acceptInvitation` now also requires the accepting account's `email_verified_at IS NOT NULL`.**
-The address match alone was the vulnerability: anyone who learned a victim was about to be invited
-could register that address first and accept the invitation before the real owner ever proved they
-controlled it. `GET /auth/me` and every `AuthenticatedResult` now carry `emailVerifiedAt`, and the
-client shows a dismiss-proof banner (`components/EmailVerificationBanner.tsx`, mounted in
-`AppLayout`) with a resend button whenever it is null.
-
-**A successful reset signs the caller in and inherits `login`'s obligations.** It returns the same
-shape `login` does (`user`, tokens, `defaultWorkspaceId`), revokes every other session in the same
-transaction as the password change — the same reasoning `changePassword` already applies — and
-calls `cancelAccountDeletion` when one is pending, the same way `login` does. `firstWorkspaceId` in
-`auth/service.ts` is shared between the two rather than duplicated.
-
-**Tests:** `registerUser()` in `tests/helpers.ts` now verifies the new account's email by default
-(a direct DB write, not the token flow), because most tests have nothing to do with verification
-and the invitation-acceptance tests need a verified invitee to keep working. Pass
-`{ skipEmailVerification: true }` to get an unverified account on purpose.
-`tests/integration/auth-recovery.test.ts` covers both flows against a real Postgres and asserts the
-invitation gate directly: blocked before verification, accepted after.
-
-**What this did not do: M-9.** Registration still answers 409 on a known email, a narrow
-enumeration oracle bounded by `authRateLimit`'s per-address bucket. The audit's own fallback — note
-the trade-off explicitly rather than force a UX change onto the one screen every new user sees
-first — was taken instead of folding a "register always answers 201" redesign into this entry. It
-is open, on the Phase 3 list is where a session that wants to spend it should look first (it is not
-currently listed there by name — add it if you pick it up). **Closed in a later session — see
-section 5r.**
-
----
-
-## 5q. Backups, metrics, and a delivery failure that used to vanish silently
-
-The last three items of Phase 2. Full reasoning for each is in `docs/decisions.md`. What you need
-in order not to break any of them:
-
-**Backups (P-3) are `scripts/backup.sh` and `scripts/restore.sh`** (`npm run backup` /
-`npm run restore`), a `pg_dump`/`pg_restore` pair run *through* the Postgres container
-(`docker compose exec`) rather than against a host-installed client — nothing needs installing on
-whatever machine or CI runner ends up running these. Both take `COMPOSE_FILE`,
-`POSTGRES_SERVICE`, `POSTGRES_USER` and `POSTGRES_DB` as overrides, defaulting to the dev stack;
-point `COMPOSE_FILE=docker-compose.deploy.yml` at the deployed one. **`restore.sh` is genuinely
-destructive** (`pg_restore --clean --if-exists`) and refuses to run without a trailing `--yes`,
-printing exactly what it is about to overwrite first — the same shape `npm run seed`'s
-production guard (M-10, section 5n) uses for the opposite mistake. `backups/` is gitignored; a
-database dump must never reach a public repository. This is a **logical backup, not PITR** — see
-`docs/decisions.md` for why that gap is named rather than silently accepted, and what actually
-closes it (a managed Postgres with continuous backup, once real production volume makes a
-`pg_dump` window too coarse for the RPO a financial ledger needs).
-
-**`GET /metrics` (P-2) is `lib/metrics.ts` + `middleware/metrics.ts`, using `prom-client`.**
-Unauthenticated and outside the rate limiter, the same reasoning `/health`/`/health/ready` already
-use — and in the deployed composition the API publishes no port at all, so this is unreachable
-from outside the compose network regardless (section 5n). **The HTTP histogram/counter label by
-route *pattern*, read from `req.route` inside a `res.on('finish', …)` callback — never by raw
-path.** `req.route` is not populated yet at the point the middleware itself runs (mounted before
-routing happens); reading it from the `finish` event works because that fires after routing has
-resolved. Labelling by raw path would mint a fresh Prometheus time series per workspace or
-transaction ID, which is the cardinality explosion Prometheus's own docs warn against — an
-unmatched route (a 404, a scanner) is bucketed under the fixed label `'unmatched'` for the same
-reason. **`redis_connected` doubles as the alert hook the "rate limiting is running on the
-per-process fallback" log warning never had** (`middleware/rate-limit.ts`) — both are
-`redis.status !== 'ready'`, so a metrics-based alert on this gauge is an alert on that warning.
-`infra/prometheus/alerts.example.yml` is the alert rules an operator would actually point at these
-metrics; it is not wired into anything, because there is no Prometheus deployment in this
-repository to wire it into. **An error tracker and distributed tracing are deliberately not
-built** — see `docs/decisions.md`'s "deliberately not built" note for why a client with no
-subscription behind it is worse than not having one.
-
-**Invitation email failures are surfaced, not swallowed (P-5).** `createInvitation` now reads
-`sendEmail`'s return value and the response carries `emailDelivered: boolean` — the seat is
-reserved either way, `sendEmail` still swallows its own failure so an unreachable SMTP host cannot
-fail the request, but the caller now finds out. `InvitationsSection.tsx` shows a distinct warning
-toast when it is `false`, because unlike a notification (which retries via `processDeliveries`)
-there is no second chance at an invitation email: the token exists in exactly one place. **"Use a
-real SMTP provider" was already handled before this entry** — `.env.deploy.example` requires
-`SMTP_HOST` with no default and production already refuses a development mail sink at boot
-(section 5k) — so this closes the half of P-5 that was actually missing.
-
-**Source maps (M-8) are off in production**: `apps/web/vite.config.ts`'s `sourcemap: false`. Pairs
-with the observability entry above — `'hidden'` would have been the better choice once something
-uploads the maps to an error tracker, and nothing here does that yet.
-
----
-
-## 5r. Registration stops being an enumeration oracle (M-9)
-
-Left open deliberately when H-1 shipped (section 5o) — closed in a later session, once asked
-explicitly whether to spend the UX change or accept the trade-off. Full reasoning is in
-`docs/decisions.md`, "Registration stops answering the question it was never asked". What you need
-in order not to undo it:
-
-**`POST /auth/register` is now `responds({ 201: NO_BODY })` and always answers 201** — whether the
-address is brand new or already has an account. `authService.register` decides privately which
-branch to take: a new address gets exactly what it always got (a user row, a personal workspace with
-default categories and alert rules, a verification email); a known address gets nothing created and
-a new `accountExistsEmail` instead, sent to **the real owner**, not the caller. This is the same
-shape `requestPasswordReset` already established for the identical reason — see section 5o.
-
-**Registration no longer signs the caller in, and that follows necessarily from the fix rather than
-being a separate decision.** A response that must look identical whether or not an account already
-existed cannot also carry a signed-in session for one of the two branches, so `AuthenticatedResult`
-(tokens, `user`, `defaultWorkspaceId`) is gone from this endpoint entirely. **The client's
-`RegisterPage.tsx` follows a successful register with a normal `login` call using the same
-credentials.** For a genuine new signup this succeeds silently — the password just chosen is the
-account's real password — and the user lands in the app exactly as before, with one extra request
-they never see. For an address that already belonged to someone else, that same login attempt fails
-with the ordinary generic-work `invalidCredentials` **every wrong-password login already answers**,
-so the caller learns nothing beyond "that combination didn't work" — indistinguishable from a typo.
-Either way the screen that follows is a plain, deliberately ambiguous `auth.checkEmail` message
-("if this address is new, finish setting up your account from the email we just sent — if you
-already have one, sign in instead"), never an error.
-
-**`tests/helpers.ts`'s `registerUser()` mirrors the client's own fix**, register-then-login, so every
-one of the hundreds of call sites across the suite kept working unchanged — it is still handed back a
-fully populated `TestUser` with real tokens. This is what actually caught the shape of the fix:
-writing the test helper first (before the client) is what made it obvious the client needed the same
-two-call pattern, not a one-off special case.
-
-**Do not "simplify" this back to a direct 409.** The whole point is that the response is
-indistinguishable; a 409 on one branch and a 201 on the other is the oracle again, no matter how the
-message is worded.
-
-## 6. Architectural decisions
-
-The full log with reasoning lives in `docs/decisions.md`. The ones that most
-constrain future work:
-
-**Money is `NUMERIC(19,4)` in Postgres and `Decimal`/string in TypeScript.**
-Never `number`. `lib/money.ts` owns all arithmetic and rounds half-even. Amounts
-cross the API as strings. Every transaction also stores a `base_amount` in the
-workspace's base currency, converted at write time, so analytics never has to
-join rates at read time.
-
-**Exchange rates come from a provider behind one interface, and a failed
-refresh changes nothing.** `EXCHANGE_RATE_PROVIDER` selects the static table
-(the default), Frankfurter or Open Exchange Rates; `modules/currencies/
-providers.ts` normalises whichever answers into one shape and `rebase()`
-re-expresses it against the configured base currency, dropping any code the
-`currencies` table does not know. A row is stamped with the **provider's** date,
-so a transaction still converts at the rate that applied on its own day. A
-provider that cannot be reached is logged and skipped rather than papered over
-with indicative values — the static table is only written when there are no
-rates at all. See section 5f and `docs/decisions.md`.
-
-**Kysely over an ORM.** The reporting queries (recursive category ancestry,
-window functions for net-worth series) are the hard part of this domain, and a
-query builder keeps them readable and typed. There is no repository layer —
-services own their SQL on purpose.
-
-**Import `{ Decimal }` from `decimal.js`, not the default export.** The package
-merges a class with a same-named namespace; under NodeNext resolution the
-default import resolves to the namespace and the build breaks.
-
-**The API's two tsconfigs use NodeNext resolution.** They were split once
-(`bundler` for `tsconfig.json`, `NodeNext` for `tsconfig.build.json`) and
-`npm run typecheck` passed while `npm run build` failed. Keep them aligned so
-typecheck is a real gate. `apps/web` is a separate case and correctly uses
-`bundler`, because Vite bundles it; `packages/schemas` uses NodeNext, because
-`apps/api` resolves it through Node's own resolver and NodeNext is the stricter
-of the two to satisfy.
-
-**The OpenAPI document is generated from the running app.** `docs/openapi.json`
-comes out of `apps/api/src/openapi/`, which walks the Express router rather than
-reading a list, so it cannot drift from the code; CI fails if the committed copy
-is stale. Two constraints follow for future work: **`apps/api` is on `zod/v4`**
-(v3 schemas cannot be converted at all), and **a rule restated for the spec goes
-in `.meta()`**, never in a real check, so that documenting a rule cannot change
-which requests the API accepts. See section 5d and `docs/decisions.md`.
-
-**Response schemas are authored beside the service, and enforced by the tests.**
-Handlers return database rows, so unlike requests there was nothing to convert —
-each shape is written by hand in `modules/<domain>/responses.ts` and declared on
-the route with `responds()`. That declaration is not documentation only: under
-`NODE_ENV=test` every outgoing body is parsed against it and a mismatch fails the
-request, which is the only reason to trust a hand-authored schema. A schema
-describes the **wire** (an ISO string), not the row (a `Date`). All 104
-operations are described and all 104 are reached by a passing test, so
-**`apps/web/src/api/types.ts` is now generated**: `openapi-typescript` writes
-`apps/web/src/api/schema.d.ts` from the spec and `types.ts` only assigns names to
-what is in it — never a field list. See section 5e and `docs/decisions.md`.
-
-**Validation rules live in `@finance/schemas`; the parsers do not.** Every bound,
-value set, pattern and rejection message both apps must agree on is declared once
-in `packages/schemas` and each side composes its own Zod schema on top — the API
-over a JSON body, the client over form text. They were duplicated by hand before
-and had drifted in four places, all letting the client accept what the API
-refuses. Because a rejection now carries a catalogue key rather than an English
-sentence, the API's field-validation errors are translated. See section 5c and
-`docs/decisions.md`.
-
-**A stored URL is only as trustworthy as the scheme it names.** `urlField`'s
-`isSafeUrl` predicate (`packages/schemas/src/patterns.ts`) parses with the real
-`URL` constructor and requires `protocol === 'https:'`, unconditionally — not
-"except in development," since the shared schema package has no way to know
-which environment is asking and a shared dev environment carries the same
-tracking-beacon risk a `javascript:`/`data:`/`file:` avatar link poses in
-production. See the Phase 2 checklist's M-2 entry and `docs/decisions.md`.
-
-**A connection is reclaimed by the database, not just given up on by the
-client.** Every pooled connection carries a `statement_timeout` and an
-`idle_in_transaction_session_timeout` (`db/client.ts`), sent as Postgres
-session parameters at connection time, so a runaway or forgotten-in-a-
-transaction query is killed server-side rather than holding — and, once the
-pool of ten is exhausted, blocking everyone else's request behind — a
-connection forever. `middleware/request-timeout.ts` is the client-facing
-backstop for a slow path that is not database-bound at all, deliberately
-looser than the statement timeout so the database times out first on an
-ordinary slow query; it cannot cancel the handler still running behind it, so
-`errorHandler`'s `res.headersSent` guard is what stops that handler's late
-write from trying to send a second response body. See the M-4 checklist entry.
-
-**Shutdown waits for in-flight requests before it touches anything they
-depend on.** `server.ts` promisifies `server.close()` and awaits it — with the
-existing 10-second ceiling still bounding the wait — before closing the
-database and Redis connections, rather than doing both in parallel the way it
-used to. A request still writing to the database when the pool vanished out
-from under it was a 500 on every rolling deploy. See the M-5 checklist entry.
-
-**A backup that has not been restored is a promise, not a backup.** `scripts/backup.sh` /
-`restore.sh` run `pg_dump`/`pg_restore` through the running Postgres container rather than a
-host-installed client, so nothing needs installing wherever they run. The restore was actually
-performed against real seeded data — every row count and a four-table join came back identical —
-not merely asserted to work. It is a logical backup, not PITR; see section 5q for the honest
-version of what that gap still leaves open at real production volume.
-
-**Metrics are labelled by route pattern, never by raw path.** `GET /metrics`
-(`prom-client`) reads `req.route` from inside a `res.on('finish', …)` callback — the only point
-routing has actually resolved — specifically to avoid minting a fresh Prometheus time series per
-workspace or transaction ID. `redis_connected` is the same fact
-`middleware/rate-limit.ts`'s degraded-fallback warning already logs, turned into something an
-alert rule can actually key on. See section 5q; an error tracker and tracing are deliberately not
-built, for the same reason a Sentry client with nowhere to send events would be dead code.
-
-**An invitation's email failure is answered to the caller, not swallowed.** `createInvitation`
-still never fails the request over a mail outage — `sendEmail` already absorbs that — but the
-response now says `emailDelivered: false` when it happens, and the client shows a distinct warning
-rather than a false success, because an invitation link exists in exactly one email with no retry
-behind it. See section 5q.
-
-**A handful of small findings share one lesson: a bound stated once is a bound that cannot quietly
-stop applying.** `x-request-id` is matched against a safe charset, not just a length (L-1);
-`csvUuidArray` and `page` both have an upper bound now (L-3, L-8); the credential limiter's account
-bucket is keyed by a SHA-256 hash of the address rather than the address itself (L-4); and
-`/imports/preview` has its own rate budget plus a size check that runs before any database work,
-reusing the exact error the service already threw rather than a second differently-worded one
-(M-6). See `docs/decisions.md`, "Six small findings...".
-
-**Auth uses short-lived JWT access tokens plus rotating opaque refresh tokens,
-tracked in families.** Replaying a rotated token revokes the whole family. See
-the bug in section 1 — the revocation must outlive the rejection. Revocation
-reaches the access token too, through `users.tokens_valid_from` (migration
-`009`) checked on the user row `requireAuth` already loads, so "sign out
-everywhere" is immediate rather than "within fifteen minutes". The token carries
-a millisecond `iatMs` claim because a JWT's whole-second `iat` cannot tell a
-token issued just before a revocation from one issued just after — which would
-make either the stale token or the user's fresh sign-in wrong. See section 5i.
-
-**The client and the API share one origin, because the refresh cookie says so.**
-It is `SameSite=Lax` and it is the only credential `/auth/refresh` accepts, so a
-split deployment does not degrade sessions — it ends them, at the first token
-refresh. `apps/web/Dockerfile` + `nginx.conf` serve the bundle and proxy `/api`
-to the API container, which is also the only place a Content-Security-Policy,
-`frame-ancestors` and HSTS can live (nothing served the HTML before), and what
-lets `connect-src` be `'self'`. Production refuses to boot when `API_BASE_URL`
-and `WEB_BASE_URL` disagree, and the deployed API runs with `TRUST_PROXY=1`
-because there is now exactly one proxy in front of it. See section 5n.
-
-**Erasing an account is a request, not an act.** `DELETE /users/me` costs the
-account password, is behind `authRateLimit`, and schedules the erasure
-`ACCOUNT_DELETION_GRACE_DAYS` ahead rather than performing it; signing in during
-the window cancels it, which is the whole undo mechanism. A daily maintenance
-task calls the same `eraseAccount` the route used to inline. See section 5m.
-
-**Password reset and email verification reuse the invitation token shape, on their own
-secret.** A random token, only its HMAC persisted, a short TTL, single use — the pattern
-`workspaces/invitations.ts` already established — but signed with a dedicated
-`EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET`, which already signs refresh tokens *and*
-invitation tokens (finding M-11) and should not pick up a third job. A reset signs the caller in
-and revokes every other session in the same transaction as the password change; verification is
-unauthenticated, because the token is the proof of control over the inbox. `acceptInvitation` now
-also requires the accepting account's `email_verified_at` to be set — matching the invited address
-was never sufficient on its own, since anyone could register it first. See section 5o.
-
-**An error response is written by this codebase, not by Postgres.** The body is
-`code`, a catalogue sentence, the rejected fields, and `requestId` — nothing
-else. `AppError.internalDetail` (once `rawMessage`) carries a driver's or a
-trigger's own text to the **log** and is ignored by `localize()`, because a
-Postgres `detail` names columns, constraints and other rows' values, and
-`expose` being `status < 500` meant every 409 and 422 published them. The
-`stack` is no longer sent in any environment. The subtraction buys something
-too: a message that comes from the catalogue can be translated, which a raw
-`detail` could not. See section 5l and `docs/decisions.md`.
-
-**Development and deployment are two compose files, because a profile was never
-a boundary.** A service without a `profiles:` key starts unconditionally, so
-`--profile app` added the deployed containers to the development stack instead
-of replacing it — publishing Postgres with a default password, unauthenticated
-Redis, and MailHog's open UI showing every invitation token, all wired into the
-"production" API. `docker-compose.deploy.yml` publishes no data-store port,
-requires a password for each, and has no mail sink; `docker-compose.yml` keeps
-the convenient defaults and binds them to `127.0.0.1`. Production also refuses
-to boot pointed at a development mail host, because a lost invitation is logged
-rather than raised. See section 5k and `docs/decisions.md`.
-
-**A signing secret that has been published is refused at boot, not documented as
-something to change.** This repository is public, the documented setup is `cp
-.env.example .env`, and the deploy profile used to load that same file into
-containers running as `NODE_ENV=production` — so the documented path from a
-fresh clone to a running production stack carried public JWT keys end to end,
-and a stack running on them looked exactly like one that was not.
-`config/production-policy.ts` (pure, no imports, unit-tested) now rejects a
-production secret that is short, published, still placeholder-shaped, low in
-distinct characters, or shared between the two variables; the deployed compose
-services require both explicitly instead of inheriting `.env`; and CI proves
-both that a generated secret boots and that a published one does not. The
-`.env.example` values still work in development on purpose. See section 5j and
-`docs/decisions.md`.
-
-**A rate limit is only as real as `req.ip`, and `req.ip` comes from a header the
-client sends.** `TRUST_PROXY` defaults to trusting nothing; a deployment behind
-a proxy says so. Every request is charged to two budgets rather than one — the
-address and the signed-in user, and on credential endpoints the address and the
-*account*, independently, because a single combined `ip:email` key made rotating
-addresses reset the account's budget instead of exhausting it. Losing Redis
-falls back to a per-process counter carrying `1/RATE_LIMIT_INSTANCES` of the
-budget, logs that it has, and answers immediately (the shared Redis client
-disables ioredis's offline queue, without which the fallback waits out the
-reconnect backoff). Credential endpoints fail closed, everything else fails
-open. See section 5i and `docs/decisions.md`.
-
-**RBAC is resolved once per request** by `withWorkspace` middleware into a
-workspace context, then checked by `requireViewer`/`requireEditor`/
-`requireAdmin`/`requireOwner`. Route handlers never re-query membership. The
-web client mirrors this with `lib/permissions.ts`'s `canEdit`/`canAdminister`,
-which only hide controls the API would reject anyway — the server remains the
-authority if role state is ever stale client-side.
-
-**Categories are a 3-level tree with recursive roll-up.** Budgets, analytics and
-transaction filters all roll subcategories into their parent by default, via a
-recursive CTE that buckets each category to its ancestor at the requested depth.
-
-**Alerts are configured per workspace as rules with a JSON config**, deduplicated
-by a `dedupe_key` on a partial unique index, so a scan that runs every few
-minutes cannot spam. Anomaly detection is a z-score over at least three months
-of history.
-
-**The alert-rule upsert matches the scope explicitly instead of using
-`ON CONFLICT DO UPDATE`,** because the uniqueness rule is an expression index
-over `COALESCE(scope_*, <sentinel>)` and Postgres cannot infer a conflict target
-from one.
-
-**The API, the worker and the migration runner are one image with three
-commands, and the migration gates the rollout.** They are the same codebase, so
-they ship as one artifact; `docker compose -f docker-compose.deploy.yml up -d`
-runs `migrate` to completion and starts the other two behind
-`service_completed_successfully`, which means a failed migration stops the
-deploy rather than leaving a new binary on an old schema. The image is built
-from the **repository root**, because the API depends on the `@finance/schemas`
-workspace — the old Dockerfile copied only `apps/api` and had been unbuildable
-for several sessions, unnoticed, because nothing ever built it. CI now does,
-and boots the compiled app's module graph afterwards. See section 5g and
-`docs/decisions.md`.
-
-**A dependency advisory is fixed by upgrading, not by arguing it is
-unreachable.** Three of the Kysely advisories genuinely are unreachable from
-this codebase — no `sql.lit`, no JSON-path helpers, no `Kysely<any>`, and
-Postgres rather than MySQL — but that is an argument someone has to re-make by
-hand every time the query layer changes. All nine findings were cleared by
-version bumps instead (section 5h). What CI gates on afterwards is narrower than
-`npm audit`: high-or-critical in a **runtime** dependency, because a gate that
-blocks a pull request over a build tool's dev-server advisory is a gate that
-gets deleted. See `docs/decisions.md`.
-
-**Tests run against real Postgres, not mocks**, and reset state with `DELETE`
-rather than `TRUNCATE`. TRUNCATE forces an fsync per relation; across every table
-before every test it took the suite from 16 seconds to over 25 minutes on Docker
-Desktop. The test database also sets `synchronous_commit = off`, and bcrypt
-drops to 4 rounds under `NODE_ENV=test`. Do not "fix" any of these back.
-
-**Frontend stack: Material-UI, Redux Toolkit, Recharts, React Hook Form and
-Zod** — chosen over a lighter Tailwind + Zustand alternative that was offered
-as the recommendation. Built out in the web client session (section 2); build
-on it rather than re-litigating the choice. The redesign session added
-**Framer Motion** and three self-hosted Fontsource families inside that
-stack rather than replacing any of it.
-
-**MUI's `<TextField select>` needs an explicit controlled `value`, not just
-react-hook-form's `register()`.** `register()` sets the underlying DOM input
-uncontrolled, which is enough for a plain text input but not for MUI's
-`Select`, which renders its displayed value from React props. Every select in
-the web client passes both `{...register('field')}` and `value={watch('field')}`.
-A placeholder option whose value is `''` (e.g. "Uncategorised") additionally
-needs `SelectProps={{ displayEmpty: true }}` and
-`InputLabelProps={{ shrink: true }}`, or it renders blank / with an overlapping
-label. See section 2 for how this was found.
-
-**CSV import is preview-then-commit, and never guesses silently.** A preview
-parses the whole file and writes nothing; a commit inserts every kept row or
-none. The three inferences that can corrupt a whole statement — direction
-convention, decimal mark, date layout — are resolved by the server, echoed back
-in the preview, and shown as editable controls; an unresolvable day-first /
-month-first file sets `dateFormatAmbiguous` and the UI asks rather than picking.
-Duplicates are flagged, never dropped. See section 2d and `docs/decisions.md`.
-
-**File downloads go through the RTK Query base query, never through a link.**
-Every export endpoint is authenticated, and a browser-initiated navigation
-(`<a href>`, `window.open`) carries no `Authorization` header, so it earns a
-401. `lib/download.ts` takes a body already fetched through `baseQueryWithReauth`
-— which attaches the token and single-flights its refresh — and turns it into a
-save. Non-JSON endpoints must also set `responseHandler: 'text'` on the query,
-or `fetchBaseQuery` tries to parse CSV as JSON and fails first.
-
-**Chart colours come from `lib/chartTokens.ts` and are validated, not chosen.**
-Categorical slots are assigned in fixed order and never cycled; magnitude
-comparisons use one flat hue; the four status steps are reserved for state and
-always ship with an icon and a word beside them. The file documents the
-validation results for slots 1–2 against this app's own light and dark
-surfaces. A new chart reuses those slots rather than picking a hue. Since the
-redesign the two categorical slots are *semantic* — slot 1 is the income green,
-slot 2 the expense brick — which is the pair red-green colour blindness
-collapses, so they are separated by a full lightness step rather than by hue
-alone, on top of the legend and direct labelling that were already there.
-
-**Money is typed the way it is read, and an amount is entered as the subject of
-its dialog.** Every figure the app displays is grouped, pointed and set in
-tabular mono; until section 2e that stopped at the boundary of a text box, where
-an amount was typed as `1500` into a field the same size as "Merchant".
-`lib/moneyInput.ts` models an in-progress amount as a digit string in the
-currency's minor unit, so keystrokes accumulate from the right, the caret is
-never a problem, and no value on the path is a `number`; the decimal places come
-from `Intl` per currency rather than from a constant. `components/MoneyField.tsx`
-and `components/AmountHero.tsx` are the two ways to accept one, and **no form
-should bind a raw `TextField` to a money field any more.** The stack question
-this work opened with — a move to shadcn/ui — was answered no: every defect on
-the list had a root cause in this repo, and none would have survived the
-migration that was meant to fix them. See section 2e and `docs/decisions.md`.
-
-**The interface is flat; typography and a hairline carry the hierarchy.** The
-whole visual language, its palette, and the statement-line motif that
-`components/LedgerRow.tsx` implements are described in section 2b and in
-`docs/decisions.md` ("Visual redesign"). Three rules that constrain future work:
-every figure in a list or table is set in `IBM Plex Mono` with `tabular-nums`
-(use `variant="amount"` or `components/Amount.tsx`); a card gets a hairline, not
-a shadow, unless it genuinely floats; and a colour is only added after checking
-its contrast against the surface it actually renders on.
-
-**The phone is a first-class target, and the pointer decides the target size.**
-The client was audited at 390×844 against the real backend: the responsive
-structure held (no page overflow anywhere, drawer nav, `minmax(0, 1fr)` grids,
-responsive charts), but every field zoomed iOS Safari in at 15px, two Settings
-tables were clipped inside a `Card` rather than scrollable, and the row action
-glyphs were half the size a thumb needs. Touch minimums are scoped to
-`pointer: coarse`, never to a width breakpoint, because the input device is what
-decides — and when the 44px minimum collided with the description in a folded
-`LedgerRow`, the grid gave way rather than either the target or the content. See
-section 2g and `docs/decisions.md`.
-
-**Glass belongs only to what already floats.** A later pass gave dialogs,
-menus, popovers and the transaction detail drawer a translucent, blurred
-`palette.glass` surface (`theme.ts`) — never cards, `LedgerRow` or `Panel`,
-which stay exactly as flat as the paragraph above says. The permanent nav
-`Drawer` is themed flat too, on purpose, since it shares its theme key with the
-floating one; the floating drawer's glass is applied locally instead. See
-section 2f and `docs/decisions.md` ("Glass on floating surfaces, not on the
-flat language").
-
----
-
-## 7. Tasks para Deploy
-
-A pre-deployment audit ran against commit `0d40c70`. The full reasoning, with a
-file and line for every item, is in **`AUDIT_REPORT.md`** at the repository
-root — this section is only the checklist, in priority order. The identifiers
-in brackets are that report's finding ids, so `C-1`, `H-3` and so on can be
-looked up there.
-
-**`AUDIT_REPORT.md` is deliberately untracked** (it is in `.gitignore`). This
-repository is public, and while the report named every unfixed finding with a
-file and a line there was a real reason to keep it out; now that all four
-phases below are closed, whether to commit it, rewrite it into something worth
-publishing, or leave it out permanently is a decision for whoever picks this up
-next to make deliberately rather than something this note should decide by
-default. The checklist below is, either way, the half that was always safe to
-publish.
-
-Two things the audit found that are worth stating up front, because they change
-how the list below should be read. **No secret has ever been committed** — all
-17 commits are clean, `npm audit` reports zero advisories, no SQL injection is
-reachable, no XSS sink exists in the client, and no IDOR was found. The
-application logic is in good shape. Almost everything below is either
-*deployment and configuration surface* or *a feature this file claimed existed
-and does not* (see the first item of Phase 2, corrected in section 1).
-
-### Where this stands
-
-**All four phases are complete.** Every item in every checklist below is
-checked off, across many commits, each pushed with CI green — see the per-
-finding sections (5j through 5r) and `docs/decisions.md` for the reasoning
-behind each one. **Nothing in this checklist is half-finished**, and no work is
-in progress in the tree. A fresh agent arriving here has no open finding to
-pick up from this list; the next task is whatever the user brings, or one of
-the handful of things explicitly called out as **not** done, which are honest
-gaps rather than oversights:
-
-- **True PITR, an error tracker/tracing, and a real SMTP account** are the
-  parts of P-3, P-2 and P-5 that need external infrastructure this environment
-  cannot provision — each got the real, buildable-in-this-repo half instead
-  (a tested logical backup, metrics and example alert rules, and a surfaced-
-  rather-than-swallowed delivery failure). See section 5q.
-- **TLS to Postgres and Redis (L-5)** was verified end to end against real
-  TLS-enabled containers — both `pg` and `ioredis` already speak it with zero
-  code change — but no certificate was generated for this codebase's own
-  compose files, because the two containers in `docker-compose.deploy.yml`
-  talk to each other over a private compose network TLS would not meaningfully
-  protect. `.env.deploy.example` documents the three settings a remote,
-  managed data store needs instead. Full reasoning is in `docs/decisions.md`;
-  the checklist entry is under Phase 3 below.
-- **A payment or bank integration, and actually hosting this anywhere.** The
-  image and compose profile exist and run; nothing is provisioned, and no
-  registry, TLS termination or secret store is chosen.
-
-Three things worth knowing before touching any of this regardless:
-
-- **Two decisions in Phase 1 were the user's, not defaults.** Same-origin over
-  `SameSite=None` + CSRF (H-4), and a 7-day recoverable erasure over an
-  immediate one (H-2). Both are enforced in code; do not quietly reverse either.
-- **`config/production-policy.ts` is where a boot-time refusal goes.** It holds
-  three secret checks (JWT access, JWT refresh, `EMAIL_TOKEN_SECRET`) through
-  one generic `checkProductionSecrets`. A genuinely new *rule* there needs its
-  variable added to the CI steps in the table under "CI" in section 4.
-- **The erasure lifecycle has a hook a new sign-in path must respect.** `login`
-  and `resetPassword` both call `cancelAccountDeletion`. Any further sign-in
-  path — a magic link, an OAuth callback — that skips it would let a pending
-  deletion run after the user has demonstrably come back.
-
-`to_do.txt` in the working tree is the user's own list of interface complaints,
-in Portuguese, and is gitignored alongside `AUDIT_REPORT.md`. Most of it was
-addressed in the sessions behind sections 2e–2g; it is not a work queue, and the
-audit checklist below outranks it.
-
-### Phase 1 — blocks any deploy  ✅ complete
-
-- [x] **[C-1] Refuse the published JWT secrets in production.** **Done** — see
-      section 5j. `config/production-policy.ts` rejects a short, published,
-      placeholder-shaped, low-entropy or shared secret when
-      `NODE_ENV=production`; the `app` compose services require both secrets
-      explicitly instead of loading `.env`; CI checks both that a generated
-      secret boots and that a published one does not. The `.env.example` values
-      were *not* made non-bootable outright, on purpose — they still work in
-      development and are on the denylist, which is where the reasoning differs
-      from the audit's suggestion.
-- [x] **[C-2] Stop publishing the data stores.** **Done** — see section 5k.
-      `docker-compose.deploy.yml` is a separate file: no MailHog, no published
-      Postgres or Redis port, a required password for each, and the API bound to
-      `127.0.0.1` by default. `docker-compose.yml` is development only and binds
-      its ports to the loopback interface explicitly. Production additionally
-      refuses to boot with `SMTP_HOST` pointing at a development mail sink.
-      **L-5 (TLS to Postgres and Redis) is still open** and was the one item on
-      C-2's fix list not taken.
-- [x] **[H-3] Stop reflecting Postgres `detail` to clients.** **Done** — see
-      section 5l. `rawMessage` became `internalDetail`, `localize()` always
-      renders from the catalogue, and the same pass took **M-1** below, since it
-      is the neighbouring line of the same response body.
-- [x] **[H-2] Re-authenticate before `DELETE /users/me`.** **Done** — see
-      section 5m. It now requires the account password, is behind
-      `authRateLimit`, and schedules the erasure `ACCOUNT_DELETION_GRACE_DAYS`
-      ahead (migration `010`) instead of performing it; signing in cancels it,
-      and a daily maintenance task carries it out. The grace period was the
-      chosen option rather than the audit's "consider".
-- [x] **[H-4] Decide the production origin topology and fix the refresh cookie.**
-      **Done** — see section 5n. Same-origin was chosen, so `Lax` stays and no
-      CSRF token is needed; the `web` nginx proxies `/api`, and production
-      **refuses to boot** when `API_BASE_URL` and `WEB_BASE_URL` disagree rather
-      than leaving it to a deployment note.
-- [x] **[H-5, P-1] Ship a way to serve the web client.** **Done** — see
-      section 5n. `apps/web/Dockerfile` + `nginx.conf` + the `web` service:
-      static bundle, SPA fallback, the `/api` proxy, and the document headers
-      (CSP, `frame-ancestors 'none'`, HSTS, `Referrer-Policy`,
-      `Permissions-Policy`). CI builds the image and runs `nginx -t`.
-      **`helmet`'s own CSP on the API is still `false`** — the JSON responses'
-      policy was left alone deliberately; the document's is the one that
-      mattered.
-- [x] **[M-1] Never send `stack` in an error response.** **Done**, with H-3 —
-      see section 5l. It used to be sent whenever `!isProduction && !expose`,
-      which includes staging and preview deployments.
-- [x] **[M-10] Guard `npm run seed` against production.** **Done** — see the
-      end of section 5n. It refuses on `NODE_ENV=production` *and* on a
-      `DATABASE_URL` whose host is not local, which is the check that actually
-      catches the mistake people make.
-
-### Phase 2 — before real users  ✅ complete
-
-- [x] **[H-1] Build password reset and email verification.** **Done** — see
-      section 5o. `POST /auth/forgot-password` always answers 204, behind
-      `authRateLimit`; a successful `POST /auth/reset-password` calls
-      `revokeAllUserTokens` and signs the caller in; `acceptInvitation` refuses
-      an accepting account whose `email_verified_at` is null. The token
-      machinery reuses the shape `workspaces/invitations.ts` demonstrates, but
-      signs with its own `EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET` —
-      M-11 is still open, but this did not make it worse. **M-9 was left open
-      deliberately**, noted in section 5o rather than folded in — and closed
-      in a later session, see below.
-- [x] **[M-2] Restrict `urlField` to `https:`.** **Done.** `.url()` alone
-      accepted `javascript:`, `data:`, `file:` and `vbscript:` — verified by
-      running it — and backed `avatarUrl`, which every other workspace member's
-      browser fetches. `isSafeUrl` in `packages/schemas/src/patterns.ts` parses
-      with the real `URL` constructor and requires `protocol === 'https:'`,
-      unconditionally rather than "except in development" as the audit
-      suggested: this package has no way to know which environment is asking,
-      and a shared dev environment carries the same risk. `urlField` refines on
-      it (new key `validation.urlProtocol`, translated in all three locales),
-      and the web client's own hand-rolled `optionalUrlSchema` in
-      `features/settings/settingsSchemas.ts` now calls the same predicate
-      instead of only checking `z.string().url()` — the two had been diverging
-      on exactly this rule. `apps/api/tests/unit/shared-schemas.test.ts` pins
-      `isSafeUrl` against all four rejected schemes and checks `urlField`
-      agrees with it. `avatarUrl`'s `.meta()` now publishes the `^https://`
-      pattern too, so the generated spec stops looking more permissive than
-      the API actually is.
-- [x] **[M-4] Add timeouts.** **Done.** `createPool` (`db/client.ts`) now passes
-      `statement_timeout` and `idle_in_transaction_session_timeout` — `pg` sends
-      both as Postgres session parameters at connection time, so no `SET`
-      statement was needed. `middleware/request-timeout.ts` adds the per-request
-      backstop: mounted on `/api/v1` alongside `globalRateLimit`, it gives up
-      *waiting* on a slow handler and answers 503 (a new `ServiceUnavailable`
-      component, published on every operation except `/health/ready`, which
-      already declares its own real 503 schema — `document.ts`'s
-      `responsesFor` checks for that before adding the generic one, or it would
-      silently overwrite it). It cannot cancel the handler itself — Node has no
-      general way to abort an arbitrary async function — so `errorHandler` grew
-      a `res.headersSent` guard: if that original handler later finishes and
-      tries to write a response that already went out as a 503, the write fails
-      and is now routed to Express's default handler (which just destroys the
-      connection) instead of trying to send a second body. New env vars:
-      `DATABASE_STATEMENT_TIMEOUT_MS` (15s), `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS`
-      (30s), `REQUEST_TIMEOUT_MS` (20s, deliberately looser than the statement
-      timeout so the database times out first on an ordinary slow query).
-      Verified against real Postgres: a 300ms `statement_timeout` cancelled a
-      `pg_sleep(2)` with `57014`, and a 300ms idle-in-transaction timeout
-      terminated a connection left open mid-transaction.
-- [x] **[M-5] Fix graceful shutdown.** **Done.** `server.ts` used to destroy the
-      pools in parallel with `server.close()` rather than after it — the comment
-      said the opposite of what the code did. `closeServer()` now promisifies
-      `server.close` and is `await`ed before `closeDatabase`/`closeRedis` run,
-      with the existing 10-second ceiling still bounding the whole sequence (an
-      idle keep-alive socket can otherwise leave `close()`'s callback waiting
-      indefinitely). **Verified in a real container, not by reading the code**:
-      Windows has no reliable way to deliver a real SIGTERM/SIGINT to an
-      external process (`process.kill()` on Windows unconditionally terminates
-      rather than invoking the JS signal handler), so this needed the actual
-      Linux image — built, run against the dev Postgres/Redis network, sent a
-      slow (bcrypt-heavy) `POST /auth/register` and `docker stop` concurrently.
-      The log line order confirms the fix: `"Shutting down"` (SIGTERM
-      received), then the register request completing `201` a moment later,
-      then `"HTTP server closed"` — the in-flight request finished before the
-      server considered itself closed, which is exactly what the old code did
-      not guarantee.
-- [x] **[P-3] Backups.** **Done, as a logical (`pg_dump`) backup rather than
-      true PITR/WAL archiving** — see section 5q. `scripts/backup.sh` /
-      `scripts/restore.sh` (`npm run backup` / `npm run restore`) run through
-      the running Postgres container, so nothing needs installing on whatever
-      runs them. **The restore was actually performed**, against real seeded
-      data (74 users, 70 workspaces, 226 transactions, 3,920 categories): a
-      backup taken, restored into a throwaway database, and every row count
-      *and* a join across four foreign keys came back byte-for-byte identical
-      to the source. Measured, not estimated: a 300 KB dump in 1.6s, a full
-      restore in 21s — see section 5q for what that implies about RPO/RTO at
-      this data volume, and for why a real production deployment should still
-      prefer a managed Postgres with continuous backup once the volume grows
-      past what a `pg_dump` window can comfortably cover.
-- [x] **[M-8] Stop shipping production source maps.** **Done.**
-      `apps/web/vite.config.ts`'s `sourcemap: true` → `false`. `'hidden'` was
-      the audit's other option, paired with uploading the maps to an error
-      tracker — not taken, since nothing here has one to upload to (see the
-      P-2 entry immediately below), and generating maps nobody consumes is
-      just as much dead weight as serving them. Verified: `find dist -name
-      '*.map'` is empty after a production build.
-- [x] **[P-2] Observability.** **Done for the half that does not need a real
-      external account.** A new `GET /metrics` (`lib/metrics.ts`,
-      `middleware/metrics.ts`, the `prom-client` dependency) publishes
-      standard Prometheus text-format metrics: default Node/process metrics,
-      an HTTP request duration histogram and counter labelled by *route
-      pattern* (never a raw path — that would mint a fresh time series per
-      workspace ID), Postgres pool saturation (`pg_pool_total_connections` /
-      `_idle_connections` / `_waiting_requests`), and `redis_connected` —
-      which doubles as the alert hook the degraded-rate-limiter warning never
-      had, since it is the same underlying fact
-      (`redis.status !== 'ready'`) `middleware/rate-limit.ts`'s log line
-      already keys on. `infra/prometheus/alerts.example.yml` gives the actual
-      alert rules an operator would wire to these — error rate, readiness
-      failures, pool saturation, the degraded limiter, p99 latency — since a
-      metric nobody alerts on is the M-2 warning's own problem restated.
-      **Not built, deliberately: an error tracker (Sentry or similar) and
-      distributed tracing.** Both need a real subscription to be worth
-      anything; wiring a client with nowhere to send events is dead code that
-      looks like a finished feature. See "deliberately not built" in
-      `docs/decisions.md`.
-- [x] **[P-5] Real SMTP.** **Done for the half this repository can fix.**
-      `createInvitation` now reads `sendEmail`'s return value: the seat is
-      still reserved either way (an unreachable SMTP host must not fail the
-      request that reserved it), but the response now carries
-      `emailDelivered: boolean`, the client shows a distinct warning toast
-      when it is `false` (there is no retry and no "resend" for invitations,
-      unlike notifications — the token only ever exists in that one email),
-      and a `logger.warn` line names the failure distinctly from the generic
-      one `sendEmail` already logs. Verified against the real dev stack with
-      MailHog stopped and restarted: `emailDelivered: false` while it was
-      down, `true` once it came back, both against the same endpoint.
-      **"A real SMTP provider with credentials from a secret store" is a
-      deployment-time action**, not something to build — and it was already
-      correctly gated before this: `.env.deploy.example` requires `SMTP_HOST`
-      with no default, and `production-policy.ts` already refuses a
-      development mail sink at boot (section 5k).
-
-### Phase 3 — hardening  ✅ complete
-
-- [x] **[M-9] Registration discloses whether an address has an account.**
-      **Done** — see section 5r. `POST /auth/register` now always answers 201
-      with no body, whether the address is new or already registered; a known
-      address gets an `accountExistsEmail` instead of a duplicate account, sent
-      to the real owner. Registration no longer signs the caller in as a
-      consequence (a response that must look identical in both branches cannot
-      carry a session in only one of them), so `RegisterPage.tsx` follows a
-      successful register with an ordinary `login` call using the same
-      credentials — silent and immediate for a genuine new signup, and
-      indistinguishable from any other wrong-password attempt otherwise.
-- [x] **[M-7] A table-driven RBAC test.** **Done** —
-      `tests/integration/rbac.test.ts`. Walks the same `walkRoutes()` the
-      OpenAPI document is generated from (so it can never drift from what the
-      app actually mounts), signs in as a viewer in a real shared workspace,
-      and asserts 403 on every one of the 49 routes stamped with a role above
-      `viewer`. 28 are exercised automatically with an empty body/query; the
-      other 21 need a real body to clear `validate()` before the role check
-      is ever reached (an empty `{}` there tests the schema, not RBAC), so
-      they are skipped from the automated sweep with a console warning naming
-      each one, and 5 of the highest-stakes are spot-checked by hand with a
-      real body (create transaction, create account, invite a member, rename
-      the workspace, transfer ownership). See `docs/decisions.md`.
-- [x] **[M-3] Type the alert-rule `config`.** **Done** —
-      `apps/api/src/modules/alerts/schemas.ts`: eight `.strict()` objects, one
-      per alert type, bounding exactly the fields that type's branch of
-      `engine.ts` reads (a `lookbackDays`/`lookbackMonths`/`windowDays`/
-      `daysBefore` ceiling, a `milestones` array capped in both length and
-      per-entry magnitude, a `sigma`/`multipleOfAverage` sane range). Wired
-      into the route with a `.superRefine` on `PUT …/alerts`, since `config`'s
-      shape depends on the sibling `type` field and a plain `z.object` cannot
-      key off that. The money-shaped fields (`minAmount`, `minBalance`) accept
-      either the plain number `AlertRuleFormDialog` sends or the decimal
-      string a direct API caller sends — found only because an existing
-      integration test already exercised the string form and a first,
-      number-only draft would have silently broken it. See
-      `docs/decisions.md`.
-- [x] **[M-6] Rate-limit `/imports/preview` on its own**, and reject an
-      oversized body before any database work. **Done** — see
-      `docs/decisions.md`, "Six small findings...". `importPreviewRateLimit`
-      (`middleware/rate-limit.ts`) is a fifth independent budget, 5/min per
-      user. The audit's own suggested `.max()` on `content` does not compose
-      with this codebase's translation machinery (a Zod `.refine()` only
-      auto-translates a `validation.*` key, and this bound is API-only) — a
-      dedicated `rejectOversizedImportBody` middleware reuses the exact
-      `AppError` `previewImport` already threw instead, running before
-      `getAccount`'s database round trip rather than after it. Verified live:
-      2 previews allowed then a 429 with the budget lowered to 2, and a 600 KB
-      body against a nonexistent account answered 400 — not the 404
-      `getAccount` would give — proving the size check runs first.
-- [x] **[M-11] Derive per-purpose subkeys.** **Done.** `lib/subkey.ts`'s
-      `deriveSubkey(purpose)` runs `JWT_REFRESH_SECRET` through HKDF
-      (`node:crypto`'s `hkdfSync`) with a purpose label; `auth/tokens.ts`'s
-      `hashRefreshToken` and `workspaces/invitations.ts`'s `hashToken` each
-      get their own derived subkey instead of hashing with the raw secret.
-      Rotating the root secret still rotates both, but a leak of one derived
-      key no longer yields the other. **This is a breaking change for any
-      live deployment** — every existing refresh token and pending invitation
-      hashes differently after it ships, which is the same "everyone signs
-      back in once" consequence a secret rotation already carries, not a new
-      kind of incident.
-- [x] **[L-6] Secret scanning and SAST in CI.** **Done** — see the CI note in
-      section 4 and `docs/decisions.md`. `gitleaks.yml` (the OSS binary
-      directly, not the license-gated marketplace action) and `codeql.yml`,
-      both needing no account. Verified locally with the real gitleaks image
-      against this repository's actual history before either config existed:
-      3 false positives, all hardcoded test passwords in
-      `tests/integration/auth.test.ts`; `.gitleaks.toml`'s path allowlist for
-      `apps/api/tests/` brings that to zero without touching real source.
-      **CodeQL's first run found 10 alerts; all 10 were read against the real
-      code and dismissed as false positives**, each with a comment on the
-      alert citing why — see the table in `docs/decisions.md`. Every one
-      traces to the same cause: CodeQL's query pack models well-known
-      packages (`express-rate-limit`, `csurf`) and does not recognise this
-      codebase's bespoke equivalents (the Redis rate limiter, the
-      `SameSite=Lax` cookie standing in for CSRF, Zod request validation) as
-      the same protection. **A new CodeQL alert that is not one of the six
-      patterns in that table is a real finding, not something to dismiss on
-      reflex.** A seventh pattern joined it when L-7 shipped: two
-      `js/insufficient-password-hash` alerts on the SHA-1 call in
-      `breachCheck.ts` and its mirror in the unit test — correct in general
-      (a stored credential should never be a fast hash) and a false positive
-      here specifically, since that SHA-1 is the Pwned Passwords k-anonymity
-      lookup key, not a stored credential, and the protocol has no other hash
-      option. Both dismissed, with that reasoning on each alert.
-- [x] **[L-5] TLS to Postgres and Redis.** **Investigated and documented, no
-      code change needed** — see `docs/decisions.md`. `pg` and `ioredis`
-      already negotiate TLS with zero code changes, purely from the
-      connection string (`?sslmode=verify-full`, `rediss://`); verified for
-      real against throwaway TLS-enabled Postgres and Redis containers built
-      for this, not assumed from either library's docs.
-      `docker-compose.deploy.yml`'s bundled Postgres/Redis are on the compose
-      network's private bridge, a real boundary TLS would not meaningfully
-      add to (section 5k) — deliberately not certificate-managed for that
-      reason. `.env.deploy.example` documents the three settings that matter
-      once `DATABASE_URL`/`REDIS_URL` point at a **remote** managed service
-      instead, which is where this actually protects something.
-- [x] **[P-4, P-6] Migration release runbook**, and a liveness signal for the
-      worker. **Both done.** `docs/runbook.md` covers the single-instance
-      release this repo's own compose file already does correctly, the
-      backward-compatibility rule a future rolling deploy would need (never
-      built here, but the schema discipline that makes it safe when it
-      exists), and how to read a failed migration and roll back one step.
-      `worker.js` now writes a heartbeat file every 15s, but only once
-      `workerHealthy()` (`jobs/processors.ts`) has confirmed the database is
-      actually reachable — a wedged event loop or a broken connection both
-      show up as a stale file either way.
-      `docker-compose.deploy.yml`'s worker `healthcheck` reads it via a new
-      `worker-healthcheck.js`, replacing the disabled HTTP one rather than
-      leaving it disabled. Verified in a real container: `healthy` while
-      running normally, `unhealthy` within the 45s staleness window after the
-      process was frozen with `docker pause`.
-
-### Phase 4 — polish  ✅ complete
-
-- [x] **[L-1]** Constrain the client-supplied `x-request-id` to a safe
-      charset. **Done** — `middleware/request-context.ts` matches against
-      `/^[A-Za-z0-9_-]{1,128}$/` and falls back to a fresh id for anything
-      else, rather than only capping length. See `docs/decisions.md`.
-- [x] **[L-3, L-8]** Cap `csvUuidArray` length; bound `page`. **Done** — 100
-      entries and 100,000 pages respectively. See `docs/decisions.md`.
-- [x] **[L-4]** Hash the email in the credential limiter's Redis key. **Done**
-      — `accountKey` now hashes with SHA-256 after normalising, so the key
-      itself never carries the address. See `docs/decisions.md`.
-- [x] **[L-7]** Breached-password check (HIBP k-anonymity). **Done** —
-      `modules/auth/breachCheck.ts` (pure, injectable `fetch`, no `env`/`db`
-      import — same pattern as `modules/currencies/providers.ts`) checks a
-      password's SHA-1 prefix against the Pwned Passwords range API on
-      register, change-password and reset-password, all three via a shared
-      `rejectBreachedPassword` in `auth/service.ts`. Fails open on any network
-      or HTTP error, logged; a no-op under `NODE_ENV=test` (the same reason
-      `sendEmail` never opens real SMTP there — this sits on the path
-      `registerUser()` takes for nearly every integration test). Verified
-      against the real API: `password123` (2,266,543 occurrences) and
-      `Password12345` (113,358) both flagged, a random passphrase was not. See
-      `docs/decisions.md`.
-- [x] **[L-2]** Record the public `/openapi.json` as a deliberate decision in
-      `docs/decisions.md`. **Done** — kept public: it describes shapes, not
-      data, and gating it would cost the "cannot drift from the code" property
-      that is the whole reason to trust it, for no reduction in what RBAC
-      already enforces server-side regardless of who can read the spec.
-- [x] **[L-9]** Delete the `.tmp/` load-testing scratch from the working tree.
-      **Done.**
+| Money, balances, transfers, dates | "Money is `NUMERIC(19,4)`…", "Transactions store a signed amount…", "Account balances are trigger-maintained…" |
+| Query layer, migrations, ids | "Kysely rather than Prisma…", "Migrations are registered statically…", "UUIDv7 primary keys" |
+| Auth, sessions, rate limits | "Refresh tokens are opaque…", "Rate limiting is two-dimensional…", "'Sign out everywhere'…", "One root secret, two purposes…" |
+| Registration, reset, verification | "Password reset and email verification…", "Registration stops answering the question…", "A breached-password check…" |
+| Errors, disclosure, timeouts | "An error response is written by this codebase…", "A connection is reclaimed by the server…" |
+| The OpenAPI chain | "The OpenAPI document is generated…", "Response schemas live beside the service…", "The client's response types are generated…", "`/openapi.json` is public on purpose" |
+| Shared validation | "The validation rules are shared; each side still builds its own parser", "A stored URL is only as safe as the schemes it can name" |
+| The look of the client | "Visual redesign…", "Soft controls, a distinct icon set", "Glass on floating surfaces…", "The phone is a first-class target…", "Money is typed the way it is read…" |
+| Translation | "The client is translated; the API is not", "The API gets its own i18n layer" |
+| CSV import | "CSV import is preview-then-commit…" |
+| Exchange rates | "Live exchange rates: one provider interface…" |
+| Deployment, compose, origin | "One image, three entrypoints…", "Development and deployment are two files…", "One origin, because the cookie says so", "A published secret is refused at boot…", "Two apps on Fly, a managed Postgres…" |
+| Ops: backups, metrics, runbook | "A tested restore, not a promise of one…", "A release runbook, and a heartbeat…", "Deliberately not built in this phase" |
+| CI and scanning | "CI gates on everything…", "Dependency advisories are fixed by upgrading…", "Secret scanning and SAST run the open-source tools directly" |
+| RBAC | "Non-members get 403…", "A table-driven RBAC sweep…" |
+| Alerts | "Anomaly detection is explainable statistics…", "Bounding the alert-rule `config`…" |
+
+`docs/architecture.md` is the system view, `docs/api.md` the endpoint reference (with
+`docs/openapi.json` as the generated authority on shapes), `docs/runbook.md` the release procedure.
+
+**Four decisions were the user's, not defaults, and should not be quietly reversed:** the
+Material-UI / Redux Toolkit / Recharts stack (re-litigated once against shadcn/ui and kept —
+every defect on the list had a root cause in this repo and would have survived the migration);
+same-origin over `SameSite=None` plus CSRF; a 7-day recoverable erasure over an immediate one; and
+`/openapi.json` staying public.

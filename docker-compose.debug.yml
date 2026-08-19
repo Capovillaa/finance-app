@@ -1,0 +1,45 @@
+# Loopback-only ports for looking inside a running deployment. An overlay on
+# `docker-compose.deploy.yml`, never a replacement for it:
+#
+#     docker compose -f docker-compose.deploy.yml -f docker-compose.debug.yml \
+#       --env-file .env.deploy up -d
+#
+# Why a second file instead of a variable in the first. The deployed
+# composition publishes no port for Postgres, Redis or the API, and that is a
+# security property rather than a default — audit finding C-2 was a stack that
+# published all three. A variable that switches a port on is a variable someone
+# sets once to debug something and never unsets, in a file that is not read
+# again for months. A file has to be named on the command line every time, and
+# a `docker compose ... up -d` without it takes the ports back down.
+#
+# Everything here binds 127.0.0.1 explicitly. Docker's `"5432:5432"` shorthand
+# means `0.0.0.0:5432` — it publishes through the host firewall to whatever
+# network the machine is on, which is how a laptop on a café network came to be
+# offering Postgres to that network. Reach these from another machine with an
+# SSH tunnel, which authenticates first and encrypts the hop:
+#
+#     ssh -N -L 5432:127.0.0.1:5432 you@your-server
+#
+# and point psql, DBeaver or pgAdmin at 127.0.0.1:5432 on your own machine.
+# The tunnel is what makes it safe to leave the database itself unexposed.
+name: finance-deploy
+
+services:
+  postgres:
+    ports:
+      # The credential is POSTGRES_PASSWORD from .env.deploy; this only decides
+      # where the port is reachable from, and loopback means "this host, and
+      # anything that has already authenticated its way onto this host".
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PUBLISHED_PORT:-6379}:6379"
+
+  api:
+    ports:
+      # Plain HTTP, and it answers for every workspace in the database. It is
+      # also a second origin: point a browser at it and the refresh cookie —
+      # `SameSite=Lax`, set on the `web` origin — will not be sent, so sessions
+      # will appear to die fifteen minutes in. Use it for curl and nothing else.
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-4000}:4000"

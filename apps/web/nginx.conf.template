@@ -6,6 +6,33 @@
 # is not the same thing: a Content-Security-Policy, `X-Frame-Options` and HSTS
 # only mean anything on the HTML a browser actually loads, and nothing was
 # serving that HTML at all before this image existed.
+#
+# ---- Why this is a template, not a finished config -------------------------
+#
+# It is copied to `/etc/nginx/templates/default.conf.template`, and the nginx
+# image's own entrypoint runs `envsubst` over it into `/etc/nginx/conf.d/` at
+# container start. Exactly two names are substituted, API_UPSTREAM and
+# NGINX_RESOLVER, and the Dockerfile gives both the values this repository's
+# compose file needs — so a `docker compose` deployment sees the same config it
+# always did and sets neither variable.
+#
+# Written without the `${…}` around them on purpose: envsubst does not know a
+# comment from a directive, and a worked example in this header would be
+# rewritten into the rendered config as nonsense.
+#
+# They exist because "where is the API" is not the same answer everywhere. In
+# compose it is a container named `api` on a bridge network with Docker's DNS
+# at 127.0.0.11. On a platform with no compose network — Fly's `.flycast`,
+# Railway's `.railway.internal`, a Render private service — it is a different
+# hostname resolved by a different, frequently IPv6-only, resolver. Both halves
+# have to move together, which is why `NGINX_RESOLVER` is the resolver's whole
+# argument list rather than just an address: `ipv6=off` is right for Docker and
+# wrong for every platform whose private DNS is IPv6.
+#
+# `NGINX_ENVSUBST_FILTER` in the Dockerfile restricts substitution to those two
+# names. Without it `envsubst` would also replace nginx's own `$host`, `$uri`
+# and `$remote_addr` — with empty strings, since they are not environment
+# variables — and the result parses cleanly while proxying to nowhere.
 
 server {
     listen 80;
@@ -64,19 +91,25 @@ server {
     # Everything under /api goes to the API container. This is what lets the
     # refresh cookie be `SameSite=Lax` and the CSP's `connect-src` be `'self'`.
     location /api/ {
-        # Docker's embedded DNS, and the upstream held in a variable rather than
-        # written literally. Both halves matter:
+        # The upstream is held in an nginx variable rather than written
+        # literally, and that is load-bearing in two ways:
         #
         # nginx resolves a literal `proxy_pass http://api:4000` **once, at
         # startup**, and caches that address for the life of the process — so
         # recreating the API container (any redeploy) leaves this one proxying
         # to an address nothing answers on, until someone restarts it. Through a
-        # variable, resolution happens per request, against `valid=10s`.
+        # variable, resolution happens per request, against the `valid=` above.
+        # Every platform this can deploy to reassigns the API's private address
+        # on each release, so this is not a compose-only concern.
         #
         # It also makes the config parseable on its own: `nginx -t` outside the
         # compose network cannot resolve `api`, and CI runs exactly that check.
-        resolver 127.0.0.11 valid=10s ipv6=off;
-        set $api_upstream http://api:4000;
+        #
+        # A variable `proxy_pass` *requires* a `resolver`; there is no falling
+        # back to the container's /etc/resolv.conf. That is why the two
+        # substitutions below are a pair, and why neither is optional.
+        resolver ${NGINX_RESOLVER};
+        set $api_upstream ${API_UPSTREAM};
         proxy_pass $api_upstream;
         proxy_http_version 1.1;
 

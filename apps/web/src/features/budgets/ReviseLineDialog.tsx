@@ -27,7 +27,7 @@ interface ReviseLineDialogProps {
 
 /**
  * A dedicated dialog rather than an inline edit: revising a limit mid-period
- * is audited server-side (CLAUDE.md decisions.md), so asking for a reason
+ * is audited server-side (see `docs/decisions.md`), so asking for a reason
  * here is what makes that trail worth reading later.
  */
 export default function ReviseLineDialog({ open, workspaceId, budgetId, line, onClose }: ReviseLineDialogProps): ReactElement {

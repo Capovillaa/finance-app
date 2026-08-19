@@ -19,8 +19,8 @@ import { redis } from './redis.js';
  *
  * Safe to leave unauthenticated: same reasoning as `/health` and
  * `/health/ready` — an orchestrator or a Prometheus scraper has no
- * credentials, and in the deployed composition (section 5n) the API
- * publishes no port of its own at all, so nothing outside the compose
+ * credentials, and in `docker-compose.deploy.yml` the API publishes
+ * no port of its own at all, so nothing outside the compose
  * network can reach this regardless.
  */
 export const registry = new Registry();

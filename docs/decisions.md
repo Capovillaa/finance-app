@@ -1582,8 +1582,12 @@ healthcheck authenticates through `REDISCLI_AUTH`, which `redis-cli` reads by it
 password never appears on a command line inside the container. `POSTGRES_PASSWORD`,
 `REDIS_PASSWORD`, both JWT secrets, `SMTP_HOST`, `API_BASE_URL` and `WEB_BASE_URL` are required
 compose variables — `${VAR:?message}` stops the command before it starts a container — and the API
-binds to `127.0.0.1` unless `API_BIND_ADDRESS` says otherwise, on the assumption that a reverse
-proxy terminating TLS is what faces the internet.
+service publishes no port either, because the browser reaches it through `web` on the same origin.
+
+> **Corrected later.** This entry originally said the API "binds to `127.0.0.1` unless
+> `API_BIND_ADDRESS` says otherwise". That was never true and the variable never existed; the port
+> is closed by the absence of a `ports:` entry and by nothing else. See "Two apps on Fly, a managed
+> Postgres, and a promise the compose file was not keeping" below.
 
 **What the development file keeps, and what changed in it.** The well-known password and the open
 mail sink stay: it is a database of demo data on a developer's machine, and the friction of a
@@ -1746,7 +1750,7 @@ development only because Vite proxies `/api`, and the comment in `vite.config.ts
 Given the choice between same-origin and `SameSite=None` plus a CSRF token, same-origin won on
 every axis: fewer moving parts, no new token to implement and rotate, `connect-src 'self'` becomes
 possible in the CSP, and CORS stops being load-bearing. So `apps/web/Dockerfile` builds the bundle
-and `apps/web/nginx.conf` serves it *and* proxies `/api` to the API container. One origin, one
+and `apps/web/nginx.conf.template` serves it *and* proxies `/api` to the API container. One origin, one
 certificate, one thing to publish.
 
 **And the requirement is enforced rather than written down.** `crossOriginBaseUrls` in
@@ -2695,3 +2699,153 @@ recorded occurrences, `Password12345` with 113,358, and a random 30-odd-characte
 back clean. The full suite (431 tests, up from 422) stayed at essentially the same runtime as before
 this landed, which is itself evidence the test-mode skip is doing its job rather than something
 inferred from reading the code.
+
+### `CLAUDE.md` is the operating manual; this file is the reasoning
+
+`CLAUDE.md` had grown to 3,391 lines and 211 KB — roughly two thirds of it a second copy of this
+document. Every audit finding and every feature session had appended a narrative section (5b
+through 5r) restating a decision that already had an entry here, so the two drifted in exactly the
+way generated-and-committed files drift: the same fact, stated twice, updated once. The stale half
+was measurable. `CLAUDE.md` still named `tests/unit/secret-policy.test.ts`, renamed to
+`production-policy.test.ts` several sessions earlier and recorded as renamed *in this file*; it
+claimed CodeQL runs with `build-mode: manual`, which a later commit had removed because the
+JavaScript extractor rejects it outright; it counted 108 operations against a spec holding 109; and
+it listed exactly seven public operations when the answer had become eleven — that last one being a
+number an agent is told to check the generated spec against, so a wrong value there is worse than
+no value.
+
+**The split is now by kind, not by chronology.** `CLAUDE.md` holds what a session needs in order to
+*act*: how to run things, the conventions a change must follow, the traps that survive a clean
+typecheck, this machine's quirks, and a table mapping a topic to the entry here that explains it.
+This file keeps every "why", and stays append-only and chronological — a decision log whose past
+entries get rewritten is not a log. What went was the duplication, not the content: nothing was
+deleted from `CLAUDE.md` that does not exist here or in `architecture.md`, `api.md` or `runbook.md`,
+and the traps that lived *only* there — the `TRUNCATE` cost, `z.coerce.boolean()`,
+`slotProps.htmlInput`, `sameColour`, the Debian-Postgres and `D:\DockerData` quirks — were kept
+verbatim in the shorter file.
+
+The nine source comments that cited a `CLAUDE.md` section *number* were repointed at named things
+instead: `docker-compose.deploy.yml` itself, or a titled entry here. A section number is a reference
+into a document that gets reorganised; a title is not.
+
+Checked rather than assumed, before and after: 431 tests, 259 of them units, all three typechecks,
+`check:openapi` (109/109 operations described and both generated files current), `check:i18n` (718
+keys across three catalogues) and `npm audit` at zero. The audit checklist that used to close
+`CLAUDE.md` is not lost either — all four phases are complete, so what survives is the summary of
+what was deliberately *not* built, which is the half a future session actually has to know.
+
+---
+
+### Two apps on Fly, a managed Postgres, and a promise the compose file was not keeping
+
+The deployment target was an open question until now: `docker-compose.deploy.yml` describes a
+correct single-box deployment and nothing said which box. Two decisions closed it, both the user's.
+
+**The database is a managed Postgres, not the compose one.** The deciding requirement was not
+availability or backups — it was that the person operating this wants to open the database in a GUI
+and look at it. Every other property follows from that being taken seriously rather than worked
+around. A managed provider hands out a hostname, a password and a publicly-trusted certificate, so
+DBeaver or pgAdmin connects from a laptop with no tunnel and no port opened on an application
+server; and the same connection string, with `?sslmode=verify-full`, is what the API uses. It also
+closes the one durability gap this repository had accepted on purpose: "A tested restore, not a
+promise of one" settled for a `pg_dump` pair because true PITR needs infrastructure nobody was
+paying for, and a managed instance simply has it.
+
+`sslmode=verify-full` and not `require`, checked against the installed `pg` 8.23 rather than
+assumed: `pg-connection-string` currently treats `prefer`, `require` and `verify-ca` as aliases for
+`verify-full` while printing a deprecation warning that says they will take libpq's weaker meaning
+in pg v9 — at which point `require` silently becomes "encrypt, but do not check who you are talking
+to". `verify-full` means the same thing before and after that change. Constructing a client with
+each mode shows it directly: `verify-full` yields `ssl: {}`, which is Node's TLS defaults, chain and
+hostname verified against the system trust store; `no-verify` yields `rejectUnauthorized: false`.
+
+**The application runs as two Fly apps**, `finance-api` and `finance-web`, configured by
+`fly/api.toml` and `fly/web.toml`. Fly won on two exact correspondences rather than on price. Its
+process groups are the "one image, three entrypoints" shape this repository already has — `app` and
+`worker` are two commands over one built image, so the two halves cannot drift to different versions
+between deploys the way two separately-built services would. And `release_command` runs the
+migration in a temporary machine built from the *new* image before any machine running the old one
+is replaced, aborting the deploy on a non-zero exit: that is precisely what
+`service_completed_successfully` buys the compose file, which is the only reason a new binary is
+never left talking to an old schema.
+
+The API app gets no public address — `fly ips allocate-v6 --private` — and nginx reaches it at
+`finance-api.flycast`. Same-origin is a requirement here, not a layout preference, for the reason
+`production-policy.ts` enforces at boot: the refresh cookie is `SameSite=Lax`, so a client on a
+second origin loses every session fifteen minutes in. `.flycast` rather than `.internal` because a
+flycast address belongs to the app and survives a deploy, where `.internal` names the individual
+machines and does not.
+
+**What that cost: `nginx.conf` became `nginx.conf.template`.** It had `resolver 127.0.0.11` and
+`proxy_pass` to a container named `api` written into it — Docker's embedded DNS, describing a
+network that does not exist off compose. The nginx image's own entrypoint already runs `envsubst`
+over `/etc/nginx/templates/`, so two names became variables and the Dockerfile gives both the
+compose values as defaults; a `docker compose` deployment therefore renders a byte-identical config
+and sets neither. `NGINX_RESOLVER` is the resolver's *whole argument list* rather than an address,
+because the compose default ends in `ipv6=off` and every platform private network worth naming —
+Fly's, Railway's — is IPv6. The one trap worth recording: `NGINX_ENVSUBST_FILTER` must stay pinned
+to those two names, because unfiltered `envsubst` also substitutes `$host`, `$uri`, `$scheme` and
+`$remote_addr` — with empty strings, since they are not environment variables — producing a config
+that parses cleanly and proxies to nowhere. Verified by rendering the template both ways in the
+built image and reading the result, not by reasoning about it.
+
+**`TRUST_PROXY` is the one value that ships unverified, and it says so.** There are two hops in
+front of the API on Fly where compose has one, so `fly/api.toml` sets `2` — but whether Fly's proxy
+adds a further entry on the private hop to `.flycast` is a property of their infrastructure, not of
+this repository, and getting it wrong is silent: too low and every request appears to come from the
+nginx container, collapsing the per-address rate limit into one bucket shared by the internet. So
+the config carries the procedure instead of a claim. Signing in writes `clientIp(req)` to the
+session row, so signing in from a machine whose public address is known and reading the
+active-sessions list says what the number should be. `docs/runbook.md` has it as a step.
+
+**And a promise the compose file was not keeping.** `.env.deploy.example`, a comment in
+`docker-compose.deploy.yml` and the compose-split entry above all documented an `API_BIND_ADDRESS`
+variable for reaching the API directly. No such variable existed in `config/env.ts` or anywhere
+else, and `server.ts` binds every interface, so the decision log's own account of why the deployed
+stack is safe contained a sentence that was simply false. Nothing was exposed — the container
+publishes no port, which is what actually closes it — but a false sentence inside a security
+rationale is worse than a missing one, because it is what the next person reasons from.
+
+The first attempt at a fix was to make it real with `ports: ["${API_BIND_ADDRESS:+…}"]`, on the
+theory that an unset variable would expand to nothing and publish nothing. Compose rejects the
+result outright — `invalid proto:` — because an empty string is not a port mapping; "off" is not a
+value a `ports:` entry can hold. So the escape hatch became `docker-compose.debug.yml`, an overlay
+that publishes the API, Postgres and Redis on `127.0.0.1` for exactly as long as it is named on the
+command line. That is the better shape anyway: the failure being guarded against is a debugging
+session that quietly becomes the permanent configuration, and a file has to be asked for every time
+where a variable only has to be forgotten once.
+
+**Rehearsed against the real stack before any of it was hosted.** `docker-compose.deploy.yml` was
+brought up with generated secrets and `NODE_ENV=production` — built images, migrations gating
+startup, nothing shared with the development containers — and driven through a real browser. What
+that caught, none of which a typecheck or the suite would have:
+
+- **The public smoke test returns 422, not 400.** This document's first draft of the runbook said
+  400; the API's validator answers `validation_failed` with 422. A smoke test asserting the wrong
+  code passes on a broken deployment and fails on a healthy one.
+- **`/health`, `/health/ready`, `/metrics` and `/openapi.json` answer `200 text/html` from the
+  public origin**, not 404. They are mounted at the API's root while nginx proxies only `/api/`, so
+  the SPA fallback catches them and serves `index.html`. They are genuinely unexposed — but the
+  *shape* of being unexposed is a web page, which is easy to mistake for a working endpoint when
+  reading a status code alone. On Fly this also means `/openapi.json`, public by decision in the
+  compose deployment, stops being reachable from outside.
+- **`TRUST_PROXY=1` is right for the compose shape, confirmed rather than reasoned.** The API logged
+  `x-forwarded-for: 172.19.0.1` against `remoteAddress: ::ffff:172.19.0.6` — one entry, appended by
+  nginx's `$proxy_add_x_forwarded_for`, and `trust proxy = 1` resolves `req.ip` to the real caller.
+  This is the measurement `fly/api.toml` still owes itself for its own `2`.
+- **Graceful shutdown works, which only a Linux container can show.** `docker stop` on the API
+  logged `SIGTERM` → `Shutting down` → `HTTP server closed` and exited in two seconds rather than
+  being killed at the ten-second timeout; the worker handled its own the same way. Windows cannot
+  deliver a real SIGTERM to an external process, so this had never been observable on the
+  development machine.
+- **The money path is exact end to end.** An account opened at `1500.5000` less an expense of
+  `123.4567` left `1377.0433`, the transaction stored signed (`-123.4567`) with a matching
+  `base_amount`, the balance maintained by the trigger rather than by application code.
+- **Registration, the session and mail all work in the production configuration.** The cookie came
+  back `Secure; HttpOnly; SameSite=Lax` and the session survived a reload — the refresh path this
+  whole same-origin topology exists to protect — and the verification email left the stack over
+  SMTP and arrived intact.
+
+Error responses were checked at the same time and hold the line: four fields, no stack, no Postgres
+detail, while the log carried the full stack trace beside a `requestId` that matches. That is
+`AppError.internalDetail` behaving as designed.

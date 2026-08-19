@@ -69,8 +69,8 @@ export function createApp(): Express {
   });
 
   // Unauthenticated and unrated for the same reason `/health` is: a scraper
-  // has no credentials, and in the deployed composition (section 5n) nothing
-  // outside the compose network can reach this port at all regardless. See
+  // has no credentials, and in `docker-compose.deploy.yml` nothing outside the
+  // compose network can reach this port at all regardless. See
   // `lib/metrics.ts` for what is actually collected.
   app.get(
     '/metrics',

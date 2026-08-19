@@ -6,7 +6,8 @@
  * the switch statements and label tables that have not caught up.
  *
  * These carry values, never labels. A label is language-dependent and is
- * resolved at render through the i18n catalogues; see CLAUDE.md section 2c.
+ * resolved at render through the i18n catalogues; see the i18n conventions in
+ * CLAUDE.md, and `docs/decisions.md`, "The client is translated; the API is not".
  */
 
 export const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'investment', 'cash', 'loan'] as const;

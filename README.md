@@ -8,9 +8,12 @@ recurring bills, anomaly-aware alerting, analytics, and CSV import/export.
 Both halves are built and run against each other:
 
 - **`apps/api`** — TypeScript/Express over Postgres 16 with Kysely, plus a BullMQ worker.
-  28 tables across 10 migrations. Endpoint reference in [`docs/api.md`](docs/api.md).
+  28 tables across 11 migrations, 109 endpoints. Reference in [`docs/api.md`](docs/api.md),
+  with a generated [`docs/openapi.json`](docs/openapi.json) beside it.
 - **`apps/web`** — React + Vite client (Material-UI, Redux Toolkit, Recharts, React Hook Form
   and Zod) covering nine screens.
+- **`packages/schemas`** — the bounds, value sets and rejection messages both sides must agree
+  on, declared once so they cannot drift apart.
 
 The interface ships in **English, Português (Brasil) and Español**; so do the API's error
 messages, alert notifications and invitation emails.
@@ -97,7 +100,10 @@ It brings up its own Postgres and Redis, so it does not share the development da
 | `npm run test:unit` | Pure-logic tests only — no database required |
 | `npm run migrate` / `migrate:down` / `migrate:status` | Schema migrations |
 | `npm run seed` | Demo dataset |
-| `npm run typecheck` | Type check both workspaces without emitting |
+| `npm run typecheck` | Type check all three workspaces without emitting |
+| `npm run check:openapi` | Fail if the generated spec or client types are stale |
+| `npm run check:i18n` | Catalogue parity, and every `t()` key resolves |
+| `npm run backup` / `restore` | `pg_dump` / `pg_restore` through the running container |
 | `npm run infra:up` / `infra:down` / `infra:reset` | Manage local containers |
 
 ---
@@ -106,6 +112,9 @@ It brings up its own Postgres and Redis, so it does not share the development da
 
 **Identity & access**
 - Registration, login, JWT access tokens plus rotating refresh tokens with replay detection
+- Password reset and email verification by emailed single-use token; a password already known to
+  be breached is refused, checked by k-anonymity so the password never leaves the process
+- Neither registration nor password reset discloses whether an address already has an account
 - Password change (revokes every session), GDPR data export, and account erasure that is scheduled
   rather than immediate — it costs the account password, and signing back in cancels it
 - Redis-backed rate limiting, per-IP *and* per-email on credential endpoints
@@ -142,8 +151,12 @@ It brings up its own Postgres and Redis, so it does not share the development da
 
 **Operations**
 - BullMQ worker: recurring materialisation, alert sweeps, email dispatch, token/invitation cleanup,
-  exchange-rate refresh
-- Structured logging with redaction, request correlation ids, graceful shutdown, Docker build
+  exchange-rate refresh — with a file heartbeat as its liveness signal, since it opens no port
+- Structured logging with redaction, request correlation ids, graceful shutdown that waits for
+  in-flight requests, statement and request timeouts, Docker build
+- Prometheus metrics at `/metrics`, labelled by route pattern, with example alert rules
+- A `pg_dump`/`pg_restore` pair that runs through the container, with the restore actually
+  exercised rather than assumed
 
 See [`docs/architecture.md`](docs/architecture.md) for how it fits together and
 [`docs/decisions.md`](docs/decisions.md) for why the important choices were made.
@@ -173,9 +186,11 @@ apps/web/
     pages/         one file per screen, owning data-fetching and dialog state
     i18n/          en, pt-BR, es catalogues
     lib/           formatting, permissions, money, motion, chart tokens
-.github/workflows/ CI
-infra/postgres/    container init scripts
-docs/              architecture, API reference, decision log
+packages/schemas/  bounds, enums, patterns and messages shared by both apps
+scripts/           backup and restore
+.github/workflows/ CI, secret scanning, CodeQL
+infra/             Postgres init scripts, example Prometheus alert rules
+docs/              architecture, API reference, decision log, release runbook
 ```
 
 ---
@@ -225,10 +240,14 @@ Two jobs run in parallel:
 
 | Job | Needs | Runs |
 | --- | --- | --- |
-| **Typecheck, build, unit tests** | nothing | `npm run typecheck`, both workspace builds, `npm run test:unit` |
+| **Typecheck, build, unit tests** | nothing | The runtime-dependency advisory gate, `npm run typecheck`, both workspace builds, the generated-file and translation checks, `npm run test:unit`, both container images — and what those images *refuse* to boot on |
 | **Full suite (real Postgres)** | a `postgres:16` service container | `npm test`, then a migration rollback round-trip |
 
 Splitting them means a type error reports in about a minute rather than waiting on a database.
+
+Two more workflows run alongside: `gitleaks.yml` scans the full git history for committed secrets
+on every push, and `codeql.yml` runs GitHub's static analysis weekly and on every change. Both use
+the open-source tooling directly, so neither needs an account or a key.
 
 **Only Postgres is provisioned.** Under `NODE_ENV=test` the cache helpers short-circuit,
 workspace cache invalidation is a no-op and the rate limiter uses an in-memory store, so nothing

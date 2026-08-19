@@ -22,10 +22,10 @@
 The API and the worker are the **same codebase and the same container image**, started with
 different entrypoints (`server.js` / `worker.js`). They share every service module, so a bill
 materialised by the worker goes through exactly the same code as one created from the API. The
-migration runner (`db/migrate.js`) is the third entrypoint of that same image, and in the `app`
-compose profile it runs to completion before either of the others starts — so a failed migration
-stops the rollout rather than leaving a new binary talking to an old schema. See `decisions.md`,
-"One image, three entrypoints, and a migration that gates the rollout".
+migration runner (`db/migrate.js`) is the third entrypoint of that same image, and in
+`docker-compose.deploy.yml` it runs to completion before either of the others starts — so a failed
+migration stops the rollout rather than leaving a new binary talking to an old schema. See
+`decisions.md`, "One image, three entrypoints, and a migration that gates the rollout".
 
 ## Layers
 
@@ -45,8 +45,14 @@ generates the API's own description by walking the router — see "The API descr
 ## Request lifecycle
 
 1. `requestId` assigns a correlation id, echoed as `x-request-id` and attached to every log line.
-2. `httpLogger` logs the request, with authorization headers and anything password-shaped redacted.
-3. `globalRateLimit` consumes two Redis token buckets: the calling address, and — when the bearer
+   A client-supplied one is honoured only if it matches a safe charset, so it cannot inject
+   control characters into a log line.
+2. `httpMetrics` starts a timer, and `httpLogger` logs the request with authorization headers and
+   anything password-shaped redacted. The metric is labelled from `req.route` inside the `finish`
+   event — the only point routing has resolved — never from the raw path, which would mint a
+   Prometheus time series per workspace id.
+3. `requestTimeout` starts the 503 backstop for a handler that never returns, and `globalRateLimit`
+   consumes two Redis token buckets: the calling address, and — when the bearer
    token verifies — the signed-in user. It has to verify the token itself, because it is mounted
    above every `requireAuth` and `req.user` does not exist yet at this point.
 4. `requireAuth` verifies the JWT **and reloads the user**, so a suspended account, or one whose
@@ -55,12 +61,22 @@ generates the API's own description by walking the router — see "The API descr
 6. `requireViewer` / `requireEditor` / `requireAdmin` / `requireOwner` narrow by role.
 7. `validate({ params, query, body })` parses with Zod and *replaces* the request parts with the
    typed, coerced output.
-8. The route calls a service function, which filters every query by `workspace_id`.
-9. `errorHandler` maps the thrown error — application, Zod, or Postgres — onto one status code and
-   one response envelope.
+8. `responds({ … })` records what this route returns. It is what the OpenAPI document publishes,
+   and under `NODE_ENV=test` it also parses every outgoing body and fails the request on a
+   mismatch — which is the only reason to trust a hand-authored response schema.
+9. The route calls a service function, which filters every query by `workspace_id`.
+10. `errorHandler` maps the thrown error — application, Zod, or Postgres — onto one status code and
+    one response envelope.
 
 Steps 4–6 are what enforce tenant isolation. Because they are mounted once in `src/routes.ts`
 rather than repeated per route, a new endpoint cannot forget them.
+
+Three timeouts sit under all of this, deliberately ordered so the innermost fires first: a
+`statement_timeout` and an `idle_in_transaction_session_timeout` are set as session parameters on
+every pooled connection, so a runaway query is killed by Postgres rather than holding a connection
+out of a pool of ten; `REQUEST_TIMEOUT_MS` is the looser client-facing backstop for a slow path
+that is not database-bound at all. It answers 503 but cannot cancel the handler still running
+behind it, which is why `errorHandler` checks `res.headersSent` before writing.
 
 Step 3 depends on `req.ip` being real, which depends on `TRUST_PROXY`. `X-Forwarded-For` is a
 client-supplied header, so it is believed only when the deployment says something is in front to
@@ -244,6 +260,11 @@ Materialisation looks ahead so bills exist *before* they are due — that is wha
 `bill_due` alert its lead time. It is idempotent: an occurrence that already produced a
 transaction is skipped, so a retry cannot double-charge.
 
+The worker opens no HTTP port, so it cannot answer a probe the way the API does. Instead it writes
+a heartbeat file every 15 seconds, but only once a check has confirmed the database is genuinely
+reachable; the container's healthcheck reads that file and opens no connection of its own. A wedged
+event loop and a broken connection both surface the same way — a file that stopped being touched.
+
 ## Alerting
 
 `src/modules/alerts/detectors.ts` holds the detection maths as pure functions — no database, no
@@ -267,9 +288,23 @@ outage degrades latency, not correctness. Caching is bypassed entirely under `NO
 ## Security
 
 - bcrypt password hashing; failed logins burn equivalent CPU so timing cannot enumerate accounts
+- A password already known to be breached is refused, via the Pwned Passwords k-anonymity range
+  API — the prefix of a SHA-1 leaves the process, never the password. It fails open on a network
+  error: an unreachable third party must not stop someone changing their password
+- Neither registration nor password reset reveals whether an address has an account. Both answer
+  the same way either way, and a known address gets an email to its *real* owner instead
 - Short-lived access tokens; opaque refresh tokens stored only as keyed hashes, rotated on use
 - Refresh-token replay revokes the entire token family
-- Invitation tokens likewise stored only as hashes, single-use, expiring
+- Revocation reaches the access token too, through `users.tokens_valid_from` checked on the row
+  `requireAuth` already loads — so "sign out everywhere" is immediate rather than "within fifteen
+  minutes". The token carries a millisecond `iatMs` claim because a whole-second `iat` cannot tell
+  a token issued just before a revocation from one issued just after
+- Invitation, password-reset and email-verification tokens are likewise stored only as hashes,
+  single-use, expiring. Each hashing purpose uses its own HKDF-derived subkey of the root secret,
+  so a leak of one derived key does not yield the others; email tokens sign with a separate
+  `EMAIL_TOKEN_SECRET` entirely
+- Accepting a workspace invitation requires the accepting account's email to be verified — matching
+  the invited address was never proof on its own, since anyone could register it first
 - Every workspace-scoped query filters on `workspace_id`; non-members get 403 rather than a hint
   that a resource exists
 - `helmet`, CORS locked to the web origin in production, 1 MB body cap
@@ -278,6 +313,24 @@ outage degrades latency, not correctness. Caching is bypassed entirely under `NO
   `requestId` — never a stack, and never text written by Postgres or by a trigger, both of which
   name columns, constraints and other rows' values. All of that stays in the log under the same
   request id
+
+## Observability and recovery
+
+Structured JSON logs (pino) carry the request id, so one identifier joins the access line, the
+error line and the driver detail behind a 500 — the parts an error *response* deliberately no
+longer contains. `GET /metrics` publishes the Prometheus set described in `api.md`;
+`infra/prometheus/alerts.example.yml` is the rule file an operator would point at it, unwired,
+because there is no Prometheus deployment here to wire it into. `redis_connected` is worth knowing
+about specifically: it is the same fact the rate limiter's "running on the per-process fallback"
+warning logs, turned into something an alert can key on.
+
+`scripts/backup.sh` and `scripts/restore.sh` run `pg_dump`/`pg_restore` *through* the running
+Postgres container, so nothing needs installing wherever they run. The restore path was exercised
+against real seeded data rather than assumed. This is a logical backup, not PITR — the honest
+limits of that are in `decisions.md`, "A tested restore, not a promise of one".
+
+An error tracker and distributed tracing are deliberately absent: both need a real subscription
+behind them, and a client with nowhere to send events is dead code that looks like a feature.
 
 ## How it ships
 
@@ -325,9 +378,38 @@ The traps involved — npm running a linked workspace's `prepare` regardless of 
 being copied — are written up in `decisions.md`, "One image, three entrypoints, and a migration
 that gates the rollout".
 
-What is deliberately not decided here: where this runs, how images reach a registry, where TLS
-terminates, and where production secrets come from. The compose profile is a working local
-rehearsal of the rollout order, not a hosting plan.
+### Where it runs
+
+The compose file above remains the local rehearsal and a complete single-box deployment. The hosted
+shape is two Fly apps, `fly/api.toml` and `fly/web.toml`, and it is the same topology with the
+compose network replaced by a private one:
+
+```
+      browser ──▶ finance-web (public, TLS at Fly's edge)
+                       │ nginx: / = the bundle,  /api = proxy
+                       ▼  finance-api.flycast:4000   (no public address)
+                  finance-api ── processes: app, worker
+                       │
+                       ▼
+              managed Postgres (sslmode=verify-full) + Redis (rediss://)
+```
+
+Three correspondences carry over exactly, which is why this file's diagram did not need redrawing:
+the one image with three commands becomes Fly *process groups* (`app`, `worker`) plus a
+`release_command` for the migration, so the two running halves cannot be different builds; the
+migration still gates the rollout, because a non-zero exit from `release_command` aborts the deploy
+before any old machine is replaced; and the browser still sees one origin, because the API app is
+allocated a **private** address and reached only through nginx.
+
+What changes is that Postgres and Redis leave the deployment: both are managed services reached over
+TLS, which is what makes the database openable in a GUI from a laptop without a port being published
+anywhere, and what supplies the point-in-time recovery the `pg_dump` pair only approximates.
+
+Still not decided here: a custom domain, where a registry fits (Fly builds and stores the image
+itself), and any error tracker. `TRUST_PROXY` on Fly is set to the hop count that composition
+expects and carries a verification step in `docs/runbook.md` rather than a guarantee — the number
+is a claim about someone else's proxy, and being wrong collapses the per-address rate limit
+silently.
 
 ## Scaling notes
 

@@ -13,7 +13,7 @@ All requests and responses are JSON unless noted. Authenticated endpoints take
 > them** — a route cannot be added or a bound changed without the spec moving
 > too, and CI fails if the committed copy is stale.
 >
-> **Responses are in the spec too, all 104 of them**, so it is now the authority
+> **Responses are in the spec too, all 109 of them**, so it is now the authority
 > on what an endpoint returns as well — and unlike prose, those descriptions are
 > checked against real responses by the integration suite, which is what makes
 > them trustworthy. The client's TypeScript types are generated from the same
@@ -435,12 +435,24 @@ All viewer, all in the workspace base currency, all excluding transfers.
 CSV is UTF-8 with a BOM and CRLF endings so Excel reads accented text correctly, and fields
 starting with `=`, `+`, `-` or `@` are escaped against formula injection.
 
-## Health
+## Health and metrics
 
-`GET /health` — liveness, no dependencies. `GET /health/ready` — checks Postgres and Redis,
-503 when degraded.
+These three sit outside `/api/v1`: unauthenticated, unversioned, and not rate limited, because
+an orchestrator and a metrics scraper have no credentials and a probe that can be throttled is
+not a probe.
+
+| Path | What it is |
+| --- | --- |
+| `GET /health` | Liveness. No dependencies, so a database blip cannot get a healthy container restarted. |
+| `GET /health/ready` | Readiness. Checks Postgres and Redis; 503 when either is down. Cached for one second, so concurrent probes share one round of checks. |
+| `GET /metrics` | Prometheus text format: default Node/process metrics, HTTP duration and count **labelled by route pattern**, Postgres pool saturation, and `redis_connected`. |
+| `GET /openapi.json` | The generated specification, built from this running app. |
 
 The container healthcheck uses `/health`, not `/health/ready`: a container is not unhealthy
 merely because a database it does not own is briefly unavailable, and restarting it would not
 help. Point an orchestrator's *readiness* probe at `/health/ready` and its *liveness* probe at
 `/health`.
+
+In the deployed composition only nginx publishes a port, so none of these is reachable from
+outside the compose network. `infra/prometheus/alerts.example.yml` holds the alert rules an
+operator would point at `/metrics`; nothing in this repository scrapes it.

@@ -43,7 +43,7 @@ jobs:
       # workflow tried first) fails outright with "does not support the manual
       # build mode." `@finance/schemas`'s compiled `dist/` is still built
       # first, though: apps/api and apps/web import it as compiled output (the
-      # shared-package convention, CLAUDE.md section 3), and having real type
+      # shared-package convention in CLAUDE.md), and having real type
       # declarations to resolve improves the analysis even though nothing here
       # is actually run.
       - name: Build shared schemas
