@@ -92,7 +92,12 @@ services:
     plan: starter
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: .
-    healthCheckPath: /health
+    # Render's Blueprint schema does not accept healthCheckPath on a `pserv` —
+    # only a `web` service gets an HTTP health check here. The API's /health
+    # endpoint is still there and still worth hitting manually (see the debug
+    # overlay in docker-compose.debug.yml for how to reach it locally); Render
+    # itself just falls back to the container's own health, if any is defined
+    # in the Dockerfile, or otherwise to the process staying up.
     # Runs after the build and before the new container serves anything, and a
     # failure stops the deploy. This is Render's equivalent of the compose
     # file's `service_completed_successfully` gate, and it exists for the same
