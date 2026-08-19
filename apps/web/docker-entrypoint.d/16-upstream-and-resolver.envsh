@@ -1,0 +1,54 @@
+# Makes the two nginx substitutions survive a platform that will not tell you,
+# at build time, where the API is or who resolves its name.
+#
+# Sourced (not executed) by the nginx image's entrypoint — hence `.envsh` and
+# the `return` rather than `exit` — before `20-envsubst-on-templates.sh` runs,
+# which is the whole point: whatever this exports is what gets substituted into
+# `nginx.conf.template`.
+#
+# Two rules, both no-ops unless asked for:
+#
+#   NGINX_RESOLVER=auto   ->  the nameservers from /etc/resolv.conf, plus
+#                             `valid=10s`. A variable `proxy_pass` requires a
+#                             resolver and nginx will not read resolv.conf for
+#                             one, so every platform whose private DNS is not
+#                             Docker's 127.0.0.11 needs this. Render generates
+#                             its internal hostnames and does not publish a
+#                             resolver address; this reads whatever the
+#                             container was actually given.
+#
+#   API_UPSTREAM with no scheme  ->  http:// is prefixed.
+#                             Render's `fromService: property: hostport` yields
+#                             `finance-api-a1b2:4000` — host and port, no
+#                             scheme — and passing that to `proxy_pass` is a
+#                             config-parse failure at start, not a bad request
+#                             later.
+#
+# IPv6 nameservers are bracketed, matching what the image's own
+# 15-local-resolvers.envsh does, because `resolver fd00::1` is a syntax error
+# where `resolver [fd00::1]` is not.
+
+set -eu
+
+if [ "${NGINX_RESOLVER:-}" = "auto" ]; then
+    _resolvers=$(awk 'BEGIN{ORS=" "} $1=="nameserver" {if ($2 ~ ":") {print "["$2"]"} else {print $2}}' /etc/resolv.conf)
+    _resolvers="${_resolvers% }"
+    if [ -z "$_resolvers" ]; then
+        echo "16-upstream-and-resolver: NGINX_RESOLVER=auto but /etc/resolv.conf names no nameserver" >&2
+        exit 1
+    fi
+    NGINX_RESOLVER="$_resolvers valid=10s"
+    export NGINX_RESOLVER
+    echo "16-upstream-and-resolver: NGINX_RESOLVER=$NGINX_RESOLVER"
+    unset _resolvers
+fi
+
+case "${API_UPSTREAM:-}" in
+    *://*) ;;
+    '')    ;;
+    *)
+        API_UPSTREAM="http://${API_UPSTREAM}"
+        export API_UPSTREAM
+        echo "16-upstream-and-resolver: API_UPSTREAM=$API_UPSTREAM"
+        ;;
+esac

@@ -381,35 +381,42 @@ that gates the rollout".
 ### Where it runs
 
 The compose file above remains the local rehearsal and a complete single-box deployment. The hosted
-shape is two Fly apps, `fly/api.toml` and `fly/web.toml`, and it is the same topology with the
-compose network replaced by a private one:
+shape is `render.yaml`, a Blueprint of five services, and it is the same topology with the compose
+network replaced by Render's private one:
 
 ```
-      browser ──▶ finance-web (public, TLS at Fly's edge)
+      browser ──▶ finance-web    (web: public, TLS at Render's edge)
                        │ nginx: / = the bundle,  /api = proxy
-                       ▼  finance-api.flycast:4000   (no public address)
-                  finance-api ── processes: app, worker
+                       ▼  finance-api-xxxx:4000     (private network)
+                  finance-api    (pserv: no public URL)
+                  finance-worker (worker: no HTTP surface)
                        │
                        ▼
-              managed Postgres (sslmode=verify-full) + Redis (rediss://)
+              finance-db (Render Postgres) + finance-cache (key value)
 ```
 
 Three correspondences carry over exactly, which is why this file's diagram did not need redrawing:
-the one image with three commands becomes Fly *process groups* (`app`, `worker`) plus a
-`release_command` for the migration, so the two running halves cannot be different builds; the
-migration still gates the rollout, because a non-zero exit from `release_command` aborts the deploy
-before any old machine is replaced; and the browser still sees one origin, because the API app is
-allocated a **private** address and reached only through nginx.
+the one image with three commands becomes a `pserv` and a `worker` built from the same Dockerfile
+with `dockerCommand` overridden; the migration still gates the rollout, because `preDeployCommand`
+runs before the new container serves anything and a failure stops the deploy; and the browser still
+sees one origin, because the API is a **private service** with no public URL, reached only through
+nginx. The shape follows from the refresh cookie, not from the platform — which is why it survived
+being retargeted from Fly (`fly/`, kept as an alternative) to Render unchanged.
 
-What changes is that Postgres and Redis leave the deployment: both are managed services reached over
-TLS, which is what makes the database openable in a GUI from a laptop without a port being published
-anywhere, and what supplies the point-in-time recovery the `pg_dump` pair only approximates.
+What changes is that Postgres and Redis leave the deployment as containers and become managed
+services. That is what makes the database openable in a GUI from a laptop without a port being
+published anywhere — Render Postgres exposes a separate external, TLS-only connection string for
+exactly that — and what supplies the point-in-time recovery the `pg_dump` pair only approximates.
 
-Still not decided here: a custom domain, where a registry fits (Fly builds and stores the image
-itself), and any error tracker. `TRUST_PROXY` on Fly is set to the hop count that composition
-expects and carries a verification step in `docs/runbook.md` rather than a guarantee — the number
-is a claim about someone else's proxy, and being wrong collapses the per-address rate limit
-silently.
+One thing the platform genuinely forced: on Render the API's internal hostname is generated and does
+not exist until the service does, so nginx's upstream cannot be a literal anywhere. `render.yaml`
+supplies it with `fromService: property: hostport`, and the web image resolves the missing scheme
+and its own DNS resolver at container start — see `apps/web/docker-entrypoint.d/`.
+
+Still not decided here: a custom domain and any error tracker. `TRUST_PROXY` is set to the hop count
+the composition expects and carries a verification step in `docs/runbook.md` rather than a
+guarantee — the number is a claim about someone else's proxy, and being wrong collapses the
+per-address rate limit silently.
 
 ## Scaling notes
 

@@ -32,7 +32,71 @@ docker compose -f docker-compose.deploy.yml ps
 A `migrate` container that exited non-zero and `api`/`worker` that never started (still `created`,
 not `running`) is the failure mode working as intended — see "If a migration fails" below.
 
-## The Fly release (two apps, a managed Postgres)
+## The Render release (the chosen path)
+
+`render.yaml` at the repository root is a Blueprint describing all five services — client, API,
+worker, Postgres, key value. Render creates them from it and redeploys on every push, so there is
+no deploy command to run by hand. Reasoned about in `decisions.md` under "Render, and the hostname
+you cannot know until it exists".
+
+### First deploy only
+
+1. In Render, **New → Blueprint**, point it at this repository. It reads `render.yaml` and shows
+   what it will create.
+2. It will prompt for every value marked `sync: false`: `SMTP_HOST`, `SMTP_USER`,
+   `SMTP_PASSWORD`, `MAIL_FROM`, and `API_BASE_URL`/`WEB_BASE_URL`. **You cannot know the last two
+   yet** — Render has not created the client's URL. Put a placeholder in, or leave them, and expect
+   the API not to boot.
+3. Once `finance-web` exists, copy its URL (`https://finance-web-xxxx.onrender.com`) and set
+   **both** `API_BASE_URL` and `WEB_BASE_URL` to that exact string, on **both** `finance-api` and
+   `finance-worker`. They must be identical, including scheme and any port — `production-policy.ts`
+   compares origins and refuses to start when they differ, because a split origin ends every
+   session at the first token refresh.
+4. Redeploy `finance-api`. The `preDeployCommand` runs the migrations; a failure stops the deploy
+   rather than letting a new binary serve against an old schema.
+
+The three signing secrets are `generateValue: true`, so Render generates a distinct high-entropy
+value for each and never shows them in the repository. The worker copies the API's three by
+reference (`fromService` + `envVarKey`) rather than generating its own — a second, different set
+would look like it worked and reject every token the API signed. If a boot is refused for length or
+entropy, replace them by hand:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+### Every release
+
+Push to the tracked branch. Render rebuilds and redeploys what changed. To confirm:
+
+- `finance-api` → Logs: the pre-deploy output, then the boot lines.
+- `finance-worker` → Logs: `Worker started` with its four queues.
+- `curl -fsS https://<your-web-url>/healthz` → `ok` (nginx itself).
+- `curl -si https://<your-web-url>/api/v1/auth/login -H 'content-type: application/json' -d '{}'`
+  → **422** with a `validation_failed` body proves the proxy reached the API. A 502 is nginx
+  failing to reach it; a 200 with HTML means the path fell through to the SPA.
+
+### What costs money, and what the free tiers do to you
+
+Private services and background workers have **no free instance type** — `finance-api` and
+`finance-worker` are on `starter` because that is the smallest that exists. `finance-web` is on
+`free`, which **spins down after 15 minutes idle**: the first visit after a quiet period waits for a
+cold start, which reads as the site being broken. Move it to `starter` before showing it to anyone.
+The free Postgres plan **expires**; move it to a paid plan before it holds anything you would mind
+losing, and note that the free key value store has no persistence, so BullMQ's queued jobs do not
+survive a restart there.
+
+### Looking at the database
+
+Render Postgres has two connection strings and the difference matters. The **internal** one is what
+`render.yaml` wires into the API over the private network. The **external** one, in the dashboard
+under Connect, is the one to paste into DBeaver, pgAdmin or psql from your own machine — it is
+reachable from anywhere and TLS-only. Use the external string, and keep its SSL parameters.
+
+## The Fly release (an alternative, not the chosen path)
+
+Retained because it works and is a genuine fallback if Render's per-service pricing bites, but
+**Render is what this repository deploys to** — treat the section above as the one kept honest.
 
 The hosted deployment, described by `fly/api.toml` and `fly/web.toml` and reasoned about in
 `decisions.md` under "Two apps on Fly, a managed Postgres, and a promise the compose file was not

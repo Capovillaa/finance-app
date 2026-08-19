@@ -5,7 +5,7 @@ Working notes for the personal finance platform in `D:\finance_app`, published a
 things, the conventions a change has to follow, and the traps that cost real time to rediscover.
 
 **The reasoning is not here.** Every significant choice is written up in
-[`docs/decisions.md`](docs/decisions.md) — 52 entries, chronological, each titled. When this file
+[`docs/decisions.md`](docs/decisions.md) — 53 entries, chronological, each titled. When this file
 says "see the decision log", that is where to look, and it is worth looking before reversing
 anything.
 
@@ -38,12 +38,17 @@ worth wiring), a real SMTP account, and certificates for the compose-internal Po
 private bridge is the boundary there — `.env.deploy.example` documents what a *remote* managed
 store needs). No payment or bank integration.
 
-**Hosting is described but not yet provisioned.** `fly/api.toml` and `fly/web.toml` define the
-target — two apps, the API private behind the client's nginx, migrations as the release command —
-against a *managed* Postgres, which is also what replaces the missing PITR (the `pg_dump` pair
-remains for the self-hosted shape). Nothing has been created on Fly yet, no secrets are set, and
-`TRUST_PROXY` there is an expectation with a verification procedure rather than a measured number.
-`docs/runbook.md` has the first-deploy sequence.
+**Hosting is described but not yet provisioned.** `render.yaml` is the target: a Blueprint of five
+services — the client public, the API private behind its nginx, the worker, Render Postgres and a
+key value store — with migrations as `preDeployCommand`. `fly/` describes the same shape on Fly and
+is kept as an alternative; **only Render is the chosen path, and only it will be verified.** Nothing
+is created on either yet, and `TRUST_PROXY` on both is an expectation with a verification procedure
+rather than a measured number. The managed Postgres is also what replaces the missing PITR — the
+`pg_dump` pair remains for the self-hosted compose shape. `docs/runbook.md` has both sequences.
+
+The whole stack *has* been rehearsed locally in its production configuration
+(`docker-compose.deploy.yml`, built images, `NODE_ENV=production`) and driven through a browser: see
+the decision log's "Rehearsed against the real stack before any of it was hosted".
 
 Smaller product gaps: per-account statement history beyond the reconciliation list; the workspace
 settings screen cannot create a workspace (the switcher does); a revoked invitation cannot be
@@ -103,7 +108,8 @@ D:\finance_app
 ├── docs/                             # architecture.md, api.md, openapi.json (GENERATED),
 │                                     #   decisions.md, runbook.md, the original brief
 ├── infra/                            # postgres/init/, prometheus/alerts.example.yml (unwired)
-├── fly/                              # api.toml (app + worker + release migration), web.toml
+├── fly/                              # an alternative host, not the chosen one
+├── render.yaml                       # THE deployment: web + pserv + worker + pg + keyvalue
 ├── scripts/                          # backup.sh, restore.sh
 ├── .github/workflows/                # ci.yml, gitleaks.yml, codeql.yml
 ├── docker-compose.yml                # DEVELOPMENT ONLY: postgres, redis, mailhog, on 127.0.0.1
@@ -557,6 +563,17 @@ Each of these was found the hard way. Most typecheck perfectly.
 - **"Off" is not a value a compose `ports:` entry can hold.** `${VAR:+…}` expanding to an empty
   string fails validation with `invalid proto:`, which is why the debugging ports live in
   `docker-compose.debug.yml` as an overlay rather than behind a variable.
+- **The API's address cannot be written down on Render.** Internal hostnames are generated with a
+  suffix that does not exist until the service does (`finance-api-a1b2:4000`), so `render.yaml`
+  supplies it with `fromService: property: hostport` — which yields host and port with **no
+  scheme**. `apps/web/docker-entrypoint.d/16-upstream-and-resolver.envsh` prefixes `http://` and
+  turns `NGINX_RESOLVER=auto` into the container's real nameservers; both are no-ops unless asked
+  for, so compose and Fly are untouched. It must stay a `.envsh` (sourced, so exports survive) and
+  keep a number below 20, or it runs after the envsubst step it exists to feed.
+- **Two services with `generateValue: true` on the same key get two different values.** In
+  `render.yaml` the worker copies the API's three signing secrets with `fromService` + `envVarKey`
+  for exactly this reason: generating its own would start cleanly, log nothing, and reject every
+  token the API signed.
 - **`/health`, `/health/ready`, `/metrics` and `/openapi.json` are mounted at the API's root, not
   under `/api/v1`** — so nginx, which proxies only `/api/`, does not expose them. Anything reaching
   for them through the public origin is reaching for something that is not there.

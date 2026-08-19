@@ -1,0 +1,269 @@
+# The whole deployment as one Render Blueprint: client, API, worker, Postgres
+# and the key-value store. Point Render at this repository and it creates all
+# five; every later push redeploys them.
+#
+# ---- The shape, and why it is not simpler --------------------------------
+#
+# Same topology as `docker-compose.deploy.yml`, with the compose network
+# replaced by Render's private one:
+#
+#   browser ──▶ finance-web  (public: the bundle, and /api proxied)
+#                   │  private network
+#                   ▼
+#              finance-api   (pserv: no public URL at all)
+#              finance-worker (no HTTP surface)
+#                   │
+#                   ▼  finance-db (Postgres) + finance-cache (key value)
+#
+# The API is a **private service** rather than a second public web service, and
+# that is a requirement rather than tidiness: the refresh token is an HttpOnly
+# `SameSite=Lax` cookie, so the browser has to see the client and the API on one
+# origin, and `config/production-policy.ts` refuses to boot when API_BASE_URL and
+# WEB_BASE_URL disagree. Two public URLs would end every session at the first
+# token refresh, fifteen minutes in, with nothing in the logs but a 401.
+#
+# ---- What this costs, plainly --------------------------------------------
+#
+# Private services and background workers have **no free instance type**. The
+# `starter` plan below is the smallest that exists for them. The web service can
+# run on `free`, at the cost of spinning down after 15 minutes idle — fine for
+# something you are showing people, poor for something you are using. Postgres
+# and the key value store have free tiers with their own limits; the Postgres
+# one expires, so move it to a paid plan before it holds anything you care
+# about.
+#
+# ---- Before the first deploy ---------------------------------------------
+#
+# Four values are marked `sync: false`, which means Render asks for them when
+# you create the blueprint rather than reading them from here — this file is
+# public, and none of them belong in it. PUBLIC_URL is the one that is awkward:
+# you do not know the client's URL until Render has created it, so deploy once,
+# copy the `finance-web` URL from the dashboard, and set API_BASE_URL and
+# WEB_BASE_URL on `finance-api` to that exact value. The API will refuse to boot
+# until they agree, which is the check doing its job rather than a failure.
+
+databases:
+  - name: finance-db
+    databaseName: finance
+    user: finance
+    region: virginia
+    plan: free
+    # The API reaches this over the private network. The *external* connection
+    # string, which is the one to paste into DBeaver or pgAdmin, is in the
+    # dashboard under Connect — a different string, reachable from anywhere, and
+    # TLS-only. That is the whole reason the database is managed rather than a
+    # container: see `docs/decisions.md`, "Two apps on Fly, a managed Postgres".
+
+services:
+  # ---- The client, and the only public face ------------------------------
+  - type: web
+    name: finance-web
+    runtime: docker
+    region: virginia
+    plan: free
+    dockerfilePath: ./apps/web/Dockerfile
+    # The repository root: the client builds against the `@finance/schemas`
+    # workspace, so the context has to contain both packages.
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      # Render generates its internal hostnames with a suffix that does not
+      # exist until the service does — `finance-api-a1b2:4000`, not
+      # `finance-api:4000` — so this cannot be written by hand. `hostport`
+      # yields host and port with no scheme; the image's
+      # `16-upstream-and-resolver.envsh` prefixes `http://`.
+      - key: API_UPSTREAM
+        fromService:
+          type: pserv
+          name: finance-api
+          property: hostport
+      # A variable `proxy_pass` needs a resolver and nginx will not read
+      # /etc/resolv.conf for one. Render publishes no resolver address, so the
+      # entrypoint reads whatever the container was actually handed. The image's
+      # default is Docker's 127.0.0.11, which is meaningless here.
+      - key: NGINX_RESOLVER
+        value: auto
+
+  # ---- The API: private, and the migration gate --------------------------
+  - type: pserv
+    name: finance-api
+    runtime: docker
+    region: virginia
+    plan: starter
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Runs after the build and before the new container serves anything, and a
+    # failure stops the deploy. This is Render's equivalent of the compose
+    # file's `service_completed_successfully` gate, and it exists for the same
+    # reason: never leave a new binary talking to an old schema.
+    preDeployCommand: node apps/api/dist/db/migrate.js up
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: finance-cache
+          property: connectionString
+      # Render generates a distinct high-entropy value for each and never shows
+      # it in this file. They must differ from one another — `production-policy`
+      # rejects a repeat, because one key doing two jobs means a leak in either
+      # context is a leak in both. If a boot is refused for length or entropy,
+      # set them by hand instead:
+      #   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: EMAIL_TOKEN_SECRET
+        generateValue: true
+      # Both must be the public URL of `finance-web`, which does not exist until
+      # Render has created it. Set them in the dashboard after the first deploy.
+      - key: API_BASE_URL
+        sync: false
+      - key: WEB_BASE_URL
+        sync: false
+      # Mail carries workspace invitations and the delivery path logs its
+      # failures rather than raising them, so a wrong host here loses them
+      # silently. The API refuses to boot on a development mail host.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_SECURE
+        value: false
+      - key: MAIL_FROM
+        sync: false
+      # ---- Verify this rather than trusting it ---------------------------
+      # `req.ip` comes out of `X-Forwarded-For`, a header the *client* sends.
+      # Too low and every request looks like it came from the nginx service, so
+      # the per-address rate limit becomes one bucket shared by the internet;
+      # too high and a client can invent addresses to escape it. Two hops are
+      # expected here — Render's load balancer, then `finance-web`'s nginx — but
+      # that is a claim about Render's infrastructure, not about this code.
+      # `docs/runbook.md` has the measurement: sign in, then read
+      # `refresh_tokens.ip_address`.
+      - key: TRUST_PROXY
+        value: 2
+      - key: LOG_LEVEL
+        value: info
+      - key: ACCESS_TOKEN_TTL
+        value: 15m
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: 30
+      - key: ACCOUNT_DELETION_GRACE_DAYS
+        value: 7
+      - key: RATE_LIMIT_INSTANCES
+        value: 1
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: 15000
+      - key: DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS
+        value: 30000
+      - key: REQUEST_TIMEOUT_MS
+        value: 20000
+      - key: BASE_CURRENCY
+        value: BRL
+      - key: EXCHANGE_RATE_PROVIDER
+        value: frankfurter
+
+  # ---- The worker: same image, different command -------------------------
+  #
+  # The environment is repeated rather than shared through a YAML anchor or an
+  # env var group, and deliberately: an anchor is one silent edit away from
+  # letting the two halves drift, and an env group cannot hold the `fromService`
+  # and `fromDatabase` references above. Verbose beats clever in the file that
+  # decides what production is.
+  #
+  # No `preDeployCommand` here. The migration runs exactly once per release, on
+  # the API, not once per service.
+  - type: worker
+    name: finance-worker
+    runtime: docker
+    region: virginia
+    plan: starter
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    dockerCommand: node apps/api/dist/worker.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: finance-cache
+          property: connectionString
+      # The same three values as the API, not new ones: the worker verifies the
+      # tokens the API issued. `fromService` copies them across rather than
+      # generating a second, different set — which would look like it worked
+      # and reject every token the API signed.
+      - key: JWT_ACCESS_SECRET
+        fromService:
+          type: pserv
+          name: finance-api
+          envVarKey: JWT_ACCESS_SECRET
+      - key: JWT_REFRESH_SECRET
+        fromService:
+          type: pserv
+          name: finance-api
+          envVarKey: JWT_REFRESH_SECRET
+      - key: EMAIL_TOKEN_SECRET
+        fromService:
+          type: pserv
+          name: finance-api
+          envVarKey: EMAIL_TOKEN_SECRET
+      - key: API_BASE_URL
+        sync: false
+      - key: WEB_BASE_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_SECURE
+        value: false
+      - key: MAIL_FROM
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: 15000
+      - key: DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS
+        value: 30000
+      - key: BASE_CURRENCY
+        value: BRL
+      - key: EXCHANGE_RATE_PROVIDER
+        value: frankfurter
+
+  # ---- The cache and the job queue ---------------------------------------
+  #
+  # Holds the rate limiter's state, the read-through workspace cache and BullMQ's
+  # queues. `allowedIPs: []` keeps it on the private network only — it is not a
+  # store anything outside should reach.
+  - type: keyvalue
+    name: finance-cache
+    region: virginia
+    plan: free
+    ipAllowList: []
+    # `noeviction` because this is not only a cache: BullMQ keeps job state
+    # here, and a queue whose entries can be evicted under memory pressure
+    # silently loses scheduled work.
+    maxmemoryPolicy: noeviction

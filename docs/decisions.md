@@ -2849,3 +2849,53 @@ that caught, none of which a typecheck or the suite would have:
 Error responses were checked at the same time and hold the line: four fields, no stack, no Postgres
 detail, while the log carried the full stack trace beside a `requestId` that matches. That is
 `AppError.internalDetail` behaving as designed.
+
+---
+
+### Render, and the hostname you cannot know until it exists
+
+The Fly configuration in the entry above was built first and is not what this deploys to. The user
+asked for Render — "tipo no render da vida" — and that is the decision; `fly/api.toml` and
+`fly/web.toml` stay in the repository as a working alternative, but `render.yaml` is the one kept
+honest, and only one of the two will ever be verified against a real deployment.
+
+The topology did not change, because it is not Fly's or Render's: the client is the only public
+service, the API is private and reached through nginx, and the browser sees one origin because the
+refresh cookie is `SameSite=Lax`. On Render that means a **private service** (`pserv`) for the API
+rather than a second web service, a **background worker** for the worker, and `preDeployCommand` for
+the migration — which stops the deploy on failure, the same gate
+`service_completed_successfully` gives compose and `release_command` gives Fly. Three platforms, one
+shape, because the shape follows from the cookie rather than from any of them.
+
+**What Render forced, and it is the interesting part: you cannot write the API's address down.**
+Render generates internal hostnames with a suffix that does not exist until the service does —
+`finance-api-a1b2:4000`, not `finance-api:4000` — so nginx's upstream cannot be a literal in any
+file. The blueprint's `fromService: property: hostport` supplies it at deploy time, which solves
+half the problem and creates two more: `hostport` yields host and port with **no scheme**, and
+`proxy_pass finance-api-a1b2:4000` is a config-parse failure at container start rather than a bad
+request later; and a variable `proxy_pass` requires a `resolver`, which nginx will not take from
+`/etc/resolv.conf` and which Render does not publish an address for.
+
+Both are now the image's own problem, solved in `apps/web/docker-entrypoint.d/16-upstream-and-resolver.envsh`
+— sourced by the nginx image's entrypoint before its envsubst step, so what it exports is what gets
+substituted. `NGINX_RESOLVER=auto` reads the nameservers the container was actually handed (IPv6
+ones bracketed, or `resolver fd00::1` is a syntax error); a schemeless `API_UPSTREAM` gets `http://`
+prefixed. Both are no-ops unless asked for, so compose and Fly are untouched. Verified by running
+the built image with Render-shaped values and reading the rendered config, which is the only way to
+check a file that is generated at start.
+
+**The worker copies the API's signing secrets rather than generating its own.** `generateValue:
+true` on three keys in two services would produce two different sets, and the failure mode is the
+quiet kind: everything starts, every log line is clean, and every token the API signed is rejected
+by the worker. `fromService` with `envVarKey` copies them across instead. The rest of the worker's
+environment is written out again in full rather than shared through a YAML anchor — an anchor is one
+edit away from letting the two halves drift, and Render's env var groups cannot hold the
+`fromService` and `fromDatabase` references the block needs.
+
+**What this costs is worth writing down, because it is the part a blueprint hides.** Private
+services and background workers have no free instance type, so two of the five are on `starter` by
+necessity rather than choice. The web service can run free, at the price of spinning down after
+fifteen minutes idle — which presents as the site being broken to the first person who visits after
+a quiet afternoon. The free Postgres plan expires, and the free key value store has no persistence,
+which for BullMQ means queued jobs do not survive a restart. None of that is a reason not to use
+Render; all of it is a reason not to discover it later.

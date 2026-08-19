@@ -51,6 +51,18 @@ FROM nginx:1.27-alpine AS runtime
 # `envsubst` over everything in that directory and writes the result to
 # `conf.d/` before starting. The two variables below are what it substitutes.
 COPY apps/web/nginx.conf.template /etc/nginx/templates/default.conf.template
+# Sourced by the image's entrypoint before the envsubst step, and numbered 16 so
+# it lands there: it resolves `NGINX_RESOLVER=auto` and a schemeless
+# `API_UPSTREAM` into real values. See the file's own header.
+#
+# The `chmod` is not decoration. nginx's entrypoint sources a `.envsh` only
+# `if [ -x "$f" ]`, and otherwise logs `Ignoring …, not executable` and carries
+# on — so a checkout that did not preserve the exec bit produces an image that
+# builds, starts, passes `nginx -t`, and quietly proxies to the compose default
+# on a platform where that name resolves to nothing. Setting it here makes the
+# image independent of how the repository was checked out.
+COPY apps/web/docker-entrypoint.d/16-upstream-and-resolver.envsh /docker-entrypoint.d/
+RUN chmod +x /docker-entrypoint.d/16-upstream-and-resolver.envsh
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 
 # Defaults that describe *this repository's* compose network, so
