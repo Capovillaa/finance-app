@@ -146,6 +146,34 @@ export function passwordResetEmail(params: {
   };
 }
 
+/**
+ * Sent when someone tries to register an address that already has an
+ * account, instead of the API telling the caller so directly — see M-9 in
+ * AUDIT_REPORT.md. The real owner is the one who finds out, with a way back
+ * into their account; the caller who tried to register sees nothing that
+ * distinguishes this from a brand-new signup.
+ */
+export function accountExistsEmail(params: {
+  to: string;
+  fullName: string;
+  loginUrl: string;
+  locale?: Locale;
+}): EmailMessage {
+  const locale = params.locale ?? DEFAULT_LOCALE;
+  const action = t(locale, 'email.accountExists.action');
+  const lines = [
+    t(locale, 'email.accountExists.body1', { name: params.fullName }),
+    t(locale, 'email.accountExists.body2'),
+  ];
+
+  return {
+    to: params.to,
+    subject: t(locale, 'email.accountExists.subject'),
+    text: `${lines.join('\n\n')}\n\n${action}: ${params.loginUrl}`,
+    html: layout(locale, t(locale, 'email.accountExists.greeting'), lines, { label: action, url: params.loginUrl }),
+  };
+}
+
 export function notificationEmail(params: {
   to: string;
   fullName: string;

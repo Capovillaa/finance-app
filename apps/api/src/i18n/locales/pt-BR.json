@@ -66,7 +66,6 @@
     "refreshTokenReused": "O token de atualização já foi utilizado",
     "sessionRevoked": "Esta sessão foi encerrada. Entre novamente.",
     "missingRefreshToken": "Token de atualização ausente",
-    "emailTaken": "Já existe uma conta com este e-mail",
     "accountSuspended": "Esta conta está suspensa",
     "noPasswordSet": "Esta conta não possui senha definida",
     "wrongCurrentPassword": "A senha atual está incorreta",
@@ -213,6 +212,13 @@
       "body2_other": "Este link expira em {{count}} horas.",
       "body3": "Se você não solicitou isso, pode ignorar este e-mail com segurança — sua senha não será alterada.",
       "action": "Redefinir senha"
+    },
+    "accountExists": {
+      "subject": "Você já tem uma conta",
+      "greeting": "Você já tem uma conta",
+      "body1": "Olá {{name}}, alguém acabou de tentar criar uma conta com este endereço de e-mail.",
+      "body2": "Se foi você, entre na sua conta abaixo — ou use \"Esqueci minha senha\" na tela de login se não lembrar a senha. Se não foi você, nenhuma conta foi criada e pode ignorar este e-mail com segurança.",
+      "action": "Entrar"
     },
     "notification": {
       "greeting": "Olá, {{name}},",

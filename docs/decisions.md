@@ -2568,3 +2568,67 @@ it is meant to threshold against, so there was no need to invent a tighter numbe
 the shared one already implies a value nowhere near `Number#toString`'s exponential-notation
 threshold (1e21), which is what would have broken the `Decimal` parse `engine.ts`'s `str()` helper
 feeds into.
+
+---
+
+### Registration stops answering the question it was never asked (M-9)
+
+`POST /auth/register` answered 409 `auth.emailTaken` on a known address — a narrow but complete
+enumeration oracle, since `authRateLimit`'s per-account bucket cannot help when every probe names a
+different candidate address. This was found and left open deliberately when H-1 shipped password
+reset and email verification, on the reasoning that the audit's real fix — "register always returns
+201, and sends either a welcome or an account-exists email" — changes the first screen a new user
+ever sees, and a change like that deserves its own explicit decision rather than being folded
+silently into an unrelated diff. Asked directly in a later session, the answer was to spend it.
+
+**The fix has one real constraint driving its whole shape: the response has to be identical whether
+or not the address already had an account, and a response that is identical in both branches cannot
+carry a signed-in session in only one of them.** `authService.register` still does everything it
+always did for a genuinely new address — creates the user row, the personal workspace, the default
+categories and alert rules, and sends the verification email — but returns nothing describing what
+happened, and the route answers `responds({ 201: NO_BODY })` unconditionally. For a known address, it
+creates nothing and sends a new `accountExistsEmail` instead — to the address on file, which is by
+definition the real owner, not to whoever is submitting the form. This is the exact shape
+`requestPasswordReset` already used for the identical reason (section 5o): decide privately, answer
+identically, tell the account holder rather than the caller.
+
+**Losing the auto-login was not a separate trade-off to weigh — it falls straight out of the fix
+above — so the interesting design question was how much of the old experience a genuine new user
+could keep.** The answer: essentially all of it. `RegisterPage.tsx` follows a successful `register`
+call with an ordinary `login` call using the same credentials the user just typed. For a real new
+signup this is the account's actual password, so the login succeeds immediately and the user lands
+in the app exactly as before, with one extra request they never perceive. For an address that
+already belonged to someone else, that same login attempt fails — not with a special "this account
+already exists" error, but with the perfectly ordinary generic-work `invalidCredentials` every
+wrong-password attempt already answers, `login`'s own `fakeVerify` timing-equalisation included. The
+caller cannot tell a stolen-password guess from a doomed one; they see the same ambiguous
+`auth.checkEmail` message either way ("if this address is new, finish setting up your account from
+the email we just sent — if you already have one, sign in instead"), the same shape
+`ForgotPasswordPage`'s `sent` state already established, deliberately worded to cover both outcomes
+at once rather than picking one.
+
+**Writing the test helper before the client is what surfaced the real shape of the fix.**
+`tests/helpers.ts`'s `registerUser()` backs essentially every integration test in the suite and used
+to read tokens straight off the register response; the moment that response stopped carrying them,
+every one of those hundreds of call sites would have broken at once. Making the helper do
+register-then-login — exactly the two-call pattern the client would also need — fixed all of them
+without touching a single call site, and made it obvious before any UI was written that the client
+needed the identical pattern rather than some register-specific accommodation.
+
+**What was deliberately not attempted: equalising the two branches' timing.** Creating a user,
+provisioning a workspace and sending an email is measurably more work than sending one email alone,
+so a sufficiently patient attacker could in principle infer which branch ran from response latency.
+`requestPasswordReset` carries the identical asymmetry and was accepted as sufficient when H-1
+shipped it; M-9 was scoped to close the response-shape oracle the audit actually named; `authRateLimit`
+bounds either approach to ten attempts a minute per address regardless. Timing side-channels on
+authentication endpoints are a real category, but inventing constant-time work for this one endpoint
+while its closest sibling carries the same asymmetry unaddressed would be solving half a problem
+loudly rather than the whole one deliberately.
+
+Verified with the real test suite rather than by inspection: a new integration test registers an
+address, registers the *same* address again with a different password and name, asserts 201 both
+times with an empty body, confirms exactly one `users` row exists for that email, confirms the
+account-exists email went to the original address, confirms the original password still signs in,
+and confirms the impostor's password does not. `RESPONSE_REACH=1` confirms the new `201: NO_BODY`
+declaration is exercised. All 422 tests pass, `tsc --noEmit` is clean across all three workspaces,
+and `check:i18n` passes with the new `auth.checkEmail` key present in all three client catalogues.

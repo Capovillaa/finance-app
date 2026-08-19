@@ -17,7 +17,13 @@ export const authApi = api.injectEndpoints({
       query: (body) => ({ url: '/auth/login', method: 'POST', body }),
     }),
 
-    register: build.mutation<AuthResult, RegisterRequest>({
+    /**
+     * Always 201, whether or not the address already has an account (M-9 in
+     * AUDIT_REPORT.md) — no tokens either way, so a genuine new signup is
+     * followed by a `login` call with the same credentials rather than this
+     * endpoint returning a session directly. See `RegisterPage.tsx`.
+     */
+    register: build.mutation<void, RegisterRequest>({
       query: (body) => ({ url: '/auth/register', method: 'POST', body }),
     }),
 

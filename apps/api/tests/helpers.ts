@@ -35,10 +35,21 @@ export async function registerUser(
   const password = overrides.password ?? 'Sup3rSecret123';
   const fullName = overrides.fullName ?? `Test User ${userCounter}`;
 
-  const response = await api().post('/api/v1/auth/register').send({ email, password, fullName });
+  const registered = await api().post('/api/v1/auth/register').send({ email, password, fullName });
 
-  if (response.status !== 201) {
-    throw new Error(`registerUser failed: ${response.status} ${JSON.stringify(response.body)}`);
+  if (registered.status !== 201) {
+    throw new Error(`registerUser failed: ${registered.status} ${JSON.stringify(registered.body)}`);
+  }
+
+  // Registration never signs the caller in any more — it always answers 201
+  // whether or not the address already had an account (M-9 in
+  // AUDIT_REPORT.md), so a response that must look the same either way cannot
+  // also carry a session for one of them. Sign in with the same credentials,
+  // the same follow-up the web client makes in `RegisterPage.tsx`.
+  const signedIn = await api().post('/api/v1/auth/login').send({ email, password });
+
+  if (signedIn.status !== 200) {
+    throw new Error(`registerUser's follow-up login failed: ${signedIn.status} ${JSON.stringify(signedIn.body)}`);
   }
 
   // Most tests have nothing to do with email verification and just want a
@@ -49,19 +60,19 @@ export async function registerUser(
     await db
       .updateTable('users')
       .set({ email_verified_at: new Date() })
-      .where('id', '=', response.body.user.id)
+      .where('id', '=', signedIn.body.user.id)
       .execute();
   }
 
   return {
-    id: response.body.user.id,
+    id: signedIn.body.user.id,
     email,
     password,
     fullName,
-    accessToken: response.body.accessToken,
-    refreshToken: response.body.refreshToken,
-    workspaceId: response.body.defaultWorkspaceId,
-    auth: { Authorization: `Bearer ${response.body.accessToken}` },
+    accessToken: signedIn.body.accessToken,
+    refreshToken: signedIn.body.refreshToken,
+    workspaceId: signedIn.body.defaultWorkspaceId,
+    auth: { Authorization: `Bearer ${signedIn.body.accessToken}` },
   };
 }
 

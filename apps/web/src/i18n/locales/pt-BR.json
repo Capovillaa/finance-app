@@ -135,6 +135,7 @@
     "createAccount": "Criar conta",
     "creating": "Criando a conta…",
     "createFailed": "Não foi possível criar a conta.",
+    "checkEmail": "Se este endereço é novo, conclua a criação da sua conta pelo e-mail que acabamos de enviar. Se você já tem uma conta, entre com ela.",
     "password": "Senha",
     "confirmPassword": "Confirmar senha",
     "passwordHint": "Ao menos 10 caracteres, com letras e números.",

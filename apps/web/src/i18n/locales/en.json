@@ -135,6 +135,7 @@
     "createAccount": "Create account",
     "creating": "Creating account…",
     "createFailed": "Could not create the account.",
+    "checkEmail": "If this address is new, finish setting up your account from the email we just sent. If you already have an account, sign in instead.",
     "password": "Password",
     "confirmPassword": "Confirm password",
     "passwordHint": "At least 10 characters, with letters and numbers.",

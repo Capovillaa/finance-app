@@ -18,7 +18,13 @@ describe('email verification', () => {
       .send({ email: 'fresh@example.com', password: 'Sup3rSecret123', fullName: 'Fresh' });
 
     expect(response.status).toBe(201);
-    expect(response.body.user.emailVerifiedAt).toBeNull();
+
+    const user = await db
+      .selectFrom('users')
+      .select('email_verified_at')
+      .where('email', '=', 'fresh@example.com')
+      .executeTakeFirstOrThrow();
+    expect(user.email_verified_at).toBeNull();
 
     const email = sentInTests.at(-1);
     expect(email?.to).toBe('fresh@example.com');

@@ -85,7 +85,7 @@ Accept `?page=` and `?pageSize=` (max 200).
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/register` | Creates the user **and** their personal workspace with default categories and alert rules. Returns tokens and `defaultWorkspaceId`. |
+| POST | `/register` | Always 201, whether or not the address already has an account — never an oracle for which emails are registered. No body, and no tokens: a new account is created (with its personal workspace, default categories and alert rules) and sent a verification email; a known address is left untouched and its real owner is emailed instead. Sign in with the same credentials afterwards — see the note below. |
 | POST | `/login` | Rate limited per address and, separately, per account. |
 | POST | `/refresh` | Rotates the refresh token. Reusing a rotated token revokes the whole family. |
 | POST | `/logout` | Revokes the presented refresh token. Other sessions keep working. |
@@ -105,6 +105,13 @@ set **except accepting a workspace invitation** — see the Workspaces section b
 password recovers through `/forgot-password` + `/reset-password`, both HMAC-token flows following
 the same shape `workspaces/invitations.ts` established, but signed with their own
 `EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET`.
+
+`/register` does not sign the caller in, on purpose: its response has to look identical whether the
+address was new or already registered (M-9 in AUDIT_REPORT.md), and a response that must look the
+same in both cases cannot also carry a session for one of them. Follow a successful `/register` with
+a normal `/login` using the same credentials — it succeeds immediately for a genuine new account and
+fails exactly like any other wrong-password attempt if the address belonged to someone else, without
+this endpoint or the next one ever revealing which case it was.
 
 Revocation reaches the access token too, not just the refresh token: `logout-all`, a password
 change and account deletion all move the user's `tokens_valid_from` forward, and an access token

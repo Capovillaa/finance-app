@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { db } from '../../src/db/client.js';
+import { sentInTests } from '../../src/lib/email.js';
 import { api, registerUser } from '../helpers.js';
 
 describe('POST /auth/register', () => {
@@ -9,14 +10,27 @@ describe('POST /auth/register', () => {
       .send({ email: 'ana@example.com', password: 'Sup3rSecret123', fullName: 'Ana Souza' });
 
     expect(response.status).toBe(201);
-    expect(response.body.user.email).toBe('ana@example.com');
-    expect(response.body.accessToken).toBeTruthy();
-    expect(response.body.defaultWorkspaceId).toBeTruthy();
+    // Registration never returns a body — see the `describe` block below on
+    // why (M-9 in AUDIT_REPORT.md) — so what it did is checked in the
+    // database rather than in the response.
+    expect(response.body).toEqual({});
+
+    const user = await db
+      .selectFrom('users')
+      .select('id')
+      .where('email', '=', 'ana@example.com')
+      .executeTakeFirstOrThrow();
+    const workspace = await db
+      .selectFrom('workspace_members')
+      .innerJoin('workspaces', 'workspaces.id', 'workspace_members.workspace_id')
+      .select('workspaces.id')
+      .where('workspace_members.user_id', '=', user.id)
+      .executeTakeFirstOrThrow();
 
     const categories = await db
       .selectFrom('categories')
       .select('id')
-      .where('workspace_id', '=', response.body.defaultWorkspaceId)
+      .where('workspace_id', '=', workspace.id)
       .execute();
     expect(categories.length).toBeGreaterThan(30);
 
@@ -24,7 +38,7 @@ describe('POST /auth/register', () => {
     const rules = await db
       .selectFrom('alert_rules')
       .select('type')
-      .where('workspace_id', '=', response.body.defaultWorkspaceId)
+      .where('workspace_id', '=', workspace.id)
       .execute();
     expect(rules.length).toBeGreaterThan(0);
   });
@@ -34,18 +48,45 @@ describe('POST /auth/register', () => {
       .post('/api/v1/auth/register')
       .send({ email: 'bob@example.com', password: 'Sup3rSecret123', fullName: 'Bob' });
 
+    expect(response.status).toBe(201);
     expect(JSON.stringify(response.body)).not.toContain('$2a$');
-    expect(response.body.user.passwordHash).toBeUndefined();
   });
 
-  it('rejects a duplicate email', async () => {
-    const user = await registerUser();
+  /**
+   * M-9 in AUDIT_REPORT.md: this used to answer 409 `auth.emailTaken` on a
+   * known address — a complete enumeration oracle, bounded only by
+   * `authRateLimit`'s per-address bucket. Registration now answers 201
+   * either way, creates no second account, and tells the real owner instead
+   * of the caller who just tried.
+   */
+  it('answers the same way for a duplicate email, without creating a second account or signing the caller in', async () => {
+    const owner = await registerUser();
+    sentInTests.length = 0;
+
     const response = await api()
       .post('/api/v1/auth/register')
-      .send({ email: user.email, password: 'Sup3rSecret123', fullName: 'Impostor' });
+      .send({ email: owner.email, password: 'ADifferentPassword123', fullName: 'Impostor' });
 
-    expect(response.status).toBe(409);
-    expect(response.body.error.code).toBe('conflict');
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({});
+
+    const rows = await db.selectFrom('users').select('id').where('email', '=', owner.email).execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(owner.id);
+
+    // The real owner is told, not the caller — and the caller's password
+    // never touched the existing account.
+    const notice = sentInTests.at(-1);
+    expect(notice?.to).toBe(owner.email);
+    expect(notice?.subject).toBeTruthy();
+
+    const stillWorks = await api().post('/api/v1/auth/login').send({ email: owner.email, password: owner.password });
+    expect(stillWorks.status).toBe(200);
+
+    const impostorPassword = await api()
+      .post('/api/v1/auth/login')
+      .send({ email: owner.email, password: 'ADifferentPassword123' });
+    expect(impostorPassword.status).toBe(401);
   });
 
   it('rejects weak passwords', async () => {

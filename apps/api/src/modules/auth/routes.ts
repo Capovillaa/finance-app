@@ -100,19 +100,24 @@ function setRefreshCookie(res: Response, token: string): void {
   });
 }
 
+/**
+ * Always 201, whether or not the address already has an account — see
+ * `authService.register` for why. No tokens: a response that must look the
+ * same in both cases cannot also carry a signed-in session for one of them,
+ * so the client follows up with `/auth/login` using the same credentials.
+ */
 authRouter.post(
   '/register',
   authRateLimit,
   validate({ body: registerSchema }),
-  responds({ 201: authResultResponse }),
+  responds({ 201: NO_BODY }),
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof registerSchema>>(req);
-    const result = await authService.register(input, {
+    await authService.register(input, {
       ipAddress: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });
-    setRefreshCookie(res, result.refreshToken);
-    res.status(201).json(result);
+    res.status(201).send();
   }),
 );
 

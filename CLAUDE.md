@@ -2553,7 +2553,8 @@ enumeration oracle bounded by `authRateLimit`'s per-address bucket. The audit's 
 the trade-off explicitly rather than force a UX change onto the one screen every new user sees
 first — was taken instead of folding a "register always answers 201" redesign into this entry. It
 is open, on the Phase 3 list is where a session that wants to spend it should look first (it is not
-currently listed there by name — add it if you pick it up).
+currently listed there by name — add it if you pick it up). **Closed in a later session — see
+section 5r.**
 
 ---
 
@@ -2610,6 +2611,44 @@ with the observability entry above — `'hidden'` would have been the better cho
 uploads the maps to an error tracker, and nothing here does that yet.
 
 ---
+
+## 5r. Registration stops being an enumeration oracle (M-9)
+
+Left open deliberately when H-1 shipped (section 5o) — closed in a later session, once asked
+explicitly whether to spend the UX change or accept the trade-off. Full reasoning is in
+`docs/decisions.md`, "Registration stops answering the question it was never asked". What you need
+in order not to undo it:
+
+**`POST /auth/register` is now `responds({ 201: NO_BODY })` and always answers 201** — whether the
+address is brand new or already has an account. `authService.register` decides privately which
+branch to take: a new address gets exactly what it always got (a user row, a personal workspace with
+default categories and alert rules, a verification email); a known address gets nothing created and
+a new `accountExistsEmail` instead, sent to **the real owner**, not the caller. This is the same
+shape `requestPasswordReset` already established for the identical reason — see section 5o.
+
+**Registration no longer signs the caller in, and that follows necessarily from the fix rather than
+being a separate decision.** A response that must look identical whether or not an account already
+existed cannot also carry a signed-in session for one of the two branches, so `AuthenticatedResult`
+(tokens, `user`, `defaultWorkspaceId`) is gone from this endpoint entirely. **The client's
+`RegisterPage.tsx` follows a successful register with a normal `login` call using the same
+credentials.** For a genuine new signup this succeeds silently — the password just chosen is the
+account's real password — and the user lands in the app exactly as before, with one extra request
+they never see. For an address that already belonged to someone else, that same login attempt fails
+with the ordinary generic-work `invalidCredentials` **every wrong-password login already answers**,
+so the caller learns nothing beyond "that combination didn't work" — indistinguishable from a typo.
+Either way the screen that follows is a plain, deliberately ambiguous `auth.checkEmail` message
+("if this address is new, finish setting up your account from the email we just sent — if you
+already have one, sign in instead"), never an error.
+
+**`tests/helpers.ts`'s `registerUser()` mirrors the client's own fix**, register-then-login, so every
+one of the hundreds of call sites across the suite kept working unchanged — it is still handed back a
+fully populated `TestUser` with real tokens. This is what actually caught the shape of the fix:
+writing the test helper first (before the client) is what made it obvious the client needed the same
+two-call pattern, not a one-off special case.
+
+**Do not "simplify" this back to a direct 409.** The whole point is that the response is
+indistinguishable; a 409 on one branch and a 201 on the other is the oracle again, no matter how the
+message is worded.
 
 ## 6. Architectural decisions
 
@@ -3099,7 +3138,8 @@ audit checklist below outranks it.
       machinery reuses the shape `workspaces/invitations.ts` demonstrates, but
       signs with its own `EMAIL_TOKEN_SECRET` rather than `JWT_REFRESH_SECRET` —
       M-11 is still open, but this did not make it worse. **M-9 was left open
-      deliberately**, noted in section 5o rather than folded in.
+      deliberately**, noted in section 5o rather than folded in — and closed
+      in a later session, see below.
 - [x] **[M-2] Restrict `urlField` to `https:`.** **Done.** `.url()` alone
       accepted `javascript:`, `data:`, `file:` and `vbscript:` — verified by
       running it — and backed `avatarUrl`, which every other workspace member's
@@ -3214,14 +3254,16 @@ audit checklist below outranks it.
 
 ### Phase 3 — hardening
 
-- [ ] **[M-9] Registration discloses whether an address has an account.**
-      Left open when H-1 shipped — see section 5o. Register still answers 409
-      on a known email; `authRateLimit`'s per-address bucket bounds it, but the
-      per-account bucket does not help since every probe is a different
-      address. The audit's own fix is "ideally, register always returns 201
-      and sends either a welcome or an account-exists email" — which is a real
-      UX change to the first screen a new user sees, and deserves to be decided
-      on its own rather than folded into another task's diff.
+- [x] **[M-9] Registration discloses whether an address has an account.**
+      **Done** — see section 5r. `POST /auth/register` now always answers 201
+      with no body, whether the address is new or already registered; a known
+      address gets an `accountExistsEmail` instead of a duplicate account, sent
+      to the real owner. Registration no longer signs the caller in as a
+      consequence (a response that must look identical in both branches cannot
+      carry a session in only one of them), so `RegisterPage.tsx` follows a
+      successful register with an ordinary `login` call using the same
+      credentials — silent and immediate for a genuine new signup, and
+      indistinguishable from any other wrong-password attempt otherwise.
 - [x] **[M-7] A table-driven RBAC test.** **Done** —
       `tests/integration/rbac.test.ts`. Walks the same `walkRoutes()` the
       OpenAPI document is generated from (so it can never drift from what the

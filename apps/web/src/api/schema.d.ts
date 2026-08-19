@@ -2182,24 +2182,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description A signed-in session. */
+            /** @description Created. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": {
-                        user: components["schemas"]["User"];
-                        /** @description A short-lived JWT. Send it as `Authorization: Bearer …`. */
-                        accessToken: string;
-                        /** @description Opaque and single-use. Also set as an HttpOnly cookie. */
-                        refreshToken: string;
-                        /** @description Seconds until the access token expires. */
-                        expiresIn: components["schemas"]["Integer"];
-                        /** @description The workspace created with the account, on register only. */
-                        defaultWorkspaceId?: components["schemas"]["Uuid"];
-                    };
-                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             409: components["responses"]["Conflict"];

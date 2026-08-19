@@ -66,7 +66,6 @@
     "refreshTokenReused": "El token de actualización ya fue utilizado",
     "sessionRevoked": "Esta sesión fue cerrada. Inicia sesión de nuevo.",
     "missingRefreshToken": "Falta el token de actualización",
-    "emailTaken": "Ya existe una cuenta con este correo electrónico",
     "accountSuspended": "Esta cuenta está suspendida",
     "noPasswordSet": "Esta cuenta no tiene una contraseña configurada",
     "wrongCurrentPassword": "La contraseña actual es incorrecta",
@@ -213,6 +212,13 @@
       "body2_other": "Este enlace expira en {{count}} horas.",
       "body3": "Si no solicitaste esto, puedes ignorar este correo con seguridad — tu contraseña no cambiará.",
       "action": "Restablecer contraseña"
+    },
+    "accountExists": {
+      "subject": "Ya tienes una cuenta",
+      "greeting": "Ya tienes una cuenta",
+      "body1": "Hola {{name}}, alguien acaba de intentar registrar una cuenta con este correo electrónico.",
+      "body2": "Si fuiste tú, inicia sesión abajo — o usa \"Olvidé mi contraseña\" en la pantalla de inicio de sesión si no la recuerdas. Si no fuiste tú, no se creó ninguna cuenta y puedes ignorar este correo con seguridad.",
+      "action": "Iniciar sesión"
     },
     "notification": {
       "greeting": "Hola, {{name}},",

@@ -2897,42 +2897,7 @@
         },
         "responses": {
           "201": {
-            "description": "A signed-in session.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "user": {
-                      "$ref": "#/components/schemas/User"
-                    },
-                    "accessToken": {
-                      "description": "A short-lived JWT. Send it as `Authorization: Bearer …`.",
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "description": "Opaque and single-use. Also set as an HttpOnly cookie.",
-                      "type": "string"
-                    },
-                    "expiresIn": {
-                      "description": "Seconds until the access token expires.",
-                      "$ref": "#/components/schemas/Integer"
-                    },
-                    "defaultWorkspaceId": {
-                      "description": "The workspace created with the account, on register only.",
-                      "$ref": "#/components/schemas/Uuid"
-                    }
-                  },
-                  "required": [
-                    "user",
-                    "accessToken",
-                    "refreshToken",
-                    "expiresIn"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
+            "description": "Created."
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

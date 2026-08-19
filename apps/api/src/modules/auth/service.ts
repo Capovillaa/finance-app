@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { passwordResetEmail, sendEmail, verificationEmail } from '../../lib/email.js';
-import { conflict, invalidCredentials, notFound, unauthorized, unprocessable } from '../../lib/errors.js';
+import { accountExistsEmail, passwordResetEmail, sendEmail, verificationEmail } from '../../lib/email.js';
+import { invalidCredentials, notFound, unauthorized, unprocessable } from '../../lib/errors.js';
 import { resolveLocale } from '../../lib/i18n.js';
 import { recordActivity } from '../activity/service.js';
 // `users/service` reaches back into `auth/password` and `auth/tokens`, never
@@ -59,17 +59,41 @@ export interface RegisterInput {
 /**
  * Registration also provisions the user's personal workspace (Workflow 1 in the
  * spec), so the very first API call after sign-up already has somewhere to write.
+ *
+ * Resolves the same way whether or not the address already has an account —
+ * see M-9 in AUDIT_REPORT.md. This used to throw a 409 on a known email,
+ * which is a complete enumeration oracle (`authRateLimit`'s per-account
+ * bucket does not help, since every probe names a different candidate
+ * address); the route now answers 201 either way, and this function decides
+ * privately which branch to take, the same shape `requestPasswordReset`
+ * already uses for the identical reason. Registration no longer returns
+ * tokens as a consequence — a response indistinguishable from "an account
+ * already existed" cannot also carry a signed-in session for the caller — so
+ * the client signs in with a follow-up `/auth/login` call instead, which
+ * succeeds silently for a genuine new account and fails exactly like any
+ * other wrong-password attempt when the address belonged to someone else.
  */
-export async function register(input: RegisterInput, context: AuthContext): Promise<AuthenticatedResult> {
+export async function register(input: RegisterInput, context: AuthContext): Promise<void> {
   const email = input.email.trim().toLowerCase();
 
   const existing = await db
     .selectFrom('users')
-    .select('id')
+    .select(['id', 'email', 'full_name', 'locale'])
     .where('email', '=', email)
     .where('deleted_at', 'is', null)
     .executeTakeFirst();
-  if (existing) throw conflict('auth.emailTaken');
+
+  if (existing) {
+    await sendEmail(
+      accountExistsEmail({
+        to: existing.email,
+        fullName: existing.full_name,
+        loginUrl: `${env.WEB_BASE_URL}/login`,
+        locale: resolveLocale(existing.locale),
+      }),
+    );
+    return;
+  }
 
   const passwordHash = await hashPassword(input.password);
 
@@ -86,7 +110,7 @@ export async function register(input: RegisterInput, context: AuthContext): Prom
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  const workspace = await createWorkspace({
+  await createWorkspace({
     name: input.workspaceName?.trim() || `${firstName(user.full_name)}'s Finances`,
     type: 'personal',
     baseCurrency: user.base_currency,
@@ -94,8 +118,6 @@ export async function register(input: RegisterInput, context: AuthContext): Prom
     locale: user.locale,
     ownerId: user.id,
   });
-
-  const tokens = await issueTokens(user.id, user.email, context);
 
   await recordActivity({
     actorUserId: user.id,
@@ -112,12 +134,6 @@ export async function register(input: RegisterInput, context: AuthContext): Prom
   // own failures rather than throwing, so an unreachable SMTP host must not
   // fail the registration that triggered it.
   await issueEmailVerification(user);
-
-  return {
-    user: toPublicUser(user),
-    ...tokens,
-    defaultWorkspaceId: workspace.id,
-  };
 }
 
 export async function login(
