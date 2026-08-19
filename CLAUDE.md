@@ -3324,7 +3324,13 @@ audit checklist below outranks it.
       `SameSite=Lax` cookie standing in for CSRF, Zod request validation) as
       the same protection. **A new CodeQL alert that is not one of the six
       patterns in that table is a real finding, not something to dismiss on
-      reflex.**
+      reflex.** A seventh pattern joined it when L-7 shipped: two
+      `js/insufficient-password-hash` alerts on the SHA-1 call in
+      `breachCheck.ts` and its mirror in the unit test — correct in general
+      (a stored credential should never be a fast hash) and a false positive
+      here specifically, since that SHA-1 is the Pwned Passwords k-anonymity
+      lookup key, not a stored credential, and the protocol has no other hash
+      option. Both dismissed, with that reasoning on each alert.
 - [x] **[L-5] TLS to Postgres and Redis.** **Investigated and documented, no
       code change needed** — see `docs/decisions.md`. `pg` and `ioredis`
       already negotiate TLS with zero code changes, purely from the

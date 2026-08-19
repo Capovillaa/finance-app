@@ -2436,6 +2436,18 @@ pattern — not one of the six above — is a real finding and should be treated
 describes what was true the day L-6 shipped, not a blanket license to dismiss anything this rule
 ever reports again.
 
+**A seventh pattern joined the table when L-7 shipped `modules/auth/breachCheck.ts`:
+`js/insufficient-password-hash` fired on the `createHash('sha1')` call there and on its mirror in
+`tests/unit/breach-check.test.ts`.** This one really did need reading before dismissing, because the
+rule's premise — a fast hash protecting a stored credential should be bcrypt/scrypt/Argon2, not
+SHA-1 — is correct in general and is exactly what `auth/password.ts` already does for the one place
+this codebase actually stores a password hash. What CodeQL cannot see is that `breachCheck.ts` never
+stores anything: the SHA-1 is the *lookup key* the Have I Been Pwned k-anonymity protocol is defined
+in terms of, computed and then immediately truncated to a 5-character prefix before it ever reaches
+the network — see the L-7 entry below for why that is what makes the whole check safe to make at all.
+Using bcrypt there would not make the check "more secure"; it would make it not implement HIBP's API,
+which has no other hash option. Both dismissed as false positives, with that reasoning on each alert.
+
 ---
 
 ### TLS to Postgres and Redis already works — verified, not assumed (L-5)
