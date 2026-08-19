@@ -89,6 +89,25 @@ describe('POST /auth/register', () => {
     expect(impostorPassword.status).toBe(401);
   });
 
+  /**
+   * L-7 in AUDIT_REPORT.md: the breach check (`authService`'s
+   * `rejectBreachedPassword`) calls a real third party, and is a no-op under
+   * `NODE_ENV=test` for exactly the reason `sendEmail` never opens a real SMTP
+   * connection there — it sits on the path `registerUser()` takes for nearly
+   * every integration test in the suite. `Password12345` really is a
+   * top-of-the-list breached password (verified against the live API while
+   * building this), so its success here pins that the skip is doing its job;
+   * `tests/unit/breach-check.test.ts` covers the check's own logic against a
+   * fake fetch instead.
+   */
+  it('does not call the live breach-check service under NODE_ENV=test', async () => {
+    const response = await api()
+      .post('/api/v1/auth/register')
+      .send({ email: 'commonpw@example.com', password: 'Password12345', fullName: 'Common Password' });
+
+    expect(response.status).toBe(201);
+  });
+
   it('rejects weak passwords', async () => {
     const response = await api()
       .post('/api/v1/auth/register')

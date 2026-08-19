@@ -2632,3 +2632,54 @@ account-exists email went to the original address, confirms the original passwor
 and confirms the impostor's password does not. `RESPONSE_REACH=1` confirms the new `201: NO_BODY`
 declaration is exercised. All 422 tests pass, `tsc --noEmit` is clean across all three workspaces,
 and `check:i18n` passes with the new `auth.checkEmail` key present in all three client catalogues.
+
+---
+
+### A breached-password check that must not become a network dependency of the test suite (L-7)
+
+Password rejection was composition-only — ten characters, a letter and a digit — which `Password12`
+satisfies and every credential-stuffing list on the internet already has memorised. Have I Been
+Pwned's Pwned Passwords range API answers this cheaply and, because of its k-anonymity design, safely:
+a password is hashed with SHA-1 locally and only the first 5 hex characters of that hash ever leave
+this process; the API answers with every suffix it knows starting with that prefix — several hundred
+on average — so it cannot tell which one, if any, was asked about. Neither the password nor its full
+hash crosses the network. `modules/auth/breachCheck.ts` is the whole check, and it is pure apart from
+one `fetch` call, which is injectable — the identical shape `modules/currencies/providers.ts` already
+established, for the identical reason: `tests/unit/breach-check.test.ts` runs it against a fake
+response with no network at all, and neither `config/env` nor `db/client` is imported so that stays
+true regardless of what calls it.
+
+**The one design question this finding raised that the exchange-rate work never had to: this check
+sits on the hot path of nearly the entire integration suite.** `checkPasswordBreach` is called from
+`register`, `changePassword` and `resetPassword` — but `registerUser()` in `tests/helpers.ts` backs
+essentially every integration test in the repository, most of which have nothing to do with
+passwords. A live round trip to a third party on every one of those calls would turn a suite that
+runs in well under a minute into one bound by an external network's latency, and flaky wherever that
+network is unavailable — a materially different cost than the exchange-rate provider ever paid, since
+nothing in the automated suite calls `refreshRates()` at all. `rejectBreachedPassword` in
+`auth/service.ts` is therefore a no-op under `NODE_ENV=test`, the same reasoning `sendEmail` already
+uses to never open a real SMTP connection there. The pure unit tests are what actually exercise the
+check's logic; a real call against the live API was made once, manually, while building this (see
+below), the same way the exchange-rate work verified against a real ECB feed rather than only a stub.
+
+**Fails open on anything other than a confirmed breach, logged rather than silent.** A network
+failure, a timeout, or an HTTP error from the third party must never be the reason a legitimate
+account cannot be created or a legitimate password cannot be changed — the check is a defence in
+depth, not a gate this application's own availability should depend on. What *is not* forgiven is a
+confirmed breach: that throws the same `validationFailed` shape a Zod rejection would, with a field
+path (`password` on register, `newPassword` on change/reset) and the catalogue key
+`validation.passwordBreached`, so it renders inline on the right field through the same
+`getFieldErrors` → `setError` → `fieldMessage` pipeline every other server-side field rejection
+already uses on these forms. `ResetPasswordPage.tsx` did not have that wiring before this — its only
+error path was a generic top-level alert — so it gained the same `useEffect` `RegisterPage.tsx` and
+`PasswordSection.tsx` already had, or a breach rejection there would have rendered as an unhelpful
+"Validation failed" instead of the sentence that actually explains what to do.
+
+**Verified against the real API, not only the fake response the unit tests use.** A dozen-line
+scratch script (written inside `apps/api/`, run once, deleted immediately after — the same discipline
+`docs/decisions.md`'s exchange-rate and TLS entries used) called the built `checkPasswordBreach`
+against `https://api.pwnedpasswords.com` for real: `password123` came back breached with 2,266,543
+recorded occurrences, `Password12345` with 113,358, and a random 30-odd-character passphrase came
+back clean. The full suite (431 tests, up from 422) stayed at essentially the same runtime as before
+this landed, which is itself evidence the test-mode skip is doing its job rather than something
+inferred from reading the code.

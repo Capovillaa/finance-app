@@ -49,6 +49,7 @@ export type ValidationKey =
   | 'validation.passwordRequired'
   | 'validation.passwordLength'
   | 'validation.passwordComplexity'
+  | 'validation.passwordBreached'
   | 'validation.passwordsDiffer'
   | 'validation.confirmPassword'
   | 'validation.confirmNewPassword'

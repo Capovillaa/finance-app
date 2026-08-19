@@ -2,13 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
 import { accountExistsEmail, passwordResetEmail, sendEmail, verificationEmail } from '../../lib/email.js';
-import { invalidCredentials, notFound, unauthorized, unprocessable } from '../../lib/errors.js';
+import { invalidCredentials, isAppError, notFound, unauthorized, unprocessable, validationFailed } from '../../lib/errors.js';
 import { resolveLocale } from '../../lib/i18n.js';
+import { logger } from '../../lib/logger.js';
 import { recordActivity } from '../activity/service.js';
 // `users/service` reaches back into `auth/password` and `auth/tokens`, never
 // into this file, so this import is one-way rather than a cycle.
 import { cancelAccountDeletion } from '../users/service.js';
 import { createWorkspace } from '../workspaces/service.js';
+import { checkPasswordBreach } from './breachCheck.js';
 import { fakeVerify, hashPassword, verifyPassword } from './password.js';
 import {
   hashEmailToken,
@@ -57,6 +59,38 @@ export interface RegisterInput {
 }
 
 /**
+ * Rejects a password already known to be breached (L-7 in AUDIT_REPORT.md),
+ * on every path that sets one: register, change-password and reset-password.
+ *
+ * Fails open on anything other than a confirmed breach — a network failure,
+ * a timeout, an HTTP error from the third party — because this check must
+ * never be the reason a legitimate account cannot be created or a legitimate
+ * password cannot be changed. The failure is logged rather than swallowed
+ * silently, since a persistent failure here is worth someone noticing.
+ *
+ * A no-op under `NODE_ENV=test`, the same way `sendEmail` never opens a real
+ * SMTP connection there. This call sits on the path `registerUser()` takes
+ * for nearly every integration test in the suite; a real round trip to a
+ * third party on each one would turn a sub-minute suite into a network-bound
+ * one and make it flaky wherever that network is unavailable, for a check
+ * `tests/unit/breach-check.test.ts` already exercises against a fake fetch.
+ */
+async function rejectBreachedPassword(password: string, fieldPath: string): Promise<void> {
+  if (env.isTest) return;
+  try {
+    const result = await checkPasswordBreach(password);
+    if (result.breached) {
+      throw validationFailed('common.validationFailed', undefined, [
+        { path: fieldPath, message: 'validation.passwordBreached' },
+      ]);
+    }
+  } catch (err) {
+    if (isAppError(err)) throw err;
+    logger.warn({ err }, 'Password breach check failed; allowing the password through');
+  }
+}
+
+/**
  * Registration also provisions the user's personal workspace (Workflow 1 in the
  * spec), so the very first API call after sign-up already has somewhere to write.
  *
@@ -95,6 +129,7 @@ export async function register(input: RegisterInput, context: AuthContext): Prom
     return;
   }
 
+  await rejectBreachedPassword(input.password, 'password');
   const passwordHash = await hashPassword(input.password);
 
   const user = await db
@@ -230,6 +265,7 @@ export async function changePassword(
   const valid = await verifyPassword(currentPassword, user.password_hash);
   if (!valid) throw invalidCredentials('auth.wrongCurrentPassword');
 
+  await rejectBreachedPassword(newPassword, 'newPassword');
   const hash = await hashPassword(newPassword);
 
   await db.transaction().execute(async (trx) => {
@@ -419,6 +455,7 @@ export async function resetPassword(
     throw unprocessable('auth.resetTokenExpired');
   }
 
+  await rejectBreachedPassword(newPassword, 'newPassword');
   const hash = await hashPassword(newPassword);
 
   await db.transaction().execute(async (trx) => {

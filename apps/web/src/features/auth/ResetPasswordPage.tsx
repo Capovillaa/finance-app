@@ -5,13 +5,13 @@ import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import type { ReactElement } from 'react';
+import { useEffect, type ReactElement } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom';
 import { useResetPasswordMutation } from '../../api/endpoints/auth';
 import { useAppDispatch } from '../../app/hooks';
-import { getApiErrorMessage } from '../../lib/apiError';
+import { getApiErrorMessage, getFieldErrors } from '../../lib/apiError';
 import { fieldMessage } from '../../lib/validation';
 import { workspaceSelected } from '../workspace/workspaceSlice';
 import AuthLayout from './AuthLayout';
@@ -34,11 +34,22 @@ export default function ResetPasswordPage(): ReactElement {
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors },
   } = useForm<ResetPasswordValues>({
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: { newPassword: '', confirmPassword: '' },
   });
+
+  // A breached password (L-7 in AUDIT_REPORT.md) is only known once the API
+  // checks it, so it comes back as a field-level 422 rather than something
+  // `resetPasswordSchema` can catch client-side — the same reason
+  // `RegisterPage` and `PasswordSection` bind server field errors this way.
+  useEffect(() => {
+    for (const [field, message] of Object.entries(getFieldErrors(error))) {
+      setError(field as keyof ResetPasswordValues, { type: 'server', message });
+    }
+  }, [error, setError]);
 
   const onSubmit = handleSubmit(async (values) => {
     const result = await resetPassword({ token, newPassword: values.newPassword })

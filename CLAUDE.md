@@ -47,7 +47,7 @@ Roughly 13,000 lines of source and 2,300 lines of tests.
 ### Verified end to end, not just typechecked
 
 All 148 tests pass against real Postgres in ~16s — the suite has since grown to
-422; see section 4 for the current command. The compiled `dist/server.js`
+431; see section 4 for the current command. The compiled `dist/server.js`
 and `dist/worker.js` both boot; a login against a seeded demo account returned a
 correct dashboard (multi-currency total, category roll-up, budget at 87.53%
 flagged `warning`), and the worker processed all four queues with zero failures
@@ -743,7 +743,10 @@ D:\finance_app
 │   │   │                            # feeds, with an injectable fetch; alerts
 │   │   │                            # also has schemas.ts: a bounded config
 │   │   │                            # object per alert type, since engine.ts's
-│   │   │                            # config drives the shared worker (M-3)
+│   │   │                            # config drives the shared worker (M-3);
+│   │   │                            # auth also has breachCheck.ts: the HIBP
+│   │   │                            # k-anonymity check, injectable fetch,
+│   │   │                            # a no-op under NODE_ENV=test (L-7)
 │   │   ├── Dockerfile               # the production image: one artifact, three
 │   │   │                            # entrypoints (server, worker, migrate).
 │   │   │                            # Build from the REPO ROOT — see 5g
@@ -984,8 +987,8 @@ gitignored — a database dump must never reach a public repository.
 ### Tests
 
 ```bash
-npm test                 # all 422 — needs Postgres, and only Postgres
-npm run test:unit        # 251 pure units, no infrastructure at all
+npm test                 # all 431 — needs Postgres, and only Postgres
+npm run test:unit        # 259 pure units, no infrastructure at all
 npm run check:i18n       # catalogue parity + every literal t() key resolves
 npm run typecheck        # all three workspaces
 npm run build:schemas    # @finance/schemas alone; the others depend on it
@@ -3004,11 +3007,14 @@ root — this section is only the checklist, in priority order. The identifiers
 in brackets are that report's finding ids, so `C-1`, `H-3` and so on can be
 looked up there.
 
-**`AUDIT_REPORT.md` is deliberately untracked** (it is in `.gitignore`) while
-findings are still open: this repository is public, and the report names every
-unfixed one with a file and a line. The checklist below is the half that is safe
-to publish. Track the report once Phase 1 and Phase 2 are closed, or keep it out
-permanently — either is fine, but do not commit it by accident.
+**`AUDIT_REPORT.md` is deliberately untracked** (it is in `.gitignore`). This
+repository is public, and while the report named every unfixed finding with a
+file and a line there was a real reason to keep it out; now that all four
+phases below are closed, whether to commit it, rewrite it into something worth
+publishing, or leave it out permanently is a decision for whoever picks this up
+next to make deliberately rather than something this note should decide by
+default. The checklist below is, either way, the half that was always safe to
+publish.
 
 Two things the audit found that are worth stating up front, because they change
 how the list below should be read. **No secret has ever been committed** — all
@@ -3016,62 +3022,49 @@ how the list below should be read. **No secret has ever been committed** — all
 reachable, no XSS sink exists in the client, and no IDOR was found. The
 application logic is in good shape. Almost everything below is either
 *deployment and configuration surface* or *a feature this file claimed existed
-and does not* (see the first item of Phase 2).
+and does not* (see the first item of Phase 2, corrected in section 1).
 
-### Where this stands, and what to pick up
+### Where this stands
 
-**Phase 1 is complete** — all eight items, across four commits ending at
-`74709f0`, each pushed with CI green. Sections **5j** (published secrets),
-**5k** (two compose files), **5l** (what an error body says), **5m** (erasure
-with a grace period) and **5n** (one origin, and a server for the client) are the
-per-finding notes; `docs/decisions.md` has the reasoning for each. **Nothing in
-Phase 1 is half-finished**, and no work is in progress in the tree.
+**All four phases are complete.** Every item in every checklist below is
+checked off, across many commits, each pushed with CI green — see the per-
+finding sections (5j through 5r) and `docs/decisions.md` for the reasoning
+behind each one. **Nothing in this checklist is half-finished**, and no work is
+in progress in the tree. A fresh agent arriving here has no open finding to
+pick up from this list; the next task is whatever the user brings, or one of
+the handful of things explicitly called out as **not** done, which are honest
+gaps rather than oversights:
 
-**H-1 is done — see section 5o.** It was the largest remaining piece and the one
-thing this file used to claim falsely (corrected in place in section 1):
-password reset and email verification are both built, and `acceptInvitation`
-now refuses an accepting account whose email is not verified, closing the
-invitation-theft path a plain string comparison left open. **M-9 was left open
-on purpose** — H-1's fix unblocked it, but folding it in would have meant
-redesigning what registration answers on a known email, which the audit itself
-treats as a decision worth taking on its own.
+- **True PITR, an error tracker/tracing, and a real SMTP account** are the
+  parts of P-3, P-2 and P-5 that need external infrastructure this environment
+  cannot provision — each got the real, buildable-in-this-repo half instead
+  (a tested logical backup, metrics and example alert rules, and a surfaced-
+  rather-than-swallowed delivery failure). See section 5q.
+- **TLS to Postgres and Redis (L-5)** was verified end to end against real
+  TLS-enabled containers — both `pg` and `ioredis` already speak it with zero
+  code change — but no certificate was generated for this codebase's own
+  compose files, because the two containers in `docker-compose.deploy.yml`
+  talk to each other over a private compose network TLS would not meaningfully
+  protect. `.env.deploy.example` documents the three settings a remote,
+  managed data store needs instead. Full reasoning is in `docs/decisions.md`;
+  the checklist entry is under Phase 3 below.
+- **A payment or bank integration, and actually hosting this anywhere.** The
+  image and compose profile exist and run; nothing is provisioned, and no
+  registry, TLS termination or secret store is chosen.
 
-**M-2 is also done** — `urlField` now refuses anything but `https:`, closing
-the `avatarUrl` tracking-beacon/stored-XSS surface described in its checklist
-entry below.
-
-**M-4 and M-5 are done too** — a `statement_timeout` /
-`idle_in_transaction_session_timeout` on every pooled connection plus a
-per-request 503 backstop (M-4), and a shutdown sequence that actually waits
-for `server.close()` before tearing down the pools (M-5), verified in a real
-container since Windows cannot deliver a real SIGTERM to test it directly.
-
-**Phase 2 is now complete.** P-3, P-2, M-8 and P-5 all turned out to have a
-real, buildable-in-this-repo half after all — see section 5q. What each did
-*not* get is the part that genuinely needs external infrastructure this
-environment cannot provision: true PITR (P-3 got a tested logical backup
-instead), an error tracker and tracing (P-2 got metrics and example alert
-rules instead), and an actual SMTP account (P-5 got the failure surfaced
-instead of silently swallowed — the account itself was already correctly
-gated in section 5k). **Only M-9 is left un-started**, moved to Phase 3
-deliberately when H-1 shipped (section 5o) — pick it up next, or start
-Phase 3 from the top.
-
-Three things a fresh agent should know before touching what is left of Phase 2:
+Three things worth knowing before touching any of this regardless:
 
 - **Two decisions in Phase 1 were the user's, not defaults.** Same-origin over
-  `SameSite=None` + CSRF (H-4), and a 7-day recoverable erasure over an immediate
-  one (H-2). Both are now enforced in code; do not quietly reverse either.
+  `SameSite=None` + CSRF (H-4), and a 7-day recoverable erasure over an
+  immediate one (H-2). Both are enforced in code; do not quietly reverse either.
 - **`config/production-policy.ts` is where a boot-time refusal goes.** It holds
-  three secret checks now (JWT access, JWT refresh, and — since H-1 —
-  `EMAIL_TOKEN_SECRET`), all through the same generic `checkProductionSecrets`.
-  Adding a genuinely new *rule* (not just another secret in that same check)
-  means adding its variable to the CI steps in the table under "CI" in section 4
-  — read that note first.
+  three secret checks (JWT access, JWT refresh, `EMAIL_TOKEN_SECRET`) through
+  one generic `checkProductionSecrets`. A genuinely new *rule* there needs its
+  variable added to the CI steps in the table under "CI" in section 4.
 - **The erasure lifecycle has a hook a new sign-in path must respect.** `login`
-  and the new `resetPassword` both call `cancelAccountDeletion`. Any further
-  sign-in path — a magic link, an OAuth callback — that skips it would let a
-  pending deletion run after the user has demonstrably come back.
+  and `resetPassword` both call `cancelAccountDeletion`. Any further sign-in
+  path — a magic link, an OAuth callback — that skips it would let a pending
+  deletion run after the user has demonstrably come back.
 
 `to_do.txt` in the working tree is the user's own list of interface complaints,
 in Portuguese, and is gitignored alongside `AUDIT_REPORT.md`. Most of it was
@@ -3252,7 +3245,7 @@ audit checklist below outranks it.
       with no default, and `production-policy.ts` already refuses a
       development mail sink at boot (section 5k).
 
-### Phase 3 — hardening
+### Phase 3 — hardening  ✅ complete
 
 - [x] **[M-9] Registration discloses whether an address has an account.**
       **Done** — see section 5r. `POST /auth/register` now always answers 201
@@ -3360,7 +3353,7 @@ audit checklist below outranks it.
       running normally, `unhealthy` within the 45s staleness window after the
       process was frozen with `docker pause`.
 
-### Phase 4 — polish
+### Phase 4 — polish  ✅ complete
 
 - [x] **[L-1]** Constrain the client-supplied `x-request-id` to a safe
       charset. **Done** — `middleware/request-context.ts` matches against
@@ -3371,7 +3364,18 @@ audit checklist below outranks it.
 - [x] **[L-4]** Hash the email in the credential limiter's Redis key. **Done**
       — `accountKey` now hashes with SHA-256 after normalising, so the key
       itself never carries the address. See `docs/decisions.md`.
-- [ ] **[L-7]** Breached-password check (HIBP k-anonymity).
+- [x] **[L-7]** Breached-password check (HIBP k-anonymity). **Done** —
+      `modules/auth/breachCheck.ts` (pure, injectable `fetch`, no `env`/`db`
+      import — same pattern as `modules/currencies/providers.ts`) checks a
+      password's SHA-1 prefix against the Pwned Passwords range API on
+      register, change-password and reset-password, all three via a shared
+      `rejectBreachedPassword` in `auth/service.ts`. Fails open on any network
+      or HTTP error, logged; a no-op under `NODE_ENV=test` (the same reason
+      `sendEmail` never opens real SMTP there — this sits on the path
+      `registerUser()` takes for nearly every integration test). Verified
+      against the real API: `password123` (2,266,543 occurrences) and
+      `Password12345` (113,358) both flagged, a random passphrase was not. See
+      `docs/decisions.md`.
 - [x] **[L-2]** Record the public `/openapi.json` as a deliberate decision in
       `docs/decisions.md`. **Done** — kept public: it describes shapes, not
       data, and gating it would cost the "cannot drift from the code" property
