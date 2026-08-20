@@ -7,6 +7,7 @@
 # Files that are executed rather than edited must keep LF even on a Windows
 # checkout, because they run inside Linux containers and in CI.
 *.sh text eol=lf
+*.envsh text eol=lf
 Dockerfile text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
