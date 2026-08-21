@@ -38,6 +38,13 @@ x-app-environment: &app-environment
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?generate one - node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"}
   JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?generate a second, different one the same way}
   EMAIL_TOKEN_SECRET: ${EMAIL_TOKEN_SECRET:?generate a third, different one the same way}
+  # Optional, unlike the three secrets above: unset means `POST /auth/google`
+  # refuses with `auth.googleNotConfigured` rather than the process refusing to
+  # boot — see `config/env.ts`. The `web` build already gets the same value
+  # baked in as `VITE_GOOGLE_CLIENT_ID`; without this line too, the button
+  # would render but every click would fail, since the API would never see
+  # the value the browser was told to use.
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
   # There is no development mail sink here, and `config/env.ts` refuses to boot
   # in production without an explicit host rather than quietly falling back to
   # localhost and dropping every invitation on the floor.
