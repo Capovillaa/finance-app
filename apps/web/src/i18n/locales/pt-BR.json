@@ -175,6 +175,11 @@
       "message": "Verifique seu endereço de e-mail para garantir que você possa recuperar sua conta e aceitar convites de espaços de trabalho.",
       "resend": "Reenviar e-mail",
       "resent": "E-mail de verificação enviado."
+    },
+    "google": {
+      "or": "ou",
+      "unavailable": "Não foi possível carregar o login com o Google. Use seu e-mail e senha.",
+      "failed": "Não foi possível entrar com o Google."
     }
   },
   "dashboard": {

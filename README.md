@@ -8,7 +8,7 @@ recurring bills, anomaly-aware alerting, analytics, and CSV import/export.
 Both halves are built and run against each other:
 
 - **`apps/api`** — TypeScript/Express over Postgres 16 with Kysely, plus a BullMQ worker.
-  28 tables across 11 migrations, 109 endpoints. Reference in [`docs/api.md`](docs/api.md),
+  28 tables across 12 migrations, 110 endpoints. Reference in [`docs/api.md`](docs/api.md),
   with a generated [`docs/openapi.json`](docs/openapi.json) beside it.
 - **`apps/web`** — React + Vite client (Material-UI, Redux Toolkit, Recharts, React Hook Form
   and Zod) covering nine screens.
@@ -112,6 +112,11 @@ It brings up its own Postgres and Redis, so it does not share the development da
 
 **Identity & access**
 - Registration, login, JWT access tokens plus rotating refresh tokens with replay detection
+- Optional **Sign in with Google**: the browser's Google Identity Services button returns an ID
+  token the API verifies against its own client ID — no OAuth redirect, no client secret. A first
+  sign-in creates the account, its workspace and an already-verified address; a known address is
+  linked to the Google account only when Google says that address is verified. Unset the client ID
+  on both halves and the app is password-only, button included
 - Password reset and email verification by emailed single-use token; a password already known to
   be breached is refused, checked by k-anonymity so the password never leaves the process
 - Neither registration nor password reset discloses whether an address already has an account

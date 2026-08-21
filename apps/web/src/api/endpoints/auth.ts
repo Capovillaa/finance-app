@@ -2,6 +2,7 @@ import { api } from '../api';
 import type {
   AuthResult,
   ForgotPasswordRequest,
+  GoogleLoginRequest,
   LoginRequest,
   RegisterRequest,
   ResetPasswordRequest,
@@ -15,6 +16,19 @@ export const authApi = api.injectEndpoints({
   endpoints: (build) => ({
     login: build.mutation<AuthResult, LoginRequest>({
       query: (body) => ({ url: '/auth/login', method: 'POST', body }),
+    }),
+
+    /**
+     * Signs in *or* signs up with an ID token from Google Identity Services —
+     * which case it was is the server's decision, not this app's, and the
+     * response is the same `AuthResult` either way.
+     *
+     * Unlike `register`, this does return a session directly: there is no
+     * enumeration concern to protect against here, because the caller has
+     * already proved control of the address to Google before the token exists.
+     */
+    loginWithGoogle: build.mutation<AuthResult, GoogleLoginRequest>({
+      query: (body) => ({ url: '/auth/google', method: 'POST', body }),
     }),
 
     /**
@@ -78,6 +92,7 @@ export const authApi = api.injectEndpoints({
 
 export const {
   useLoginMutation,
+  useLoginWithGoogleMutation,
   useRegisterMutation,
   useRefreshMutation,
   useLogoutMutation,

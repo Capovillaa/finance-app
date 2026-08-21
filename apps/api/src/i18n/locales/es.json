@@ -73,7 +73,10 @@
     "resetTokenExpired": "Este enlace para restablecer la contraseña ha expirado",
     "verificationTokenInvalid": "Este enlace de verificación no es válido",
     "verificationTokenExpired": "Este enlace de verificación ha expirado",
-    "emailAlreadyVerified": "Esta dirección de correo electrónico ya está verificada"
+    "emailAlreadyVerified": "Esta dirección de correo electrónico ya está verificada",
+    "googleNotConfigured": "El inicio de sesión con Google no está habilitado en este servidor",
+    "googleTokenInvalid": "No se pudo verificar este inicio de sesión con Google",
+    "googleEmailNotVerified": "Google no ha verificado el correo electrónico de esta cuenta, y esa dirección ya pertenece a una cuenta aquí"
   },
   "workspaces": {
     "notSpecified": "No se especificó el espacio de trabajo",

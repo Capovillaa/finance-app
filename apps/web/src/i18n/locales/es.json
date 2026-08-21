@@ -175,6 +175,11 @@
       "message": "Verifica tu dirección de correo electrónico para asegurarte de poder recuperar tu cuenta y aceptar invitaciones de espacios de trabajo.",
       "resend": "Reenviar correo",
       "resent": "Correo de verificación enviado."
+    },
+    "google": {
+      "or": "o",
+      "unavailable": "No se pudo cargar el inicio de sesión con Google. Usa tu correo y contraseña.",
+      "failed": "No se pudo iniciar sesión con Google."
     }
   },
   "dashboard": {

@@ -47,6 +47,20 @@ const loginSchema = z.object({
   password: suppliedPasswordSchema,
 });
 
+/**
+ * The raw ID token from Google Identity Services, and nothing else.
+ *
+ * Bounded rather than left open: it is a JWT, so the shape is known, and an
+ * unbounded string on an unauthenticated route is a free way to make the server
+ * do work. The bounds are generous — a Google ID token is typically around
+ * a kilobyte, and grows with the claims on the account — but they are bounds.
+ * Not `emailField` or anything content-shaped: nothing here is trusted until
+ * `verifyGoogleIdToken` has checked the signature.
+ */
+const googleCredentialSchema = z.object({
+  credential: z.string().min(20).max(4096),
+});
+
 const refreshSchema = z.object({
   refreshToken: z.string().min(20).optional(),
 });
@@ -129,6 +143,37 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const input = body<z.infer<typeof loginSchema>>(req);
     const result = await authService.login(input, {
+      ipAddress: clientIp(req),
+      userAgent: req.header('user-agent') ?? null,
+    });
+    setRefreshCookie(res, result.refreshToken);
+    res.json(result);
+  }),
+);
+
+/**
+ * "Sign in with Google", which is also sign-*up* with Google: a first-time
+ * address gets an account, its personal workspace and a verified email in one
+ * call, because Google has already answered the question the verification mail
+ * exists to ask.
+ *
+ * Same shape as `/login` — `authRateLimit`, an `authResultResponse`, the
+ * refresh cookie — because from the client's side it *is* a login; the only
+ * difference is which credential was presented. Public, obviously: the whole
+ * point is that the caller has no session yet.
+ *
+ * Optional end to end. With no `GOOGLE_CLIENT_ID` this answers 401
+ * `auth.googleNotConfigured` rather than failing to start the process, and the
+ * client does not render the button in the first place. See `config/env.ts`.
+ */
+authRouter.post(
+  '/google',
+  authRateLimit,
+  validate({ body: googleCredentialSchema }),
+  responds({ 200: authResultResponse }),
+  asyncHandler(async (req, res) => {
+    const input = body<z.infer<typeof googleCredentialSchema>>(req);
+    const result = await authService.loginWithGoogle(input.credential, {
       ipAddress: clientIp(req),
       userAgent: req.header('user-agent') ?? null,
     });

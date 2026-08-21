@@ -91,6 +91,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/google": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["postAuthGoogle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/refresh": {
         parameters: {
             query?: never;
@@ -2210,6 +2226,48 @@ export interface operations {
                     /** Format: email */
                     email: string;
                     password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description A signed-in session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        user: components["schemas"]["User"];
+                        /** @description A short-lived JWT. Send it as `Authorization: Bearer …`. */
+                        accessToken: string;
+                        /** @description Opaque and single-use. Also set as an HttpOnly cookie. */
+                        refreshToken: string;
+                        /** @description Seconds until the access token expires. */
+                        expiresIn: components["schemas"]["Integer"];
+                        /** @description The workspace created with the account, on register only. */
+                        defaultWorkspaceId?: components["schemas"]["Uuid"];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    postAuthGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    credential: string;
                 };
             };
         };

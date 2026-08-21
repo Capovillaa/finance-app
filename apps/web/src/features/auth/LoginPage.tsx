@@ -16,6 +16,7 @@ import { workspaceSelected } from '../workspace/workspaceSlice';
 import AuthLayout from './AuthLayout';
 import { loginSchema, type LoginValues } from './authSchemas';
 import { credentialsReceived } from './authSlice';
+import GoogleSignInButton from './GoogleSignInButton';
 
 interface LocationState {
   from?: { pathname: string };
@@ -106,6 +107,9 @@ export default function LoginPage(): ReactElement {
           <Button type="submit" variant="contained" size="large" disabled={isLoading}>
             {isLoading ? t('auth.signingIn') : t('auth.signIn')}
           </Button>
+
+          {/* Renders nothing without VITE_GOOGLE_CLIENT_ID, divider included. */}
+          <GoogleSignInButton text="signin_with" />
         </Stack>
       </form>
     </AuthLayout>

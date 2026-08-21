@@ -175,6 +175,11 @@
       "message": "Verify your email address to make sure you can recover your account and accept workspace invitations.",
       "resend": "Resend email",
       "resent": "Verification email sent."
+    },
+    "google": {
+      "or": "or",
+      "unavailable": "Google sign-in could not be loaded. Use your email and password.",
+      "failed": "Could not sign in with Google."
     }
   },
   "dashboard": {

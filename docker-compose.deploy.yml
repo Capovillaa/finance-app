@@ -184,6 +184,13 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the bundle by Vite, so it is a build argument rather than
+        # an environment variable — see apps/web/Dockerfile. Blank unless
+        # GOOGLE_CLIENT_ID is set in .env.deploy, and blank means the client
+        # renders no Google button, matching an API that refuses /auth/google.
+        # Changing it needs a rebuild, not a restart.
+        VITE_GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
     image: finance-web
     container_name: finance_deploy_web
     restart: unless-stopped

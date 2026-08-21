@@ -2899,3 +2899,64 @@ fifteen minutes idle — which presents as the site being broken to the first pe
 a quiet afternoon. The free Postgres plan expires, and the free key value store has no persistence,
 which for BullMQ means queued jobs do not survive a restart. None of that is a reason not to use
 Render; all of it is a reason not to discover it later.
+
+---
+
+### Sign in with Google verifies an ID token in place, rather than running an OAuth redirect
+
+Two shapes were available and they are not close. The **authorization-code redirect** sends the
+browser to Google, takes a `code` back on a callback route, and exchanges it server-side for
+tokens — which needs a `GOOGLE_CLIENT_SECRET`, a redirect URI registered per environment, a
+callback endpoint, and state/PKCE handling to keep the round trip honest. **Google Identity
+Services** runs in the page instead: Google's own button opens the account chooser and hands the
+browser a signed **ID token**, which is POSTed to one endpoint and verified there against the
+published keys and our own client ID.
+
+The second is what this does, for reasons that are mostly about surface. It adds **one** piece of
+configuration, `GOOGLE_CLIENT_ID`, and that value is public by construction — the browser has to
+send it to Google to obtain a token at all — so nothing was added to the set of things this
+repository must not leak, and `production-policy.ts` gained no rule. It adds no route to the
+public list beyond `/auth/google` itself, no callback URL to keep in step across development,
+compose, Fly and Render, and no code-exchange step to get wrong. What it costs is that the flow
+depends on a third-party script in the page, which the CSP in `apps/web/nginx.conf.template` now
+names — four exact `accounts.google.com/gsi/…` paths, not the origin.
+
+**The feature is optional at both ends, and that is a deliberate shape rather than a convenience.**
+The server treats `GOOGLE_CLIENT_ID` as optional — unlike the signing secrets, an unset value is
+not a boot failure; it means `/auth/google` refuses with `auth.googleNotConfigured`. The client
+reads `VITE_GOOGLE_CLIENT_ID` and renders no button, no divider and no empty space without it.
+A deployment that wants nothing to do with Google sets neither and is exactly what it was before.
+The one combination worth avoiding is half of it: a button that always fails.
+
+**The link rule is the part with a security consequence.** A verified Google identity that matches
+an existing address is adopted onto that account — which is what makes "I signed up with a password
+and now use the Google button" work at all — *but only when the token says `email_verified: true`*.
+Some Workspace and federated configurations pass an address through without vouching for it, and
+linking on the address alone would hand whoever could type a victim's address into such an account
+the victim's entire ledger. That case is refused outright rather than falling through to creating a
+second account, which would only collide with `users_email_unique` and report a database conflict
+instead of the real reason. A matching `sub` is checked first and wins, because Google promises the
+`sub` is stable and an address is not; following the address instead would quietly issue a second
+local account the day someone changes their Google address.
+
+The decision itself lives in `decideGoogleAccount`, a pure function with no database in it, so the
+four cases can be read and tested as rules rather than inferred from a sequence of fixtures.
+
+**A Google-only account has no password, and nothing needed changing for that.** `password_hash`
+has been nullable since migration `001`; `login` already refuses a user without one, spending the
+same bcrypt work either way so the absence is not observable, and `changePassword` already says
+`auth.noPasswordSet`. Migration `012` adds a single nullable `google_id`, unique among the rows
+that have one. The `user_identities` table from `001` — provider, provider_user_id, unique
+together — was the more general shape and would have needed no migration at all; one column was
+chosen instead because this pass supports exactly one provider, and a join table for a single
+nullable value is structure without a second user for it. Adding Apple or Microsoft later means
+moving to that table, and that is the point at which it earns its cost.
+
+The created account is verified on arrival (Google has already asked the question the verification
+email exists to ask, and accepting a workspace invitation is gated on it), and goes through the
+same `createWorkspace` call `register` makes, so a Google sign-up lands on a workspace with the
+default category tree rather than an empty screen. Its locale is left to the column default rather
+than read from the token's `locale` claim: that claim is the language of the *Google account*,
+which is a different question from the language the app was being read in, and guessing wrong
+would fix the language of every server-rendered sentence afterwards, since `requireAuth` prefers
+the stored locale over `Accept-Language`.

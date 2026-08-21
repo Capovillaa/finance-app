@@ -19,6 +19,7 @@ import { workspaceSelected } from '../workspace/workspaceSlice';
 import AuthLayout from './AuthLayout';
 import { registerSchema, type RegisterValues } from './authSchemas';
 import { credentialsReceived } from './authSlice';
+import GoogleSignInButton from './GoogleSignInButton';
 
 function guessCurrency(): string {
   const region = new Intl.Locale(appLocale()).maximize().region;
@@ -200,6 +201,10 @@ export default function RegisterPage(): ReactElement {
             <Button type="submit" variant="contained" size="large" disabled={isLoading}>
               {isLoading ? t('auth.creating') : t('auth.createAccount')}
             </Button>
+
+            {/* Signing up with Google skips this form entirely: the account,
+                its workspace and a verified address all come from the token. */}
+            <GoogleSignInButton text="signup_with" />
           </Stack>
         </form>
       )}

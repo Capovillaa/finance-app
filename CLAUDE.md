@@ -5,7 +5,7 @@ Working notes for the personal finance platform in `D:\finance_app`, published a
 things, the conventions a change has to follow, and the traps that cost real time to rediscover.
 
 **The reasoning is not here.** Every significant choice is written up in
-[`docs/decisions.md`](docs/decisions.md) — 53 entries, chronological, each titled. When this file
+[`docs/decisions.md`](docs/decisions.md) — 54 entries, chronological, each titled. When this file
 says "see the decision log", that is where to look, and it is worth looking before reversing
 anything.
 
@@ -22,10 +22,10 @@ Both halves are built, verified against real infrastructure, and green.
 
 | | |
 | --- | --- |
-| API | Express + Kysely over Postgres 16, BullMQ worker. 109 endpoints, 28 tables, 11 migrations |
+| API | Express + Kysely over Postgres 16, BullMQ worker. 110 endpoints, 28 tables, 12 migrations |
 | Web | React + Vite, nine screens, three languages, no placeholder routes |
 | Shared | `@finance/schemas` — every bound, enum, pattern and rejection message both sides use |
-| Tests | **431 passing** (259 of them pure units), against real Postgres, ~32s |
+| Tests | **457 passing** (274 of them pure units), against real Postgres, ~32s |
 | CI | Three workflows, all green: build/test, gitleaks, CodeQL |
 | Audit | A pre-deployment security audit ran; **all four phases are closed.** Nothing is half-finished |
 
@@ -74,7 +74,7 @@ D:\finance_app
 │   │   │   ├── app.ts                # express app factory (the tests use it too)
 │   │   │   ├── config/               # env.ts, and production-policy.ts: the pure rules
 │   │   │   │                         #   production refuses to boot on
-│   │   │   ├── db/                   # migrations/ 001..011 + index.ts, migrate.ts,
+│   │   │   ├── db/                   # migrations/ 001..012 + index.ts, migrate.ts,
 │   │   │   │                         #   seed.ts, client.ts, types.ts
 │   │   │   ├── i18n/locales/         # en, pt-BR, es — the server catalogue
 │   │   │   ├── lib/                  # money, dates, recurrence, email, redis, errors, http,
@@ -287,7 +287,7 @@ service and an ISO string in the response. Build fields from `modules/shared/res
 strictness**: a schema no test succeeds against is an assertion nobody made.
 `RESPONSE_REACH=1 npx vitest run 2>&1 | grep -o "REACH .*" | sort -u` lists what the suite
 exercises; anything missing belongs in `tests/integration/response-contracts.test.ts`. It is
-109/109 today, and "all of them" is the invariant — not the number.
+110/110 today, and "all of them" is the invariant — not the number.
 
 ### A web feature
 
@@ -427,10 +427,10 @@ Each of these was found the hard way. Most typecheck perfectly.
   shared object that is *also* ordinary middleware inside three routers; keying the skip on
   identity dropped authentication from those and published two dozen authenticated routes as
   public. The walker matches by position instead. **If you add a shared middleware as a mount
-  guard, check the public route list in the generated spec** — exactly eleven operations carry no
+  guard, check the public route list in the generated spec** — exactly twelve operations carry no
   security requirement: `/health`, `/health/ready`, `/metrics`, `/openapi.json`, and auth's
-  `register`, `login`, `refresh`, `logout`, `forgot-password`, `reset-password`, `verify-email`.
-  Anything else appearing there is that bug coming back.
+  `register`, `login`, `google`, `refresh`, `logout`, `forgot-password`, `reset-password`,
+  `verify-email`. Anything else appearing there is that bug coming back.
 - **`TRUST_PROXY` defaults to `false` and must stay that way** unless something really is in front.
   `req.ip` comes from a header the *client* sends; setting this with nothing in front lets six
   invented addresses defeat a limit of three. The deployed composition sets `TRUST_PROXY=1`
@@ -457,6 +457,25 @@ Each of these was found the hard way. Most typecheck perfectly.
   new pattern must be improbable in 64 random characters; the published throwaways are caught by an
   exact list instead. **If you publish a new placeholder anywhere, add it to `PUBLISHED_SECRETS`**
   and to `.gitleaks.toml`.
+- **`GOOGLE_CLIENT_ID` is optional and must stay optional.** It is the one piece of
+  configuration "Sign in with Google" needs on the server (there is no client *secret* — the
+  browser-side GIS flow returns a signed ID token, which `modules/auth/google.ts` verifies against
+  this value as the audience). Unset means `/auth/google` refuses with `auth.googleNotConfigured`
+  and the client renders no button, which is a supported configuration rather than a broken one —
+  so it gets no `production-policy.ts` rule, and adding one would break every password-only
+  deployment. The client's copy is `VITE_GOOGLE_CLIENT_ID`, **compiled into the bundle by Vite**:
+  it is a Docker build argument, not a container variable, so changing it needs a rebuild.
+- **A Google identity is linked onto an existing address only when `email_verified` is true.**
+  `decideGoogleAccount` in `modules/auth/google.ts` is a pure function for exactly this reason.
+  Some Workspace and federated configurations pass an address through without vouching for it;
+  linking on the address alone hands whoever can type a victim's address into such an account the
+  victim's whole ledger. A matching `sub` is checked first and wins over the address, because
+  Google promises the `sub` is stable and an address is not.
+- **The suite's `GOOGLE_CLIENT_ID` lives in `vitest.config.ts`'s `test.env`, not in
+  `tests/setup.ts`.** A `process.env` assignment at the top of a setup file runs *after* that
+  file's own hoisted imports, by which time `config/env.ts` has already parsed the environment —
+  so it silently has no effect and every Google test 401s on the wrong refusal. Tests replace
+  `verifyGoogleIdToken.verify`, the single seam into `google-auth-library`; nothing reaches Google.
 - **Any new sign-in path owes `cancelAccountDeletion` a call.** `login` and `resetPassword` both
   make it; a magic link or OAuth callback that skipped it would let a pending erasure run after the
   user has demonstrably come back.
@@ -574,6 +593,12 @@ Each of these was found the hard way. Most typecheck perfectly.
   `render.yaml` the worker copies the API's three signing secrets with `fromService` + `envVarKey`
   for exactly this reason: generating its own would start cleanly, log nothing, and reject every
   token the API signed.
+- **The client's CSP names four exact `accounts.google.com/gsi/…` paths**, in all three copies of
+  the header in `apps/web/nginx.conf.template` — script, style, connect and frame. They are
+  unconditional even where Google sign-in is off: making them conditional would mean a third
+  substituted variable, and `NGINX_ENVSUBST_FILTER` is pinned to two names for a reason. Keep the
+  three copies identical; the `/assets/` and `/index.html` blocks replace the inherited set rather
+  than adding to it.
 - **`/health`, `/health/ready`, `/metrics` and `/openapi.json` are mounted at the API's root, not
   under `/api/v1`** — so nginx, which proxies only `/api/`, does not expose them. Anything reaching
   for them through the public origin is reaching for something that is not there.
@@ -645,6 +670,7 @@ and a click, gives a clean workspace, and avoids the seed's re-run problem entir
 | Money, balances, transfers, dates | "Money is `NUMERIC(19,4)`…", "Transactions store a signed amount…", "Account balances are trigger-maintained…" |
 | Query layer, migrations, ids | "Kysely rather than Prisma…", "Migrations are registered statically…", "UUIDv7 primary keys" |
 | Auth, sessions, rate limits | "Refresh tokens are opaque…", "Rate limiting is two-dimensional…", "'Sign out everywhere'…", "One root secret, two purposes…" |
+| Google sign-in | "Sign in with Google verifies an ID token in place…" |
 | Registration, reset, verification | "Password reset and email verification…", "Registration stops answering the question…", "A breached-password check…" |
 | Errors, disclosure, timeouts | "An error response is written by this codebase…", "A connection is reclaimed by the server…" |
 | The OpenAPI chain | "The OpenAPI document is generated…", "Response schemas live beside the service…", "The client's response types are generated…", "`/openapi.json` is public on purpose" |

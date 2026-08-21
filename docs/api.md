@@ -87,6 +87,7 @@ Accept `?page=` and `?pageSize=` (max 200).
 | --- | --- | --- |
 | POST | `/register` | Always 201, whether or not the address already has an account — never an oracle for which emails are registered. No body, and no tokens: a new account is created (with its personal workspace, default categories and alert rules) and sent a verification email; a known address is left untouched and its real owner is emailed instead. Sign in with the same credentials afterwards — see the note below. |
 | POST | `/login` | Rate limited per address and, separately, per account. |
+| POST | `/google` | Body `{"credential": "…"}` — the ID token from the browser's "Sign in with Google" button. Signs in *or* signs up; same response shape as `/login`. Answers 401 when the server has no `GOOGLE_CLIENT_ID`. |
 | POST | `/refresh` | Rotates the refresh token. Reusing a rotated token revokes the whole family. |
 | POST | `/logout` | Revokes the presented refresh token. Other sessions keep working. |
 | POST | `/logout-all` | Revokes every session for the user, **immediately** — access tokens included. |
@@ -124,6 +125,30 @@ curl -X POST localhost:4000/api/v1/auth/register -H 'content-type: application/j
 ```
 
 Passwords must be at least 10 characters and contain both letters and digits.
+
+### Sign in with Google
+
+`POST /auth/google` takes the **ID token** that Google Identity Services hands the browser — the
+`credential` field of its callback — and nothing else. The server verifies its signature against
+Google's published keys and its audience against `GOOGLE_CLIENT_ID`; there is no authorization
+code, no token exchange, and no client secret anywhere in the deployment.
+
+What happens next depends on what the verified token says:
+
+| The token's… | …and the database | Result |
+| --- | --- | --- |
+| `sub` matches a user | — | Signed in. The `sub` wins over the address, because Google promises it is stable and an address is not. |
+| address matches a user | `email_verified` is **true** | The `sub` is linked onto that account and the caller is signed in. The password, if there was one, still works. |
+| address matches a user | `email_verified` is **false** | **401.** Google is passing the address through without vouching for it, and linking on that is account takeover. |
+| neither matches | — | A new account: no password hash, `emailVerifiedAt` already set, and a personal workspace with the default categories and alert rules, exactly as `/register` provisions one. |
+
+Rate limited as a credential endpoint, though only its per-address bucket charges — the body
+carries no email address, and there is no password to guess.
+
+The whole feature is optional. With no `GOOGLE_CLIENT_ID` the endpoint answers 401
+`auth.googleNotConfigured`, and the client — whose `VITE_GOOGLE_CLIENT_ID` is unset in the same
+deployment — renders no button. Both variables hold the same public client ID from Google Cloud
+Console, whose **Authorized JavaScript origin** must equal the origin the app is served from.
 
 ## Users — `/users`
 

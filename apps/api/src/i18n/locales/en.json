@@ -73,7 +73,10 @@
     "resetTokenExpired": "This password reset link has expired",
     "verificationTokenInvalid": "This verification link is invalid",
     "verificationTokenExpired": "This verification link has expired",
-    "emailAlreadyVerified": "This email address is already verified"
+    "emailAlreadyVerified": "This email address is already verified",
+    "googleNotConfigured": "Google sign-in is not enabled on this server",
+    "googleTokenInvalid": "Could not verify this Google sign-in",
+    "googleEmailNotVerified": "Google has not verified this account's email address, and that address already belongs to an account here"
   },
   "workspaces": {
     "notSpecified": "Workspace not specified",

@@ -34,13 +34,20 @@
 #
 # ---- Before the first deploy ---------------------------------------------
 #
-# Four values are marked `sync: false`, which means Render asks for them when
+# Several values are marked `sync: false`, which means Render asks for them when
 # you create the blueprint rather than reading them from here — this file is
-# public, and none of them belong in it. PUBLIC_URL is the one that is awkward:
-# you do not know the client's URL until Render has created it, so deploy once,
-# copy the `finance-web` URL from the dashboard, and set API_BASE_URL and
+# public, and none of them belong in it. The public URL is the awkward one: you
+# do not know the client's URL until Render has created it, so deploy once, copy
+# the `finance-web` URL from the dashboard, and set API_BASE_URL and
 # WEB_BASE_URL on `finance-api` to that exact value. The API will refuse to boot
 # until they agree, which is the check doing its job rather than a failure.
+#
+# Two of them are optional and may simply be left blank: `GOOGLE_CLIENT_ID` on
+# the API and `VITE_GOOGLE_CLIENT_ID` on the client, which are the same value
+# and turn "Sign in with Google" on. Blank on both means the app is password-only
+# and behaves exactly as it did before that feature existed. Fill them in
+# together or not at all — a client with a button and an API that refuses it is
+# the one combination that is worse than neither.
 
 databases:
   - name: finance-db
@@ -83,6 +90,16 @@ services:
       # default is Docker's 127.0.0.11, which is meaningless here.
       - key: NGINX_RESOLVER
         value: auto
+      # Optional; blank leaves the client password-only. Vite compiles this
+      # into the bundle, so it is read at **build** time — Render exposes a
+      # service's environment variables to a Docker build as `--build-arg`,
+      # which is what `ARG VITE_GOOGLE_CLIENT_ID` in apps/web/Dockerfile picks
+      # up. Changing it therefore needs a redeploy that rebuilds the image, not
+      # a restart. It must be the same client ID as the API's GOOGLE_CLIENT_ID,
+      # and its Authorized JavaScript origin in Google Cloud Console must be
+      # this service's public URL.
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
 
   # ---- The API: private, and the migration gate --------------------------
   - type: pserv
@@ -149,6 +166,16 @@ services:
       - key: SMTP_SECURE
         value: false
       - key: MAIL_FROM
+        sync: false
+      # Optional: the audience an ID token from "Sign in with Google" must
+      # carry. Blank refuses /auth/google and leaves the app password-only,
+      # which is a supported configuration rather than a broken one — so unlike
+      # the secrets above, this one does not stop the service booting. It must
+      # match `VITE_GOOGLE_CLIENT_ID` on `finance-web`; two different client IDs
+      # means every Google sign-in is rejected as a wrong audience. Not a
+      # secret, but `sync: false` all the same: it names a specific Google Cloud
+      # project, which does not belong in a public file.
+      - key: GOOGLE_CLIENT_ID
         sync: false
       # ---- Verify this rather than trusting it ---------------------------
       # `req.ip` comes out of `X-Forwarded-For`, a header the *client* sends.

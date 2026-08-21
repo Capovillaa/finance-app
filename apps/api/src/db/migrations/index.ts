@@ -10,6 +10,7 @@ import * as m008 from './008_imports.js';
 import * as m009 from './009_session_invalidation.js';
 import * as m010 from './010_account_deletion_grace.js';
 import * as m011 from './011_password_reset_email_verification.js';
+import * as m012 from './012_google_oauth.js';
 
 /**
  * Migrations are registered statically rather than discovered from disk: the
@@ -30,4 +31,5 @@ export const migrations: Record<string, Migration> = {
   '009_session_invalidation': m009,
   '010_account_deletion_grace': m010,
   '011_password_reset_email_verification': m011,
+  '012_google_oauth': m012,
 };

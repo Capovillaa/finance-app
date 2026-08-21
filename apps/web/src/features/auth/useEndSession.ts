@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/api';
 import { useAppDispatch } from '../../app/hooks';
+import { forgetGoogleAccount } from '../../lib/googleSignIn';
 import { workspaceCleared } from '../workspace/workspaceSlice';
 import { credentialsCleared } from './authSlice';
 
@@ -24,6 +25,12 @@ export function useEndSession(): () => void {
   const navigate = useNavigate();
 
   return useCallback(() => {
+    // Google keeps its own hint about which account was chosen here, and it
+    // outlives this app's session. Left alone, the next person at a shared
+    // browser is offered the previous user's account as the obvious choice,
+    // which reads as still being signed in. A no-op when Google sign-in is not
+    // configured, which is the common case.
+    forgetGoogleAccount();
     dispatch(credentialsCleared());
     dispatch(workspaceCleared());
     dispatch(api.util.resetApiState());

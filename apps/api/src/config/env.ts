@@ -163,6 +163,29 @@ const schema = z.object({
   EXCHANGE_RATE_API_KEY: blankAsUndefined,
   EXCHANGE_RATE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 
+  /**
+   * The OAuth client ID from Google Cloud Console, used as the *audience* an
+   * ID token from "Sign in with Google" must carry. Public by design — the
+   * browser sends it to Google to obtain the token in the first place — which
+   * is why this is the only Google value the server needs: the client-side
+   * Google Identity Services flow hands us a signed ID token directly, with no
+   * code exchange and therefore no client secret.
+   *
+   * Deliberately **optional**, unlike the signing secrets. Password sign-in is
+   * the primary path and must keep working for a deployment that wants nothing
+   * to do with Google, so an unset value is not a boot failure: it means
+   * `POST /auth/google` refuses with `auth.googleNotConfigured` and the client
+   * (whose own `VITE_GOOGLE_CLIENT_ID` is unset in the same deployment) never
+   * renders the button. `production-policy.ts` has no rule for it for the same
+   * reason — every rule there guards a value that is *wrong* rather than
+   * absent, and absent is a supported configuration here.
+   *
+   * `blankAsUndefined` rather than `.optional()`: a declared-but-empty line in
+   * `.env` arrives as `''`, and `''` would be accepted as an audience that
+   * matches nothing.
+   */
+  GOOGLE_CLIENT_ID: blankAsUndefined,
+
   ENABLE_SCHEDULER: z
     .enum(['true', 'false'])
     .default('true')

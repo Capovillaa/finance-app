@@ -140,6 +140,9 @@ export type DeletionScheduled = Ok<'deleteUsersMe'>;
 
 export type LoginRequest = Sends<'postAuthLogin'>;
 
+/** The raw Google ID token from the "Sign in with Google" button. */
+export type GoogleLoginRequest = Sends<'postAuthGoogle'>;
+
 export type RegisterRequest = Sends<'postAuthRegister'>;
 
 export type ForgotPasswordRequest = Sends<'postAuthForgotPassword'>;

@@ -79,6 +79,14 @@ export interface UsersTable {
   /** Same shape as the reset pair above, for the email-verification link. */
   email_verification_token_hash: string | null;
   email_verification_expires_at: Timestamp | null;
+  /**
+   * Google's `sub` claim, the stable identifier its ID tokens carry for one
+   * Google account. NULL for an account that has never signed in with Google;
+   * unique among the rows that have one, so a Google account cannot reach two
+   * local accounts. Set either when a Google sign-in creates the account or
+   * when one is linked onto an existing, verified address.
+   */
+  google_id: string | null;
   created_at: GeneratedTimestamp;
   updated_at: GeneratedTimestamp;
   deleted_at: Timestamp | null;

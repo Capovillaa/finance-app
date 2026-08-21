@@ -38,6 +38,20 @@ COPY apps/web ./apps/web
 # through. Anything absolute here would reintroduce the cross-origin problem the
 # proxy below exists to avoid.
 ENV VITE_API_BASE_URL=/api/v1
+
+# "Sign in with Google", and the one piece of configuration that cannot be
+# supplied at run time: Vite substitutes `import.meta.env.*` into the bundle
+# during the build, so this has to arrive as a build argument rather than as a
+# container environment variable. Empty by default, which is what makes the
+# feature optional — the client renders no button without it, and the API
+# refuses `/auth/google` without its own matching `GOOGLE_CLIENT_ID`.
+#
+# It is not a secret: the browser hands it to Google to obtain a token at all.
+# The authorized JavaScript origin configured for it in Google Cloud Console
+# must equal the URL this image is served from.
+ARG VITE_GOOGLE_CLIENT_ID=""
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+
 RUN npm run build --workspace=@finance/web
 
 # ---- 2. runtime ------------------------------------------------------------
